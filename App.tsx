@@ -1,0 +1,756 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Loader2, X } from 'lucide-react';
+import Sidebar from './components/Sidebar';
+import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
+import Scene3D from './components/Scene3D';
+import Scene2D from './components/Scene2D';
+import BottomPanel from './components/BottomPanel';
+import TopPanel from './components/TopPanel';
+import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraView, P2PStatus, P2PMode } from './types';
+import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
+import { p2pService } from './services/p2p';
+import { normalizeGedcom } from './services/normalizationService';
+
+function App() {
+  const [originalGedcomData, setOriginalGedcomData] = useState<GedcomData | null>(null);
+  const [normalizedGedcomData, setNormalizedGedcomData] = useState<GedcomData | null>(null);
+  const [isNormalized, setIsNormalized] = useState(false);
+  
+  // The active data used for visualization
+  const gedcomData = isNormalized ? normalizedGedcomData : originalGedcomData;
+
+  const [databaseName, setDatabaseName] = useState<string>("My Family Tree");
+  
+  const [rootIndividual, setRootIndividual] = useState<Individual | null>(null);
+  const [selectedIndividual, setSelectedIndividual] = useState<Individual | null>(null);
+  
+  // Selection state for 2D View (Multiple individuals)
+  const [selectedIdsFor2D, setSelectedIdsFor2D] = useState<Set<string>>(new Set());
+  
+  // State for 3D View (Expanded individuals)
+  const [sceneExtras, setSceneExtras] = useState<RenderedPerson[]>([]);
+
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [showAxes, setShowAxes] = useState(false);
+  
+  // Panels closed by default
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [topPanelOpen, setTopPanelOpen] = useState(false);
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+
+  const [isCreating, setIsCreating] = useState(false);
+  
+  // Initialize Theme: Check system preference or default to Dark Mode (No more random)
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+     if (typeof window !== 'undefined' && window.matchMedia) {
+         return window.matchMedia('(prefers-color-scheme: dark)').matches;
+     }
+     return true; // Default to Dark
+  });
+  
+  // New UI Controls State
+  const [isLoading, setIsLoading] = useState(false);
+  const [dragMode, setDragMode] = useState<DragMode>('descendants');
+  const [cameraView, setCameraView] = useState<CameraView>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('3D');
+  // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
+  const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
+
+  // Auto Layout State
+  const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('none');
+  
+  // Info Pages State
+  const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
+  
+  // Track if mouse is over UI to disable 3D controls
+  const [isHoveringUI, setIsHoveringUI] = useState(false);
+
+  // --- P2P State ---
+  const [p2pStatus, setP2pStatus] = useState<P2PStatus>('disconnected');
+  const [peerId, setPeerId] = useState<string | null>(null);
+  const [p2pMode, setP2pMode] = useState<P2PMode>(null);
+
+  // Keep ref to data for P2P sync (closure issue)
+  const gedcomDataRef = useRef<GedcomData | null>(null);
+  useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'b') {
+        setShowBoxes(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+        p2pService.destroy();
+    }
+  }, []);
+
+  const handleInitP2P = () => {
+      setP2pStatus('connecting');
+      p2pService.init(
+          (status, id) => {
+              setP2pStatus(status as P2PStatus);
+              if (id) setPeerId(id);
+              if (status === 'connected') {
+                  // If we are hosting, send data immediately upon connection (simple strategy)
+                  if (gedcomDataRef.current) {
+                      p2pService.sendData('SYNC_GEDCOM', gedcomDataRef.current);
+                  }
+              }
+          },
+          (data) => {
+              if (data.type === 'SYNC_GEDCOM' && data.payload) {
+                  // Received sync data
+                  handleDataLoaded(data.payload, "Remote P2P Database");
+                  alert("Synchronized with Peer!");
+              }
+          }
+      );
+  };
+
+  const handleConnectP2P = (hostId: string) => {
+      p2pService.connect(hostId);
+  };
+
+  // --- Camera View Handler with Force Update ---
+  const handleSetCameraView = (view: CameraView) => {
+      // If requesting the same view that is currently active, 
+      // force a reset to trigger the effect in CameraController again.
+      // This fixes the "Double Click" issue where the user rotates manually 
+      // but the state remains "TOP", preventing a re-snap.
+      if (view === cameraView) {
+          setCameraView(null);
+          // Small timeout to allow React to process the null state
+          setTimeout(() => setCameraView(view), 10);
+      } else {
+          setCameraView(view);
+      }
+  };
+
+  const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
+    setOriginalGedcomData(data);
+    
+    // Calculate Normalization in background (simple approach here, could be worker)
+    setTimeout(() => {
+        const norm = normalizeGedcom(data);
+        setNormalizedGedcomData(norm);
+    }, 50);
+
+    setDatabaseName(name);
+    setActiveInfoPage(null); // Close info pages on data load
+    
+    // UI RESET: Ensure Panels are CLOSED so user sees the scene immediately
+    setLeftPanelOpen(false); 
+    setBottomPanelOpen(false); 
+    setTopPanelOpen(false);
+    
+    // Default to Full Auto Layout for performance and complete view
+    setAutoLayoutMode('all');
+
+    // Improved Selection Logic: Find the "Best" Candidate
+    // Priority: Youngest Descendant (Max Generation) -> Youngest Date -> Name
+    const individuals = Object.values(data.individuals);
+    let bestCandidate = individuals[0];
+    
+    if (individuals.length > 0) {
+        const sorted = [...individuals].sort((a, b) => {
+            // 1. Generation Descending (We want the bottom of the tree)
+            const genA = a.generation ?? 0;
+            const genB = b.generation ?? 0;
+            if (genA !== genB) return genB - genA;
+
+            // 2. Date Descending (Youngest)
+            const dateA = a.birthDate?.year ?? -9999;
+            const dateB = b.birthDate?.year ?? -9999;
+            if (dateA !== dateB) return dateB - dateA;
+
+            return 0;
+        });
+        bestCandidate = sorted[0];
+    }
+
+    if (bestCandidate) {
+      setRootIndividual(bestCandidate);
+      setSelectedIndividual(bestCandidate);
+      
+      // Auto-select first for 2D view - Reset set completely
+      setSelectedIdsFor2D(new Set([bestCandidate.id]));
+      
+      // Reset 3D extras
+      setSceneExtras([]);
+    }
+
+    // P2P Sync if connected
+    if (p2pStatus === 'connected') {
+        p2pService.sendData('SYNC_GEDCOM', data);
+    }
+  };
+
+  // Sync selection between Original and Normalized data when toggling
+  useEffect(() => {
+      if (gedcomData && rootIndividual) {
+          // Re-find the root individual in the current dataset (it might have new dates now)
+          const newRoot = gedcomData.individuals[rootIndividual.id];
+          if (newRoot) setRootIndividual(newRoot);
+      }
+      if (gedcomData && selectedIndividual) {
+          const newSelected = gedcomData.individuals[selectedIndividual.id];
+          if (newSelected) setSelectedIndividual(newSelected);
+      }
+  }, [isNormalized, gedcomData]);
+
+  const handleNavigateToIndividual = (indi: Individual) => {
+    if (isCreating) setIsCreating(false);
+    // Ensure we use the instance from the CURRENT dataset to avoid date mismatch
+    const currentIndi = gedcomData?.individuals[indi.id] || indi;
+    setRootIndividual(currentIndi);
+    setSelectedIndividual(currentIndi);
+    // When changing root manually, we reset the exploration and auto layout
+    setSceneExtras([]);
+  };
+  
+  // Specialized handler for navigation from Details Panel
+  // Ensures the previous person and new person are both visible in 2D
+  const handleRelationNavigate = (indi: Individual) => {
+      // Add current focused person to the persistent 2D set if exists
+      if (selectedIndividual) {
+          setSelectedIdsFor2D(prev => {
+              const next = new Set(prev);
+              next.add(selectedIndividual.id);
+              // Also add the new target to ensure it's visible (and 'checked' in sidebar)
+              next.add(indi.id);
+              return next;
+          });
+      } else {
+           setSelectedIdsFor2D(prev => new Set(prev).add(indi.id));
+      }
+      
+      // Standard navigation
+      handleNavigateToIndividual(indi);
+  };
+
+  const handleInspectIndividual = (indi: Individual) => {
+    if (isCreating) setIsCreating(false);
+    // Ensure we use the instance from the CURRENT dataset
+    const currentIndi = gedcomData?.individuals[indi.id] || indi;
+    setSelectedIndividual(currentIndi);
+  };
+
+  const handleToggle2DSelection = (id: string) => {
+    setSelectedIdsFor2D(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+  };
+
+  const handleClear2DSelection = () => {
+    setSelectedIdsFor2D(new Set());
+    setSelectedIndividual(null); // Clear the active focus too, removing the "default" person
+  };
+
+  // --- RECURSIVE EXPANSION LOGIC ---
+  const handleExpandFamily = (startId: string, direction: 'ancestors' | 'descendants') => {
+      if (!gedcomData) return;
+      
+      const newIds = new Set<string>();
+      const queue = [startId];
+      
+      // Safety break to prevent infinite loops in malformed GEDCOMs
+      let iterations = 0;
+      const MAX_ITERATIONS = 5000;
+
+      while(queue.length > 0 && iterations < MAX_ITERATIONS) {
+          const currentId = queue.shift()!;
+          iterations++;
+          
+          if (!newIds.has(currentId)) {
+             newIds.add(currentId);
+             
+             const indi = gedcomData.individuals[currentId];
+             if (!indi) continue;
+
+             if (direction === 'ancestors') {
+                 // Go UP: Find parents via familyChildId
+                 if (indi.familyChildId) {
+                     const fam = gedcomData.families[indi.familyChildId];
+                     if (fam) {
+                         if (fam.husbandId && !newIds.has(fam.husbandId)) queue.push(fam.husbandId);
+                         if (fam.wifeId && !newIds.has(fam.wifeId)) queue.push(fam.wifeId);
+                     }
+                 }
+             } else {
+                 // Go DOWN: Find children via familySpouseIds
+                 if (indi.familySpouseIds) {
+                     indi.familySpouseIds.forEach(famId => {
+                         const fam = gedcomData.families[famId];
+                         if (fam && fam.childrenIds) {
+                             fam.childrenIds.forEach(childId => {
+                                 if (!newIds.has(childId)) queue.push(childId);
+                             });
+                         }
+                     });
+                 }
+             }
+          }
+      }
+
+      // Merge with existing selection
+      setSelectedIdsFor2D(prev => {
+          const next = new Set(prev);
+          newIds.forEach(id => next.add(id));
+          return next;
+      });
+  };
+
+  // Callback to sync 3D view visibility with 2D selection
+  const handleVisibleIdsChange = (visibleIds: Set<string>) => {
+    setSelectedIdsFor2D(prev => {
+       // Optimization: only update if size or content differs to avoid needless renders
+       if (prev.size === visibleIds.size && [...prev].every(x => visibleIds.has(x))) {
+           return prev;
+       }
+       return new Set(visibleIds);
+    });
+  };
+
+  const handleBackgroundClick = () => {
+    setSelectedIndividual(null);
+  };
+
+  const handleUpdateIndividual = (updatedIndi: Individual) => {
+    if (!originalGedcomData) return;
+    
+    // Update Original
+    const newOriginal = {
+        ...originalGedcomData,
+        individuals: { ...originalGedcomData.individuals, [updatedIndi.id]: updatedIndi }
+    };
+    setOriginalGedcomData(newOriginal);
+
+    // Re-calc normalized
+    // In a real app, we might just update the normalized one locally, but full recalc is safer
+    setTimeout(() => {
+         setNormalizedGedcomData(normalizeGedcom(newOriginal));
+    }, 10);
+  };
+
+  const handleUpdateFamily = (updatedFam: Family) => {
+     if (!originalGedcomData) return;
+     const newOriginal = {
+        ...originalGedcomData,
+        families: { ...originalGedcomData.families, [updatedFam.id]: updatedFam }
+     };
+     setOriginalGedcomData(newOriginal);
+     setTimeout(() => {
+         setNormalizedGedcomData(normalizeGedcom(newOriginal));
+    }, 10);
+  };
+
+  const handleDownloadGedcom = () => {
+    if (!gedcomData) return;
+    const gedcomString = generateGedcom(gedcomData);
+    const blob = new Blob([gedcomString], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    // Use the current database name for the file, sanitizing it a bit
+    const safeName = databaseName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    link.download = `${safeName}_${new Date().toISOString().slice(0, 10)}.ged`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // --- Creation, Linking & Deletion Logic ---
+
+  const handleInitCreation = () => {
+    if (!originalGedcomData) {
+      setOriginalGedcomData({ individuals: {}, families: {} });
+    }
+    setIsCreating(true);
+    setRightPanelOpen(true); // Must open panel to show form
+  };
+
+  const getNextId = (prefix: 'I' | 'F', currentData: GedcomData): string => {
+    const collection = prefix === 'I' ? currentData.individuals : currentData.families;
+    const keys = Object.keys(collection);
+    let maxId = 0;
+    keys.forEach(k => {
+      const match = k.match(/\d+/);
+      if (match) {
+        const val = parseInt(match[0], 10);
+        if (val > maxId) maxId = val;
+      }
+    });
+    return `@${prefix}${maxId + 1}@`;
+  };
+
+  const handleCreateIndividual = (formData: NewPersonData) => {
+    // Only modify ORIGINAL data
+    let currentData = originalGedcomData || { individuals: {}, families: {} };
+    let newData = JSON.parse(JSON.stringify(currentData)) as GedcomData;
+
+    // 1. Create New Individual
+    const newId = getNextId('I', newData);
+    
+    const newIndi: Individual = {
+      id: newId,
+      name: `${formData.givenName} /${formData.surname}/`,
+      givenName: formData.givenName,
+      surname: formData.surname,
+      gender: formData.gender,
+      birthDate: formData.birthDate ? parseDate(formData.birthDate) : undefined,
+      deathDate: formData.deathDate ? parseDate(formData.deathDate) : undefined,
+      familySpouseIds: [],
+      generation: 0,
+      source: 'manual'
+    };
+    newData.individuals[newId] = newIndi;
+
+    // 2. Link Parents
+    if (formData.fatherId || formData.motherId) {
+       let familyId = null;
+       const existingFam = Object.values(newData.families).find(f => {
+           if (formData.fatherId && formData.motherId) return f.husbandId === formData.fatherId && f.wifeId === formData.motherId;
+           if (formData.fatherId && !formData.motherId) return f.husbandId === formData.fatherId && !f.wifeId;
+           if (!formData.fatherId && formData.motherId) return !f.husbandId && f.wifeId === formData.motherId;
+           return false; 
+       });
+
+       if (existingFam) {
+         familyId = existingFam.id;
+       } else {
+         familyId = getNextId('F', newData);
+         newData.families[familyId] = {
+           id: familyId,
+           husbandId: formData.fatherId || undefined,
+           wifeId: formData.motherId || undefined,
+           childrenIds: []
+         };
+         if (formData.fatherId) {
+            const dad = newData.individuals[formData.fatherId];
+            if (!dad.familySpouseIds) dad.familySpouseIds = [];
+            dad.familySpouseIds.push(familyId);
+         }
+         if (formData.motherId) {
+            const mom = newData.individuals[formData.motherId];
+            if (!mom.familySpouseIds) mom.familySpouseIds = [];
+            mom.familySpouseIds.push(familyId);
+         }
+       }
+       if (!newData.families[familyId].childrenIds.includes(newId)) {
+           newData.families[familyId].childrenIds.push(newId);
+       }
+       newData.individuals[newId].familyChildId = familyId;
+    }
+
+    // 3. Link Spouse & Children
+    if (formData.spouseId || formData.childrenIds.length > 0) {
+       let famsId: string | null = null;
+       // ... (Simplified for brevity, same logic as before) ...
+       // Create new family if needed
+       famsId = getNextId('F', newData);
+       newData.families[famsId] = { id: famsId, childrenIds: [] };
+       
+       const famRecord = newData.families[famsId];
+       if (newIndi.gender === 'F') famRecord.wifeId = newId;
+       else famRecord.husbandId = newId;
+
+       if (formData.spouseId) {
+          const spouse = newData.individuals[formData.spouseId];
+          if (spouse.gender === 'F') famRecord.wifeId = spouse.id;
+          else famRecord.husbandId = spouse.id;
+          if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
+          spouse.familySpouseIds.push(famsId);
+       }
+
+       formData.childrenIds.forEach(childId => {
+          famRecord.childrenIds.push(childId);
+          const child = newData.individuals[childId];
+          child.familyChildId = famsId;
+       });
+       newData.individuals[newId].familySpouseIds = [famsId];
+    }
+
+    setOriginalGedcomData(newData);
+    setTimeout(() => {
+        setNormalizedGedcomData(normalizeGedcom(newData));
+    }, 10);
+
+    setIsCreating(false);
+    setRootIndividual(newData.individuals[newId]);
+    setSelectedIndividual(newData.individuals[newId]);
+    
+    // Auto Select in 2D View
+    setSelectedIdsFor2D(prev => new Set(prev).add(newId));
+    // Reset 3D extras on new creation/root change
+    setSceneExtras([]);
+    setAutoLayoutMode('none');
+  };
+
+  const handleDeleteIndividual = (id: string) => {
+    if (!originalGedcomData) return;
+    const newData = { ...originalGedcomData };
+    delete newData.individuals[id]; 
+    setOriginalGedcomData(newData);
+    setTimeout(() => {
+        setNormalizedGedcomData(normalizeGedcom(newData));
+    }, 10);
+    setSelectedIndividual(null);
+  };
+  const handleLinkSpouse = () => {};
+  const handleLinkChildToFamily = () => {};
+  const handleCreateFamilyWithChild = () => {};
+
+  const handleUIEnter = () => setIsHoveringUI(true);
+  const handleUILeave = () => setIsHoveringUI(false);
+
+  // Safe Close Handlers to reset hover state
+  const closeLeftPanel = () => { setLeftPanelOpen(false); setIsHoveringUI(false); };
+  const closeRightPanel = () => { setRightPanelOpen(false); setIsCreating(false); setIsHoveringUI(false); };
+  const closeTopPanel = () => { setTopPanelOpen(false); setIsHoveringUI(false); };
+  const closeBottomPanel = () => { setBottomPanelOpen(false); setIsHoveringUI(false); };
+
+  // Render content for About/Contribute pages
+  const renderInfoPage = () => {
+     if (!activeInfoPage) return null;
+     
+     const title = activeInfoPage === 'about' ? 'About LifeThread' : 'Contribute';
+     
+     return (
+        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-10 ${isDarkMode ? 'text-white' : 'text-black'} animate-in fade-in duration-300`}>
+             <button 
+                onClick={() => setActiveInfoPage(null)}
+                className={`absolute top-24 right-8 p-2 rounded-full hover:bg-opacity-20 transition-colors ${isDarkMode ? 'hover:bg-white text-white' : 'hover:bg-black text-black'}`}
+                title="Close"
+             >
+                <X className="w-8 h-8" />
+             </button>
+
+             <h2 className="text-3xl font-bold mb-6 tracking-tight uppercase">{title}</h2>
+             <div className="max-w-2xl text-justify text-base font-light leading-relaxed opacity-80 space-y-4 overflow-y-auto max-h-[60vh] px-4 custom-scrollbar">
+                <p>
+                   Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
+                   Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
+                   Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. 
+                   Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+                </p>
+                <p>
+                   Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
+                   eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. 
+                   Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos 
+                   qui ratione voluptatem sequi nesciunt.
+                </p>
+                <p>
+                   Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam 
+                   eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem.
+                </p>
+             </div>
+        </div>
+     );
+  };
+
+  return (
+    <div className={`${isDarkMode ? 'dark [color-scheme:dark]' : '[color-scheme:light]'} flex h-screen w-screen overflow-hidden relative transition-colors duration-500`}>
+      <div className="absolute inset-0 bg-white dark:bg-black transition-colors duration-500 -z-10"></div>
+      
+      {/* --- Sidebar (Database) --- */}
+      <Sidebar 
+        data={gedcomData} 
+        onDataLoaded={handleDataLoaded} 
+        onSelectIndividual={handleNavigateToIndividual}
+        selectedId={selectedIndividual?.id || null}
+        selectedIdsFor2D={selectedIdsFor2D}
+        onToggle2DSelection={handleToggle2DSelection}
+        onClear2DSelection={handleClear2DSelection}
+        isOpen={leftPanelOpen}
+        onToggle={() => setLeftPanelOpen(!leftPanelOpen)}
+        isLoading={isLoading}
+        onLoading={setIsLoading}
+        onMouseEnter={handleUIEnter}
+        onMouseLeave={handleUILeave}
+        isDarkMode={isDarkMode}
+        sortMode={sortMode}
+        onSetSortMode={setSortMode}
+        
+        // Normalization Props
+        isNormalized={isNormalized}
+        onToggleNormalization={() => setIsNormalized(!isNormalized)}
+
+        // P2P Props
+        p2pStatus={p2pStatus}
+        p2pMode={p2pMode}
+        peerId={peerId}
+        onInitP2P={handleInitP2P}
+        onConnectP2P={handleConnectP2P}
+      />
+      
+      <main className="flex-1 relative h-full min-w-0">
+        
+        {viewMode === '3D' ? (
+          <Scene3D 
+            rootIndividual={rootIndividual} 
+            selectedId={selectedIndividual?.id}
+            data={gedcomData} 
+            showBoxes={showBoxes}
+            showAxes={showAxes}
+            onIndividualClick={handleInspectIndividual}
+            onBackgroundClick={handleBackgroundClick}
+            onVisibleIdsChange={handleVisibleIdsChange}
+            dragMode={dragMode}
+            cameraView={cameraView}
+            disableControls={isHoveringUI || !!activeInfoPage}
+            isDarkMode={isDarkMode}
+            extraIndividuals={sceneExtras}
+            setExtraIndividuals={setSceneExtras}
+            autoLayoutMode={autoLayoutMode}
+            onSetAutoLayoutMode={setAutoLayoutMode}
+          />
+        ) : (
+          <Scene2D 
+            data={gedcomData}
+            selectedId={selectedIndividual?.id}
+            selectedIds={selectedIdsFor2D}
+            onIndividualClick={handleInspectIndividual}
+            onToggleSelection={handleToggle2DSelection}
+            onExpandFamily={handleExpandFamily}
+            isDarkMode={isDarkMode}
+            sortMode={sortMode}
+            leftPanelOpen={leftPanelOpen}
+            rightPanelOpen={rightPanelOpen}
+          />
+        )}
+        
+        {/* Loading Overlay */}
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm z-50">
+             <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-2xl flex flex-col items-center gap-4">
+                <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
+                <span className="text-white font-medium">Processing...</span>
+             </div>
+          </div>
+        )}
+
+        {/* Central Home Screen / Info Pages */}
+        {!rootIndividual && !isLoading && !gedcomData && (
+          <>
+            {activeInfoPage ? renderInfoPage() : (
+              <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 text-center">
+                    <h1 className="text-3xl md:text-4xl font-bold mb-2 tracking-tight pt-10 md:pt-0">LifeThread</h1>
+                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">Distributed memory, connected lives</h2>
+                    
+                    <div className="max-w-2xl text-sm md:text-lg font-light leading-relaxed opacity-70 mb-8 md:mb-12">
+                        LifeThread is free and belongs to no one. No ads, no data selling, no algorithm deciding what you should see or forget.
+                        It's just a tool I built because I believe our collective memory shouldn't depend on the goodwill of a corporation, a state, or a church.
+                        You use LifeThread for free. If it helps you, if it feels useful, you can contribute to keep it alive. No obligation, no premium account, no features locked behind a paywall.
+                        Just you, your stories, and the threads that connect you.
+                    </div>
+                    
+                    <div className="flex flex-col items-center gap-6 font-bold text-xs tracking-widest uppercase opacity-80 z-10 pb-10">
+                        <div className="flex gap-2 items-center">
+                            <button onClick={() => setLeftPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
+                                Import FAMILY
+                            </button>
+                            <span className="opacity-50">or</span>
+                            <button onClick={handleInitCreation} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
+                                Create INDIVIDUALS
+                            </button>
+                        </div>
+                        
+                        <div className="flex gap-2 items-center">
+                            <button onClick={() => setBottomPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
+                                VISUALIZE
+                            </button>
+                            <span className="opacity-50">and</span>
+                            <button onClick={() => setTopPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
+                                SHARE
+                            </button>
+                        </div>
+
+                        <div className="mt-8 flex gap-4 opacity-70">
+                        <button onClick={() => setActiveInfoPage('about')} className="hover:opacity-100 hover:text-blue-500 transition-colors">About</button>
+                        <span>-</span>
+                        <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contribute</button>
+                        </div>
+                    </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+
+      {/* --- Right Panel (Individuals) --- */}
+      <DetailsPanel 
+        individual={selectedIndividual}
+        data={gedcomData}
+        isOpen={rightPanelOpen}
+        onToggle={() => setRightPanelOpen(!rightPanelOpen)}
+        isCreating={isCreating}
+        onClose={closeRightPanel}
+        onSelectIndividual={handleRelationNavigate}
+        onUpdateIndividual={handleUpdateIndividual}
+        onUpdateFamily={handleUpdateFamily}
+        onCreateIndividual={handleCreateIndividual}
+        onDeleteIndividual={handleDeleteIndividual}
+        onCreateNew={handleInitCreation}
+        onCancelCreate={() => setIsCreating(false)}
+        onLinkSpouse={handleLinkSpouse}
+        onLinkChildToFamily={handleLinkChildToFamily}
+        onCreateFamilyWithChild={handleCreateFamilyWithChild}
+        onMouseEnter={handleUIEnter}
+        onMouseLeave={handleUILeave}
+        isDarkMode={isDarkMode}
+      />
+
+      {/* --- Top Panel (Share) --- */}
+      <TopPanel 
+        isOpen={topPanelOpen}
+        onToggle={() => {
+            if(topPanelOpen) closeTopPanel();
+            else setTopPanelOpen(true);
+        }}
+        databaseName={databaseName}
+        onDownload={handleDownloadGedcom}
+        hasData={!!gedcomData}
+        isDarkMode={isDarkMode}
+        onMouseEnter={handleUIEnter}
+        onMouseLeave={handleUILeave}
+      />
+
+      {/* --- Bottom Panel (Display) --- */}
+      <BottomPanel 
+        isOpen={bottomPanelOpen}
+        onToggle={() => {
+            if(bottomPanelOpen) closeBottomPanel();
+            else setBottomPanelOpen(true);
+        }}
+        showBoxes={showBoxes}
+        showAxes={showAxes}
+        onToggleBoxes={() => setShowBoxes(!showBoxes)}
+        onToggleAxes={() => setShowAxes(!showAxes)}
+        dragMode={dragMode}
+        onSetDragMode={setDragMode}
+        onSetCameraView={handleSetCameraView} 
+        viewMode={viewMode}
+        onSetViewMode={setViewMode}
+        isDarkMode={isDarkMode}
+        onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+        hasData={!!gedcomData}
+        onMouseEnter={handleUIEnter}
+        onMouseLeave={handleUILeave}
+        autoLayoutMode={autoLayoutMode}
+        onSetAutoLayoutMode={setAutoLayoutMode}
+      />
+
+    </div>
+  );
+}
+
+export default App;
