@@ -12,6 +12,10 @@ interface InstancedTreeProps {
   selectedId?: string | null;
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
+  labelFontSize?: number;
+  labelColor?: string;
+  labelOutlineWidth?: number;
+  labelOutlineColor?: string;
 }
 
 // Helper to store trait mapping for interaction
@@ -59,7 +63,18 @@ const HighlightBox: React.FC<HighlightBoxProps> = ({ node, color, isHover = fals
     );
 }
 
-const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ nodes, data, showBoxes = true, selectedId, onNodeClick, onTraitClick }) => {
+const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
+  nodes, 
+  data, 
+  showBoxes = true, 
+  selectedId, 
+  onNodeClick, 
+  onTraitClick,
+  labelFontSize = 3,
+  labelColor = 'white',
+  labelOutlineWidth = 0.2,
+  labelOutlineColor = '#000000'
+}) => {
   const boxMeshRef = useRef<THREE.InstancedMesh>(null);
   const pathMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -442,10 +457,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ nodes, data, sho
         >
             <Text
                 ref={textRef}
-                fontSize={isHover ? 3.5 : 3}
-                color="white"
-                outlineWidth={0.2}
-                outlineColor="#000000"
+                fontSize={isHover ? labelFontSize * 1.17 : labelFontSize}
+                color={labelColor}
+                outlineWidth={labelOutlineWidth}
+                outlineColor={labelOutlineColor}
                 anchorX="center"
                 anchorY="bottom"
                 renderOrder={100} // High priority render

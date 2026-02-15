@@ -62,8 +62,9 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
     list.forEach(i => {
       const b = i.birthDate?.year;
       const d = i.deathDate?.year;
-      if (b && b > 1500) { minY = Math.min(minY, b); maxY = Math.max(maxY, b); }
-      if (d && d > 1500) { minY = Math.min(minY, d); maxY = Math.max(maxY, d); }
+      // Filter valid dates: between 1500 and 2100 (ignore aberrant dates)
+      if (b && b > 1500 && b < 2100) { minY = Math.min(minY, b); maxY = Math.max(maxY, b); }
+      if (d && d > 1500 && d < 2100) { minY = Math.min(minY, d); maxY = Math.max(maxY, d); }
     });
     
     if (maxY < minY) maxY = minY + 100;
@@ -80,17 +81,15 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
     
     console.log('[Scene2DTimeline] Year range:', { minY, maxY, totalIndividuals: list.length });
 
-    // LIMIT for safety: Don't try to render more than 10k at once (even with GPU)
-    const limitedList = list.length > 10000 ? list.slice(0, 10000) : list;
-    
-    console.log('[Scene2DTimeline] Processing:', { total: list.length, limited: limitedList.length });
+    // No limit - GPU can handle it!
+    console.log('[Scene2DTimeline] Processing:', { total: list.length });
     
     // Sort - ALWAYS by birth date for timeline (oldest left, youngest right)
-    const sorted = [...limitedList].sort((a, b) => {
+    const sorted = [...list].sort((a, b) => {
       const dateA = a.birthDate?.year ?? minY + 10;
       const dateB = b.birthDate?.year ?? minY + 10;
-      return dateA - dateB; // Ascending: oldest first (left)
-    });
+      return dateB - dateA; // Descending: youngest first, then reverse array to get oldest left
+    }).reverse();
 
     // Convert to LayoutNodes (Timeline layout)
     const layoutNodes: LayoutNode[] = sorted.map((indi, index) => {
@@ -104,13 +103,13 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
       
       const centerY = yTop + height / 2;
       
-      // Reduce bar width slightly to make room for child markers on the side
-      const barWidthAdjusted = BAR_WIDTH * 0.85;
+      // Reduce bar width for thinner appearance
+      const barWidthAdjusted = BAR_WIDTH * 0.7; // 70% of original (thinner)
       
       // Create matrix for this individual
       const matrix = new THREE.Matrix4();
       const position = new THREE.Vector3(x, centerY, 0);
-      const scale = new THREE.Vector3(barWidthAdjusted, height, BAR_DEPTH);
+      const scale = new THREE.Vector3(barWidthAdjusted, height, BAR_DEPTH * 0.5); // Thinner depth too
       matrix.compose(position, new THREE.Quaternion(), scale);
       
       // Color based on gender (same as Scene2D: pink-300/blue-300)
@@ -119,8 +118,8 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         indi.gender === Gender.Male ? '#93c5fd' : '#94a3b8'
       );
       
-      // No traits for now - they're rendered by InstancedGenealogyTree but sized for 3D
-      // For timeline, we'll add custom markers later
+      // NO traits for now - they cause freeze with 26k individuals
+      // TODO: Implement with proper viewport culling in future version
       const traits: any[] = [];
       
       return {
@@ -159,20 +158,22 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         dpr={[1, 2]}
         style={{ background: isDarkMode ? '#000000' : '#ffffff' }}
       >
-        {/* Orthographic Camera - Fixed view from front */}
+        {/* Orthographic Camera - LOCKED view from front (no rotation) */}
         <OrthographicCamera
           makeDefault
           position={[centerX, centerY, 100]}
           zoom={1}
           near={0.1}
           far={10000}
+          up={[0, 1, 0]}
         />
         
-        {/* OrbitControls - Only pan and zoom, no rotation */}
+        {/* OrbitControls - Only pan and zoom, ROTATION DISABLED */}
         <OrbitControls
           enableRotate={false}
           enablePan={true}
           enableZoom={true}
+          screenSpacePanning={true}
           mouseButtons={{
             LEFT: THREE.MOUSE.PAN,
             MIDDLE: THREE.MOUSE.DOLLY,
@@ -186,6 +187,10 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
           minZoom={0.005}
           maxZoom={50}
           zoomSpeed={1.5}
+          minPolarAngle={0}
+          maxPolarAngle={0}
+          minAzimuthAngle={0}
+          maxAzimuthAngle={0}
         />
         
         {/* Background color */}
@@ -195,9 +200,7 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         <ambientLight intensity={isDarkMode ? 0.6 : 1.0} />
         <directionalLight position={[0, 0, 10]} intensity={isDarkMode ? 0.3 : 0.5} />
         
-        {/* Time Grid - Simplified, grid lines removed for now (causing render issues) */}
-        
-        {/* Instanced Rendering (GPU optimized) */}
+        {/* Instanced Rendering (GPU optimized) - Life bars AND traits */}
         <InstancedGenealogyTree
           nodes={nodes}
           data={data}
@@ -207,6 +210,10 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
             const indi = data.individuals[id];
             if (indi) onIndividualClick(indi);
           }}
+          labelFontSize={0.15}
+          labelColor={isDarkMode ? 'white' : 'black'}
+          labelOutlineWidth={isDarkMode ? 0.03 : 0}
+          labelOutlineColor={isDarkMode ? '#000000' : 'transparent'}
         />
       </Canvas>
       
@@ -221,19 +228,19 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         </div>
       )}
       
-      {/* Year Scale Overlay - Left side (Simplified - shows min/mid/max) */}
+      {/* Year Scale Overlay - Fixed in viewport */}
       <div 
-        className={`absolute top-0 bottom-0 w-20 pointer-events-none z-40 flex flex-col justify-between py-12 transition-all duration-300 ${
-          leftPanelOpen ? 'left-[340px]' : 'left-2'
+        className={`absolute top-0 bottom-0 w-16 pointer-events-none z-40 flex flex-col justify-between py-12 transition-all duration-300 ${
+          leftPanelOpen ? 'left-[370px]' : 'left-12'
         }`}
       >
-        <div className={`text-xs font-mono font-bold ${isDarkMode ? 'text-gray-200 bg-black/80' : 'text-gray-800 bg-white/90'} px-2 py-0.5 rounded shadow-md border ${isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}>
+        <div className={`text-[11px] font-mono font-bold ${isDarkMode ? 'text-gray-300' : 'text-gray-800'}`}>
           {maxYear}
         </div>
-        <div className={`text-xs font-mono font-bold ${isDarkMode ? 'text-gray-200 bg-black/80' : 'text-gray-800 bg-white/90'} px-2 py-0.5 rounded shadow-md border ${isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}>
+        <div className={`text-[11px] font-mono font-bold ${isDarkMode ? 'text-gray-300' : 'text-gray-800'}`}>
           {Math.floor((maxYear + minYear) / 2)}
         </div>
-        <div className={`text-xs font-mono font-bold ${isDarkMode ? 'text-gray-200 bg-black/80' : 'text-gray-800 bg-white/90'} px-2 py-0.5 rounded shadow-md border ${isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}>
+        <div className={`text-[11px] font-mono font-bold ${isDarkMode ? 'text-gray-300' : 'text-gray-800'}`}>
           {minYear}
         </div>
       </div>
