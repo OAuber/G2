@@ -12,6 +12,7 @@ export interface NewPersonData {
   fatherId: string;
   motherId: string;
   spouseId: string;
+  marriageDate: string;
   childrenIds: string[];
 }
 
@@ -59,7 +60,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   isDarkMode
 }) => {
   const [formData, setFormData] = useState<NewPersonData>({
-    givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', childrenIds: []
+    givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
   });
 
   const [isEditing, setIsEditing] = useState(false);
@@ -67,8 +68,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   useEffect(() => {
     if (isCreating) {
-      setFormData({ givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', childrenIds: [] });
-      setIsEditing(true);
+      setFormData({ givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: [] });
+      setIsEditing(false); // NOT editing, we're creating - relationships should be active!
     } else if (individual && data) {
       // Pre-fill form for editing
       let fatherId = '', motherId = '', spouseId = '', childrenIds: string[] = [];
@@ -88,6 +89,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
          }
       }
 
+      // Get marriage date from first family
+      let marriageDate = '';
+      if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
+        const fam = data.families[individual.familySpouseIds[0]];
+        marriageDate = fam?.marriageDate?.year?.toString() || '';
+      }
+      
       setFormData({
          givenName: individual.givenName,
          surname: individual.surname,
@@ -97,6 +105,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
          fatherId,
          motherId,
          spouseId,
+         marriageDate,
          childrenIds
       });
       setIsEditing(false);
@@ -220,9 +229,9 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <input placeholder="Death Year" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathDate} onChange={e => setFormData({...formData, deathDate: e.target.value})} />
              </div>
 
-             {/* Relationships Logic (Only fully active for Creation in this demo, visual for Edit) */}
-             <div className={`space-y-3 pt-2 ${isEditing ? 'opacity-50 pointer-events-none' : ''}`}>
-                <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Relationships {isEditing && '(ReadOnly in Edit)'}</label>
+             {/* Relationships Logic - Active for both Creation and Editing */}
+             <div className={`space-y-3 pt-2`}>
+                <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Relationships</label>
                 
                 <select className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.fatherId} onChange={e => setFormData({...formData, fatherId: e.target.value})}>
                     <option value="">Select Father...</option>
@@ -238,6 +247,55 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     <option value="">Select Spouse...</option>
                     {allIndividuals.map(p => <option key={p.id} value={p.id}>{p.givenName} {p.surname}</option>)}
                 </select>
+                
+                {/* Marriage Date - only shown if spouse is selected */}
+                {formData.spouseId && (
+                  <div>
+                    <label className={`block text-xs ${subTextClass} mb-1`}>Marriage Year</label>
+                    <input 
+                      placeholder="Marriage Year (optional)" 
+                      className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} 
+                      value={formData.marriageDate} 
+                      onChange={e => setFormData({...formData, marriageDate: e.target.value})} 
+                    />
+                  </div>
+                )}
+                
+                {/* Children - Checkbox list (better UX for multiple selection) */}
+                <div>
+                  <label className={`block text-xs font-bold ${subTextClass} mb-2`}>
+                    Children ({formData.childrenIds.length} selected)
+                  </label>
+                  <div className={`max-h-32 overflow-y-auto rounded border ${inputBg} p-2 space-y-1`}>
+                    {allIndividuals.length === 0 ? (
+                      <p className={`text-xs italic ${subTextClass}`}>No other individuals to select</p>
+                    ) : (
+                      allIndividuals.map(p => (
+                        <label 
+                          key={p.id} 
+                          className={`flex items-center gap-2 cursor-pointer hover:bg-opacity-80 p-1 rounded ${
+                            formData.childrenIds.includes(p.id) ? 'bg-blue-500/20' : ''
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={formData.childrenIds.includes(p.id)}
+                            onChange={e => {
+                              const newChildren = e.target.checked
+                                ? [...formData.childrenIds, p.id]
+                                : formData.childrenIds.filter(id => id !== p.id);
+                              setFormData({...formData, childrenIds: newChildren});
+                            }}
+                            className="w-4 h-4"
+                          />
+                          <span className={`text-xs ${textClass}`}>
+                            {p.givenName} {p.surname}
+                          </span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </div>
              </div>
 
              <div className="flex gap-2 pt-4">
@@ -316,12 +374,20 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                             return (
                                 <div key={famId} className={`mb-3 p-2 rounded border border-dashed ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
                                     {spouseId ? (
-                                        <button onClick={() => data && onSelectIndividual(data.individuals[spouseId])} className={`flex items-center gap-2 text-sm font-bold ${textClass} hover:text-blue-500 mb-2`}>
-                                            <Link2 className="w-3 h-3" /> {getName(spouseId)}
-                                        </button>
+                                        <>
+                                          <button onClick={() => data && onSelectIndividual(data.individuals[spouseId])} className={`flex items-center gap-2 text-sm font-bold ${textClass} hover:text-blue-500`}>
+                                              <Link2 className="w-3 h-3" /> {getName(spouseId)}
+                                          </button>
+                                          {fam.marriageDate?.year && (
+                                            <div className={`text-[10px] ${subTextClass} ml-6 mb-2`}>
+                                              Married: {fam.marriageDate.year}
+                                              {fam.marriageDate.isCalculated && <span className="ml-1 text-yellow-500">(calc)</span>}
+                                            </div>
+                                          )}
+                                        </>
                                     ) : <div className={`text-xs italic mb-2 ${subTextClass}`}>Unknown Spouse</div>}
                                     
-                                    <div className="pl-4 border-l-2 border-slate-700 space-y-1">
+                                    <div className="pl-4 border-l-2 border-slate-700 space-y-1 mt-2">
                                         {fam.childrenIds && fam.childrenIds.length > 0 ? (
                                             fam.childrenIds.map(childId => (
                                                 <button key={childId} onClick={() => data && onSelectIndividual(data.individuals[childId])} className={`block text-xs hover:underline ${subTextClass}`}>

@@ -525,6 +525,8 @@ function App() {
 
     // 2. Link Parents
     if (formData.fatherId || formData.motherId) {
+       console.log('[App] Linking parents:', { fatherId: formData.fatherId, motherId: formData.motherId });
+       
        let familyId = null;
        const existingFam = Object.values(newData.families).find(f => {
            if (formData.fatherId && formData.motherId) return f.husbandId === formData.fatherId && f.wifeId === formData.motherId;
@@ -534,30 +536,45 @@ function App() {
        });
 
        if (existingFam) {
+         console.log('[App] ✓ Found existing family:', existingFam.id, 'children:', existingFam.childrenIds.length);
          familyId = existingFam.id;
        } else {
          familyId = getNextId('F', newData);
+         console.log('[App] ✓ Creating new family:', familyId);
+         
          newData.families[familyId] = {
            id: familyId,
            husbandId: formData.fatherId || undefined,
            wifeId: formData.motherId || undefined,
            childrenIds: []
          };
+         
          if (formData.fatherId) {
             const dad = newData.individuals[formData.fatherId];
             if (!dad.familySpouseIds) dad.familySpouseIds = [];
-            dad.familySpouseIds.push(familyId);
+            if (!dad.familySpouseIds.includes(familyId)) {
+                dad.familySpouseIds.push(familyId);
+            }
          }
          if (formData.motherId) {
             const mom = newData.individuals[formData.motherId];
             if (!mom.familySpouseIds) mom.familySpouseIds = [];
-            mom.familySpouseIds.push(familyId);
+            if (!mom.familySpouseIds.includes(familyId)) {
+                mom.familySpouseIds.push(familyId);
+            }
          }
        }
+       
        if (!newData.families[familyId].childrenIds.includes(newId)) {
            newData.families[familyId].childrenIds.push(newId);
        }
        newData.individuals[newId].familyChildId = familyId;
+       
+       console.log('[App] ✓ Family created/linked:', {
+           familyId,
+           childrenCount: newData.families[familyId].childrenIds.length,
+           childAdded: newId
+       });
     }
 
     // 3. Link Spouse & Children
@@ -566,7 +583,11 @@ function App() {
        // ... (Simplified for brevity, same logic as before) ...
        // Create new family if needed
        famsId = getNextId('F', newData);
-       newData.families[famsId] = { id: famsId, childrenIds: [] };
+       newData.families[famsId] = { 
+         id: famsId, 
+         childrenIds: [],
+         marriageDate: formData.marriageDate ? parseDate(formData.marriageDate) : undefined
+       };
        
        const famRecord = newData.families[famsId];
        if (newIndi.gender === 'F') famRecord.wifeId = newId;
@@ -579,6 +600,8 @@ function App() {
           if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
           spouse.familySpouseIds.push(famsId);
        }
+       
+       console.log('[App] ✓ Spouse family created with marriage date:', formData.marriageDate || 'none');
 
        formData.childrenIds.forEach(childId => {
           famRecord.childrenIds.push(childId);
