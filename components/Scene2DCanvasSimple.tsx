@@ -149,7 +149,7 @@ const Scene2DCanvasSimple: React.FC<Scene2DCanvasSimpleProps> = ({
     ctx.scale(dpr, dpr);
     
     // Background
-    ctx.fillStyle = isDarkMode ? '#000' : '#f8fafc';
+    ctx.fillStyle = isDarkMode ? '#000' : '#f0f9ff';
     ctx.fillRect(0, 0, rect.width, rect.height);
     
     // Apply transform
@@ -160,7 +160,7 @@ const Scene2DCanvasSimple: React.FC<Scene2DCanvasSimpleProps> = ({
     const totalWidth = individuals.length * (BAR_WIDTH + BAR_GAP) + 200;
     
     // Draw extended background (for content area)
-    ctx.fillStyle = isDarkMode ? '#000' : '#f8fafc';
+    ctx.fillStyle = isDarkMode ? '#000' : '#f0f9ff';
     ctx.fillRect(-100, -100, totalWidth, totalHeight + 200);
     
     // Draw year grid (every 10 years) - CORRECTED scaling
@@ -403,9 +403,7 @@ const Scene2DCanvasSimple: React.FC<Scene2DCanvasSimpleProps> = ({
     }
   };
 
-  if (!data) {
-    return <div className="flex items-center justify-center h-full opacity-50">No Data</div>;
-  }
+  if (!data) return null; // Don't render anything - let the welcome page show through
 
   return (
     <div

@@ -198,7 +198,7 @@ const Scene2D: React.FC<Scene2DProps> = ({
     setIsPanning(false);
   };
 
-  if (!data) return <div className="flex items-center justify-center h-full opacity-50">No Data</div>;
+  if (!data) return null; // Don't render anything - let the welcome page show through
   
   // Warning for large databases
   const showPerformanceWarning = individuals.length > 5000;
@@ -206,7 +206,7 @@ const Scene2D: React.FC<Scene2DProps> = ({
   const totalHeight = (maxYear - minYear) * PIXELS_PER_YEAR;
 
   // Styles
-  const bgClass = isDarkMode ? 'bg-black' : 'bg-slate-50';
+  const bgClass = isDarkMode ? 'bg-black' : 'bg-sky-50';
   
   // UPDATED COLORS for better visibility
   const gridLineClass = isDarkMode ? 'border-slate-500' : 'border-slate-300';

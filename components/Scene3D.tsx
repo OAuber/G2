@@ -42,9 +42,9 @@ const CameraController: React.FC<{
             if (cameraView === 'TOP') {
                 // Pour la vue de dessus, on se place très haut sur Y
                 pos.y += dist;
-                // CRUCIAL: Définir l'UP vector pour que la caméra sache "où est le haut"
-                // En vue Top (regardant -Y), le haut de l'écran est -Z (ou +Z selon préférence)
-                camera.up.set(0, 0, -1); 
+                // UP = +X pour que les descendants (generation > 0, +X) soient en haut
+                // et les ancêtres (generation < 0, -X) soient en bas ("racines")
+                camera.up.set(1, 0, 0); 
             } else if (cameraView === 'ISO_F') {
                 pos.add(new Vector3(dist, dist, dist)); 
                 camera.up.set(0, 1, 0);

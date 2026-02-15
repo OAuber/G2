@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Calendar, ArrowUpDown, Eye, EyeOff, ArrowUp, ArrowDown, Network, Copy, Check, Wifi, WifiOff, Sparkles } from 'lucide-react';
-import { Individual, GedcomData, SortMode, P2PStatus, P2PMode } from '../types';
+import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Calendar, ArrowUpDown, Eye, EyeOff, ArrowUp, ArrowDown, Sparkles } from 'lucide-react';
+import { Individual, GedcomData, SortMode } from '../types';
 import { parseGedcom } from '../services/gedcomParser';
 import { getDemoGedcom } from '../services/demoData';
 
@@ -25,13 +25,6 @@ interface SidebarProps {
   // Normalization
   isNormalized: boolean;
   onToggleNormalization: () => void;
-
-  // P2P Props
-  p2pStatus: P2PStatus;
-  p2pMode: P2PMode;
-  peerId: string | null;
-  onInitP2P: () => void;
-  onConnectP2P: (hostId: string) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
@@ -53,29 +46,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   onSetSortMode,
   isNormalized,
   onToggleNormalization,
-  p2pStatus,
-  p2pMode,
-  peerId,
-  onInitP2P,
-  onConnectP2P
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [targetHostId, setTargetHostId] = useState('');
-  const [copied, setCopied] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Connectivity Listeners
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-        window.removeEventListener('online', handleOnline);
-        window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
 
   // Auto-scroll to selected item
   useEffect(() => {
@@ -139,14 +112,6 @@ const Sidebar: React.FC<SidebarProps> = ({
             onLoading(false);
           }
       }, 500);
-  };
-
-  const handleCopyId = () => {
-      if (peerId) {
-          navigator.clipboard.writeText(peerId);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-      }
   };
 
   const filteredList = useMemo(() => {
@@ -255,7 +220,7 @@ const Sidebar: React.FC<SidebarProps> = ({
          className={`absolute top-1/2 right-0 translate-x-full -translate-y-1/2 origin-left py-8 px-3 rounded-r-xl border-y border-r border-l-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-bold uppercase tracking-widest whitespace-nowrap">
-            Family
+            Families
         </span>
       </button>
 
@@ -292,77 +257,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </button>
         )}
 
-        {/* P2P Toggle/Status */}
-        <div className={`rounded-md p-2 border ${isDarkMode ? 'bg-neutral-900 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                    <Network className={`w-4 h-4 ${!isOnline ? 'text-red-500' : (p2pStatus === 'connected' ? 'text-green-500' : 'text-slate-500')}`} />
-                    <span className={`text-xs font-bold uppercase ${subTextClass}`}>P2P Network</span>
-                </div>
-                
-                {!isOnline ? (
-                    <span className="text-[10px] px-2 py-0.5 bg-red-500/20 text-red-500 rounded flex items-center gap-1">
-                        <WifiOff className="w-3 h-3" /> Offline
-                    </span>
-                ) : (
-                    <>
-                        {p2pStatus === 'disconnected' && (
-                            <button onClick={onInitP2P} className="text-[10px] px-2 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-500">
-                                Enable
-                            </button>
-                        )}
-                        {p2pStatus !== 'disconnected' && (
-                             <span className={`text-[10px] px-2 py-0.5 rounded ${p2pStatus === 'connected' ? 'bg-green-500/20 text-green-500' : 'bg-yellow-500/20 text-yellow-500'}`}>
-                                 {p2pStatus}
-                             </span>
-                        )}
-                    </>
-                )}
-            </div>
-            
-            {isOnline && p2pStatus !== 'disconnected' && (
-                <div className="space-y-2">
-                    {peerId ? (
-                        <div className="flex items-center gap-1">
-                            <input 
-                                readOnly 
-                                value={peerId} 
-                                className={`flex-1 text-[10px] font-mono p-1 rounded border ${inputBg} opacity-70`}
-                            />
-                            <button onClick={handleCopyId} className={`p-1 rounded hover:bg-slate-700 ${textClass}`}>
-                                {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                            </button>
-                        </div>
-                    ) : <div className="text-[10px] opacity-50 animate-pulse">Generating ID...</div>}
-                    
-                    {p2pStatus !== 'connected' && (
-                        <div className="flex gap-1">
-                            <input 
-                                placeholder="Enter Host ID"
-                                value={targetHostId}
-                                onChange={e => setTargetHostId(e.target.value)}
-                                className={`flex-1 text-[10px] p-1 rounded border ${inputBg}`}
-                            />
-                            <button 
-                                onClick={() => onConnectP2P(targetHostId)}
-                                disabled={!targetHostId}
-                                className="text-[10px] px-2 bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50"
-                            >
-                                Connect
-                            </button>
-                        </div>
-                    )}
-                </div>
-            )}
-            
-            {!isOnline && (
-                <div className="text-[10px] text-center opacity-50 italic">
-                    Internet required for P2P sync.
-                    <br/>
-                    Local mode active.
-                </div>
-            )}
-        </div>
+        {/* P2P section moved to TopPanel */}
       </div>
 
       {/* Search & Sort & Header - Fixed at Top */}

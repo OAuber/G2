@@ -143,12 +143,10 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
     return { nodes: layoutNodes, minYear: minY, maxYear: maxY, centerX: cX, centerY: cY };
   }, [data, sortMode, selectedIds, leftPanelOpen]);
 
-  if (!data) {
-    return <div className="flex items-center justify-center h-full opacity-50">No Data</div>;
-  }
+  if (!data) return null; // Don't render anything - let the welcome page show through
 
   return (
-    <div className="w-full h-full relative" style={{ background: isDarkMode ? '#000000' : '#ffffff' }}>
+    <div className="w-full h-full relative" style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}>
       <Canvas
         gl={{ 
           antialias: true, 
@@ -156,7 +154,7 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
           preserveDrawingBuffer: true
         }}
         dpr={[1, 2]}
-        style={{ background: isDarkMode ? '#000000' : '#ffffff' }}
+        style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}
       >
         {/* Orthographic Camera - LOCKED view from front (no rotation) */}
         <OrthographicCamera
@@ -194,7 +192,7 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         />
         
         {/* Background color */}
-        <color attach="background" args={[isDarkMode ? '#000000' : '#ffffff']} />
+        <color attach="background" args={[isDarkMode ? '#000000' : '#f0f9ff']} />
         
         {/* Lights */}
         <ambientLight intensity={isDarkMode ? 0.6 : 1.0} />

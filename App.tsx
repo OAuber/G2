@@ -682,7 +682,7 @@ function App() {
      const title = activeInfoPage === 'about' ? 'About LifeThread' : 'Contribute';
      
      return (
-        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-10 ${isDarkMode ? 'text-white' : 'text-black'} animate-in fade-in duration-300`}>
+        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-10 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'} animate-in fade-in duration-300`}>
              <button 
                 onClick={() => setActiveInfoPage(null)}
                 className={`absolute top-24 right-8 p-2 rounded-full hover:bg-opacity-20 transition-colors ${isDarkMode ? 'hover:bg-white text-white' : 'hover:bg-black text-black'}`}
@@ -716,7 +716,7 @@ function App() {
 
   return (
     <div className={`${isDarkMode ? 'dark [color-scheme:dark]' : '[color-scheme:light]'} flex h-screen w-screen overflow-hidden relative transition-colors duration-500`}>
-      <div className="absolute inset-0 bg-white dark:bg-black transition-colors duration-500 -z-10"></div>
+      <div className="absolute inset-0 bg-sky-50 dark:bg-black transition-colors duration-500 -z-10"></div>
       
       {/* --- Sidebar (Database) --- */}
       <Sidebar 
@@ -740,16 +740,9 @@ function App() {
         // Normalization Props
         isNormalized={isNormalized}
         onToggleNormalization={() => setIsNormalized(!isNormalized)}
-
-        // P2P Props
-        p2pStatus={p2pStatus}
-        p2pMode={p2pMode}
-        peerId={peerId}
-        onInitP2P={handleInitP2P}
-        onConnectP2P={handleConnectP2P}
       />
       
-      <main className="flex-1 relative h-full min-w-0">
+      <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
         
         {viewMode === '3D' ? (
           <Scene3D 
@@ -799,10 +792,10 @@ function App() {
         
         {/* Loading Overlay */}
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm z-50">
-             <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-2xl flex flex-col items-center gap-4">
+          <div className={`absolute inset-0 flex items-center justify-center backdrop-blur-sm z-50 ${isDarkMode ? 'bg-black/80' : 'bg-sky-50/80'}`}>
+             <div className={`p-8 rounded-xl border shadow-2xl flex flex-col items-center gap-4 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-300'}`}>
                 <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
-                <span className="text-white font-medium">Processing...</span>
+                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Processing...</span>
              </div>
           </div>
         )}
@@ -811,7 +804,7 @@ function App() {
         {!rootIndividual && !isLoading && !gedcomData && (
           <>
             {activeInfoPage ? renderInfoPage() : (
-              <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'text-white' : 'text-black'}`}>
+              <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
                 <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 text-center">
                     <h1 className="text-3xl md:text-4xl font-bold mb-2 tracking-tight pt-10 md:pt-0">LifeThread</h1>
                     <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">Distributed memory, connected lives</h2>
@@ -893,6 +886,12 @@ function App() {
         isDarkMode={isDarkMode}
         onMouseEnter={handleUIEnter}
         onMouseLeave={handleUILeave}
+        // P2P Props
+        p2pStatus={p2pStatus}
+        p2pMode={p2pMode}
+        peerId={peerId}
+        onInitP2P={handleInitP2P}
+        onConnectP2P={handleConnectP2P}
       />
 
       {/* --- Bottom Panel (Display) --- */}

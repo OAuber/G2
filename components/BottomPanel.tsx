@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, ArrowUpFromLine, ArrowDownToLine, Cuboid, Move, Sun, Moon, LayoutGrid, MonitorPlay, ArrowDown, User, Network } from 'lucide-react';
+import { Box, ArrowUpFromLine, ArrowDownToLine, Cuboid, Move, Sun, Moon, LayoutGrid, ArrowDown } from 'lucide-react';
 import { DragMode, ViewMode, CameraView } from '../types';
 
 interface BottomPanelProps {
@@ -93,13 +93,13 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
             <>
               {/* View Mode Switcher */}
               <div className="flex flex-col items-center gap-1">
-                 <span className={`text-[10px] uppercase font-bold tracking-wider ${labelText}`}>Mode</span>
+                 <span className={`text-[10px] uppercase font-bold tracking-wider ${labelText}`}>View</span>
                  <div className={`flex rounded-lg p-1 border ${containerBg}`}>
-                    <button onClick={() => onSetViewMode('3D')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === '3D' ? btnActive : btnDefault}`}>
-                      <Cuboid className="w-3.5 h-3.5" /> 3D View
-                    </button>
                     <button onClick={() => onSetViewMode('2D')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === '2D' ? btnActive : btnDefault}`}>
-                      <LayoutGrid className="w-3.5 h-3.5" /> 2D Plan
+                      <LayoutGrid className="w-3.5 h-3.5" /> 2D
+                    </button>
+                    <button onClick={() => onSetViewMode('3D')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${viewMode === '3D' ? btnActive : btnDefault}`}>
+                      <Cuboid className="w-3.5 h-3.5" /> 3D
                     </button>
                  </div>
               </div>
@@ -111,11 +111,9 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                 <>
                   {/* Drag / Layout Mode */}
                   <div className="flex flex-col items-center gap-1">
-                     <span className={`text-[10px] uppercase font-bold tracking-wider ${labelText}`}>Interaction</span>
-                     {/* Split into Manual vs Auto */}
+                     <span className={`text-[10px] uppercase font-bold tracking-wider ${labelText}`}>Trees</span>
                      <div className={`flex rounded-lg p-1 border ${containerBg}`}>
-                        {autoLayoutMode === 'none' ? (
-                          // Manual Drag Buttons
+                        {autoLayoutMode === 'none' && (
                           <>
                             <button onClick={() => onSetDragMode('ancestors')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${dragMode === 'ancestors' ? btnActive : btnDefault}`}>
                               <ArrowUpFromLine className="w-3.5 h-3.5" /> Drag Ancestors
@@ -124,15 +122,11 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                               <ArrowDownToLine className="w-3.5 h-3.5" /> Drag Descendants
                             </button>
                           </>
-                        ) : (
-                          // Auto Layout Status
-                          <div className="px-3 py-1.5 text-xs font-bold text-blue-500 flex items-center gap-2">
-                             <Network className="w-3.5 h-3.5" /> Auto-Layout Active
-                          </div>
                         )}
                         
-                        {/* Auto Layout Toggle (Switch between Manual and Engine) */}
-                        <div className="w-px h-4 bg-slate-500/20 mx-1 self-center"></div>
+                        {autoLayoutMode !== 'none' && (
+                          <div className="w-px h-4 bg-slate-500/20 mx-1 self-center"></div>
+                        )}
                         
                         {onSetAutoLayoutMode && (
                              <div className="flex gap-1">
@@ -141,26 +135,26 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                                       if(autoLayoutMode === 'ancestors') onSetAutoLayoutMode('none');
                                       else {
                                           onSetAutoLayoutMode('ancestors');
-                                          onSetCameraView('TOP'); // Auto-switch to TOP for 2D validation
+                                          onSetCameraView('TOP');
                                       }
                                   }}
                                   title="Auto-Deploy Ancestors"
                                   className={`px-2 py-1.5 rounded-md text-xs font-bold ${autoLayoutMode === 'ancestors' ? 'bg-pink-500 text-white' : btnDefault}`}
                                 >
-                                    Auto ↑
+                                    Ascendants ↑
                                 </button>
                                 <button 
                                   onClick={() => {
                                       if(autoLayoutMode === 'descendants') onSetAutoLayoutMode('none');
                                       else {
                                           onSetAutoLayoutMode('descendants');
-                                          onSetCameraView('TOP'); // Auto-switch to TOP for 2D validation
+                                          onSetCameraView('TOP');
                                       }
                                   }}
                                   title="Auto-Deploy Descendants"
                                   className={`px-2 py-1.5 rounded-md text-xs font-bold ${autoLayoutMode === 'descendants' ? 'bg-blue-500 text-white' : btnDefault}`}
                                 >
-                                    Auto ↓
+                                    Descendants ↓
                                 </button>
                              </div>
                         )}
@@ -173,26 +167,33 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                   <div className="flex flex-col items-center gap-1">
                      <span className={`text-[10px] uppercase font-bold tracking-wider ${labelText}`}>Camera</span>
                      <div className="flex gap-1">
-                        {/* Perspective */}
-                        <button onClick={() => onSetCameraView(null)} className={`w-8 h-7 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Perspective">
-                           <MonitorPlay className="w-4 h-4" />
-                        </button>
-                        
-                        {/* Top View (Ortho) */}
+                        {/* Top View (Ortho) - Arrow pointing down */}
                         <button onClick={() => onSetCameraView('TOP')} className={`w-8 h-7 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Top View (Plan)">
                            <ArrowDown className="w-4 h-4" />
                         </button>
 
-                        {/* Isometric Female (Side) */}
-                        <button onClick={() => onSetCameraView('ISO_M')} className={`w-12 h-7 flex items-center justify-center gap-1 rounded border ${containerBg} ${btnDefault}`} title="Isometric (Women Side)">
-                           <span className="text-[10px] font-bold">Iso</span>
-                           <User className="w-3 h-3 text-pink-500" />
+                        {/* Perspective - Horizontal arrow */}
+                        <button onClick={() => onSetCameraView(null)} className={`w-8 h-7 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Perspective">
+                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                             <line x1="3" y1="8" x2="13" y2="8" />
+                             <polyline points="9,4 13,8 9,12" />
+                           </svg>
                         </button>
 
-                         {/* Isometric Male (Side) */}
-                         <button onClick={() => onSetCameraView('ISO_F')} className={`w-12 h-7 flex items-center justify-center gap-1 rounded border ${containerBg} ${btnDefault}`} title="Isometric (Men Side)">
-                           <span className="text-[10px] font-bold">Iso</span>
-                           <User className="w-3 h-3 text-blue-500" />
+                        {/* Isometric Female (Side) - Pink arrow 45° from top-right */}
+                        <button onClick={() => onSetCameraView('ISO_M')} className={`w-8 h-7 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Isometric (Women Side)">
+                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#ec4899" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                             <line x1="12" y1="4" x2="4" y2="12" />
+                             <polyline points="7,4 12,4 12,9" />
+                           </svg>
+                        </button>
+
+                        {/* Isometric Male (Side) - Blue arrow 45° from top-left */}
+                        <button onClick={() => onSetCameraView('ISO_F')} className={`w-8 h-7 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Isometric (Men Side)">
+                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                             <line x1="4" y1="4" x2="12" y2="12" />
+                             <polyline points="9,4 4,4 4,9" />
+                           </svg>
                         </button>
                      </div>
                   </div>
