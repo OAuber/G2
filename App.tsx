@@ -131,6 +131,105 @@ function App() {
           setCameraView(view);
       }
   };
+  
+  // --- View Mode Handler with Smart Transitions ---
+  const handleSetViewMode = (mode: ViewMode) => {
+      const wasIn2D = viewMode === '2D';
+      const goingTo3D = mode === '3D';
+      
+      if (wasIn2D && goingTo3D) {
+          // Transition 2D → 3D
+          console.log('[App] Transition 2D → 3D', { 
+              hasSelection: selectedIdsFor2D.size > 0,
+              selectedIndividual: selectedIndividual?.id,
+              rootIndividual: rootIndividual?.id,
+              sceneExtras: sceneExtras.length
+          });
+          
+          // SYNC: Set rootIndividual to match selectedIndividual
+          // So 3D view builds tree around the individual selected in 2D
+          console.log('[App] Current state:', {
+              selectedIndividualId: selectedIndividual?.id,
+              selectedIndividualName: selectedIndividual ? `${selectedIndividual.givenName} ${selectedIndividual.surname}` : 'none',
+              rootIndividualId: rootIndividual?.id,
+              rootIndividualName: rootIndividual ? `${rootIndividual.givenName} ${rootIndividual.surname}` : 'none',
+              needsSync: selectedIndividual && selectedIndividual.id !== rootIndividual?.id
+          });
+          
+          if (selectedIndividual && selectedIndividual.id !== rootIndividual?.id) {
+              console.log('[App] ✓ Syncing rootIndividual to selectedIndividual:', 
+                  `${selectedIndividual.givenName} ${selectedIndividual.surname}`);
+              setRootIndividual(selectedIndividual);
+          } else if (selectedIndividual) {
+              console.log('[App] ✓ rootIndividual already matches selectedIndividual');
+          } else {
+              console.warn('[App] ⚠️ No selectedIndividual to sync!');
+          }
+          
+          // SMART SYNC: Detect if 2D selection is ancestors-only or descendants-only
+          // and set autoLayoutMode accordingly
+          
+          if (selectedIdsFor2D.size > 0 && gedcomData && selectedIndividual) {
+              // Check what's in the selection relative to selectedIndividual
+              let hasAncestors = false;
+              let hasDescendants = false;
+              
+              selectedIdsFor2D.forEach(id => {
+                  if (id === selectedIndividual.id) return; // Skip self
+                  
+                  const indi = gedcomData.individuals[id];
+                  if (!indi) return;
+                  
+                  // Simple heuristic: compare generations
+                  const selectedGen = selectedIndividual.generation ?? 0;
+                  const indiGen = indi.generation ?? 0;
+                  
+                  if (indiGen < selectedGen) {
+                      hasAncestors = true; // Lower generation = ancestor
+                  } else if (indiGen > selectedGen) {
+                      hasDescendants = true; // Higher generation = descendant
+                  }
+              });
+              
+              // Set autoLayoutMode based on what was selected in 2D
+              if (hasAncestors && !hasDescendants) {
+                  console.log('[App] 2D had ancestors only → 3D autoLayoutMode = ancestors');
+                  setAutoLayoutMode('ancestors');
+              } else if (hasDescendants && !hasAncestors) {
+                  console.log('[App] 2D had descendants only → 3D autoLayoutMode = descendants');
+                  setAutoLayoutMode('descendants');
+              } else {
+                  console.log('[App] 2D had mixed or all → 3D autoLayoutMode = all');
+                  setAutoLayoutMode('all');
+              }
+              
+              // Clear sceneExtras - let autoLayout handle it
+              setSceneExtras([]);
+          } else {
+              // No selection in 2D, show full tree
+              setAutoLayoutMode('all');
+              setSceneExtras([]);
+          }
+          
+          // Activate TOP view (easiest to understand)
+          setCameraView('TOP');
+          
+          // Hide boxes for cleaner view
+          setShowBoxes(false);
+          
+      } else if (!wasIn2D && !goingTo3D) {
+          // Transition 3D → 2D
+          console.log('[App] Transition 3D → 2D', {
+              hasSelection: selectedIdsFor2D.size > 0,
+              selectedIndividual: selectedIndividual?.id
+          });
+          
+          // selectedIdsFor2D is already synced by handleVisibleIdsChange
+          // So the 2D view will automatically show what was visible in 3D
+      }
+      
+      setViewMode(mode);
+  };
 
   const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
     setOriginalGedcomData(data);
@@ -259,6 +358,16 @@ function App() {
   const handleExpandFamily = (startId: string, direction: 'ancestors' | 'descendants') => {
       if (!gedcomData) return;
       
+      // IMPORTANT: Update selectedIndividual to match the clicked individual
+      // So when switching to 3D, the correct person is centered
+      const clickedIndi = gedcomData.individuals[startId];
+      if (clickedIndi) {
+          console.log('[App] handleExpandFamily: Setting selectedIndividual to', 
+              `${clickedIndi.givenName} ${clickedIndi.surname}`);
+          setSelectedIndividual(clickedIndi);
+          setRootIndividual(clickedIndi); // Also sync rootIndividual
+      }
+      
       const newIds = new Set<string>();
       const queue = [startId];
       
@@ -307,11 +416,15 @@ function App() {
 
   // Callback to sync 3D view visibility with 2D selection
   const handleVisibleIdsChange = (visibleIds: Set<string>) => {
+    console.log('[App] handleVisibleIdsChange called with', visibleIds.size, 'individuals');
+    
     setSelectedIdsFor2D(prev => {
        // Optimization: only update if size or content differs to avoid needless renders
        if (prev.size === visibleIds.size && [...prev].every(x => visibleIds.has(x))) {
+           console.log('[App] selectedIdsFor2D unchanged');
            return prev;
        }
+       console.log('[App] Updating selectedIdsFor2D:', prev.size, '→', visibleIds.size);
        return new Set(visibleIds);
     });
   };
@@ -749,7 +862,7 @@ function App() {
         onSetDragMode={setDragMode}
         onSetCameraView={handleSetCameraView} 
         viewMode={viewMode}
-        onSetViewMode={setViewMode}
+        onSetViewMode={handleSetViewMode}
         isDarkMode={isDarkMode}
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         hasData={!!gedcomData}

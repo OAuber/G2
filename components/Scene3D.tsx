@@ -186,10 +186,27 @@ const Scene3D: React.FC<Scene3DProps> = ({
   useEffect(() => {
     if (!onVisibleIdsChange) return;
     const visibleIds = new Set<string>();
+    
+    // Add root
     if (rootIndividual) visibleIds.add(rootIndividual.id);
+    
+    // Add extras
     extraIndividuals.forEach(p => visibleIds.add(p.data.id));
+    
+    // IMPORTANT: Add individuals from autoLayoutMode (ancestors/descendants)
+    if (autoLayoutMode !== 'none' && allLayoutNodes.length > 0) {
+      allLayoutNodes.forEach(node => visibleIds.add(node.id));
+    }
+    
+    console.log('[Scene3D] onVisibleIdsChange:', {
+      root: rootIndividual?.id,
+      extras: extraIndividuals.length,
+      autoLayout: allLayoutNodes.length,
+      total: visibleIds.size
+    });
+    
     onVisibleIdsChange(visibleIds);
-  }, [rootIndividual, extraIndividuals, onVisibleIdsChange]);
+  }, [rootIndividual, extraIndividuals, allLayoutNodes, autoLayoutMode, onVisibleIdsChange]);
 
   const mainCalculation = useMemo(() => {
     if (!rootIndividual) return null;
