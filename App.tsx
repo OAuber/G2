@@ -338,20 +338,45 @@ function App() {
     // Ensure we use the instance from the CURRENT dataset
     const currentIndi = gedcomData?.individuals[indi.id] || indi;
     setSelectedIndividual(currentIndi);
+    
+    // If "__NONE__" is active (all hidden), remove it and show this individual
+    if (selectedIdsFor2D.has('__NONE__')) {
+      console.log('[App] Removing __NONE__ and showing selected individual');
+      setSelectedIdsFor2D(new Set([currentIndi.id]));
+    }
   };
 
   const handleToggle2DSelection = (id: string) => {
     setSelectedIdsFor2D(prev => {
         const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
+        
+        // If "__NONE__" is active, clear it first
+        if (next.has('__NONE__')) {
+          next.delete('__NONE__');
+        }
+        
+        // Simple toggle
+        if (next.has(id)) {
+          next.delete(id);
+          
+          // IMPORTANT: If Set becomes empty after removing, it means "show all"
+          // But user wanted to HIDE this last one, so add "__NONE__" instead
+          if (next.size === 0) {
+            console.log('[App] Last individual unchecked, entering None mode');
+            return new Set(['__NONE__']);
+          }
+        } else {
+          next.add(id);
+        }
+        
         return next;
     });
   };
 
   const handleClear2DSelection = () => {
+    // If currently showing filtered or none, clear to show ALL
     setSelectedIdsFor2D(new Set());
-    setSelectedIndividual(null); // Clear the active focus too, removing the "default" person
+    // Don't clear selectedIndividual - keep focus on current person
   };
 
   // --- RECURSIVE EXPANSION LOGIC ---

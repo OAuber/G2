@@ -52,7 +52,7 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
         list = all.filter(i => i.birthDate?.year || i.deathDate?.year);
       }
     } else {
-      list = all.filter(i => selectedIds.has(i.id) || i.source === 'manual');
+      list = all.filter(i => selectedIds.has(i.id));
     }
 
     // Calculate year range

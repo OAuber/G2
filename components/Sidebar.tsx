@@ -415,33 +415,34 @@ const Sidebar: React.FC<SidebarProps> = ({
                   {onClear2DSelection && onToggle2DSelection && data && (
                       <button 
                           onClick={() => {
-                            // Toggle between All and None
-                            const isShowingAll = !selectedIdsFor2D || selectedIdsFor2D.size === 0 || (selectedIdsFor2D.size === 1 && selectedIdsFor2D.has('__NONE__'));
+                            // Detect current state
+                            const isHidingAll = selectedIdsFor2D?.has('__NONE__');
+                            const hasSelection = selectedIdsFor2D && selectedIdsFor2D.size > 0 && !isHidingAll;
+                            const isShowingAll = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
                             
-                            if (!isShowingAll) {
-                              // Currently filtered, show All
-                              onClear2DSelection();
+                            if (isHidingAll) {
+                              // None mode → Show All
+                              onClear2DSelection(); // Clear to show all
+                            } else if (isShowingAll) {
+                              // All mode → Hide All  
+                              onToggle2DSelection('__NONE__');
                             } else {
-                              // Currently showing all, hide all by selecting a fake ID
-                              onToggle2DSelection('__NONE__'); // Fake ID that doesn't exist
+                              // Filtered mode → Show All
+                              onClear2DSelection();
                             }
                           }}
-                          className={`transition-colors flex items-center gap-1 ${
-                            (selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__'))
-                              ? 'hover:text-blue-500' 
-                              : 'hover:text-red-500'
-                          }`}
-                          title={(selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__')) ? "Show All Individuals" : "Hide All"}
+                          className={`transition-colors flex items-center gap-1 hover:text-blue-500`}
+                          title={selectedIdsFor2D?.has('__NONE__') ? "Show All" : "Hide All"}
                       >
-                          {(selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__')) ? (
+                          {selectedIdsFor2D?.has('__NONE__') ? (
                             <>
-                              <Eye className="w-3 h-3" />
-                              <span className="hidden sm:inline text-[9px]">All</span>
+                              <EyeOff className="w-3 h-3 text-red-500" />
+                              <span className="hidden sm:inline text-[9px] text-red-500">None</span>
                             </>
                           ) : (
                             <>
-                              <EyeOff className="w-3 h-3" />
-                              <span className="hidden sm:inline text-[9px]">None</span>
+                              <Eye className="w-3 h-3 text-blue-500" />
+                              <span className="hidden sm:inline text-[9px] text-blue-500">All</span>
                             </>
                           )}
                       </button>
@@ -470,7 +471,11 @@ const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           <div className="p-2 space-y-1">
             {filteredList.map((indi) => {
-              const isSelected2D = selectedIdsFor2D?.has(indi.id);
+              // Determine if individual is visible in 2D
+              const isNoneMode = selectedIdsFor2D?.has('__NONE__');
+              const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
+              const isSelected2D = isNoneMode ? false : (isAllMode ? true : selectedIdsFor2D.has(indi.id));
+              
               const isCal = indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
 
               return (

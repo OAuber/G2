@@ -73,10 +73,9 @@ const Scene2D: React.FC<Scene2DProps> = ({
         if (selectedIds.has('__NONE__')) {
           return false;
         }
-        // Otherwise filter by selection
+        // Otherwise filter by selection (removed isManual exception)
         const isSelectedFor2D = selectedIds.has(indi.id);
-        const isManual = indi.source === 'manual';
-        return isSelectedFor2D || isManual;
+        return isSelectedFor2D;
     });
     
     let minY = 2000;
