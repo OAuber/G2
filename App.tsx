@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 import Scene3D from './components/Scene3D';
 import Scene2D from './components/Scene2D';
+import Scene2DTimeline from './components/Scene2DTimeline';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraView, P2PStatus, P2PMode } from './types';
@@ -17,7 +18,8 @@ function App() {
   const [isNormalized, setIsNormalized] = useState(false);
   
   // The active data used for visualization
-  const gedcomData = isNormalized ? normalizedGedcomData : originalGedcomData;
+  // FIXED: Always use original if normalized is not ready yet
+  const gedcomData = isNormalized && normalizedGedcomData ? normalizedGedcomData : originalGedcomData;
 
   const [databaseName, setDatabaseName] = useState<string>("My Family Tree");
   
@@ -53,7 +55,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [dragMode, setDragMode] = useState<DragMode>('descendants');
   const [cameraView, setCameraView] = useState<CameraView>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('3D');
+  const [viewMode, setViewMode] = useState<ViewMode>('2D'); // Changed to 2D default
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
 
@@ -176,8 +178,8 @@ function App() {
       setRootIndividual(bestCandidate);
       setSelectedIndividual(bestCandidate);
       
-      // Auto-select first for 2D view - Reset set completely
-      setSelectedIdsFor2D(new Set([bestCandidate.id]));
+      // Clear 2D selection to show ALL individuals on load
+      setSelectedIdsFor2D(new Set());
       
       // Reset 3D extras
       setSceneExtras([]);
@@ -299,12 +301,8 @@ function App() {
           }
       }
 
-      // Merge with existing selection
-      setSelectedIdsFor2D(prev => {
-          const next = new Set(prev);
-          newIds.forEach(id => next.add(id));
-          return next;
-      });
+      // REPLACE selection (not merge) - show ONLY ancestors or descendants
+      setSelectedIdsFor2D(newIds);
   };
 
   // Callback to sync 3D view visibility with 2D selection
@@ -610,6 +608,18 @@ function App() {
             setExtraIndividuals={setSceneExtras}
             autoLayoutMode={autoLayoutMode}
             onSetAutoLayoutMode={setAutoLayoutMode}
+          />
+        ) : gedcomData && Object.keys(gedcomData.individuals).length > 5000 ? (
+          <Scene2DTimeline
+            data={gedcomData}
+            selectedId={selectedIndividual?.id}
+            selectedIds={selectedIdsFor2D}
+            onIndividualClick={handleInspectIndividual}
+            onExpandFamily={handleExpandFamily}
+            isDarkMode={isDarkMode}
+            sortMode={sortMode}
+            leftPanelOpen={leftPanelOpen}
+            rightPanelOpen={rightPanelOpen}
           />
         ) : (
           <Scene2D 

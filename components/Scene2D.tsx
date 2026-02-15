@@ -65,10 +65,18 @@ const Scene2D: React.FC<Scene2DProps> = ({
     const allIndividuals = Object.values(data.individuals) as Individual[];
 
     const list = allIndividuals.filter(indi => {
-        const isSelectedFor2D = selectedIds?.has(indi.id);
+        // If no selection, show ALL
+        if (!selectedIds || selectedIds.size === 0) {
+          return true;
+        }
+        // If "__NONE__" is selected, hide all (show nothing)
+        if (selectedIds.has('__NONE__')) {
+          return false;
+        }
+        // Otherwise filter by selection
+        const isSelectedFor2D = selectedIds.has(indi.id);
         const isManual = indi.source === 'manual';
-        const isFocused = selectedId === indi.id; 
-        return isSelectedFor2D || isManual || isFocused;
+        return isSelectedFor2D || isManual;
     });
     
     let minY = 2000;
@@ -122,7 +130,12 @@ const Scene2D: React.FC<Scene2DProps> = ({
     return { individuals: sortedList, minYear: minY, maxYear: maxY };
   }, [data, sortMode, selectedIds, selectedId]);
 
-  // --- Auto Center ---
+  // Reset centering flag when individuals list changes (for re-centering after expansion)
+  useEffect(() => {
+      hasCentered.current = false;
+  }, [individuals.length]);
+
+  // --- Auto Center (WITHOUT changing scale) ---
   useEffect(() => {
       if (individuals.length > 0 && !hasCentered.current && containerRef.current) {
           const wrapperWidth = containerRef.current.parentElement?.clientWidth || 0;
@@ -135,6 +148,7 @@ const Scene2D: React.FC<Scene2DProps> = ({
           const startY = -(totalHeight / 2) + (wrapperHeight / 2);
           
           setTranslate({ x: startX, y: startY });
+          // DON'T reset scale - keep user's zoom level
           hasCentered.current = true;
       }
   }, [individuals.length, maxYear, minYear]);
@@ -186,6 +200,9 @@ const Scene2D: React.FC<Scene2DProps> = ({
   };
 
   if (!data) return <div className="flex items-center justify-center h-full opacity-50">No Data</div>;
+  
+  // Warning for large databases
+  const showPerformanceWarning = individuals.length > 5000;
 
   const totalHeight = (maxYear - minYear) * PIXELS_PER_YEAR;
 
@@ -495,6 +512,13 @@ const Scene2D: React.FC<Scene2DProps> = ({
            </div>
         </div>
       </div>
+      
+      {showPerformanceWarning && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-yellow-500/90 text-black px-4 py-2 rounded text-xs font-bold z-50 max-w-md text-center shadow-lg">
+          ⚠️ Large database ({individuals.length} individuals displayed)<br/>
+          2D view may be slow. Click "3D" button (top) for better performance with large datasets.
+        </div>
+      )}
       
       <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-50">
          <div className={`px-2 py-1 rounded text-xs font-bold ${isDarkMode ? 'bg-black/80 text-white' : 'bg-white/80 text-black'} border border-slate-500`}>

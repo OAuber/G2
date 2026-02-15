@@ -1,5 +1,19 @@
 # Commandes Utiles - GeneaVerse 3D
 
+> ⚠️ **Problème Cursor + WSL?** Consultez [TROUBLESHOOTING_WSL.md](./TROUBLESHOOTING_WSL.md)
+
+## 🎯 Scripts Rapides (Windows)
+
+Si vous avez des problèmes avec les commandes dans Cursor, utilisez ces scripts:
+
+| Script | Action |
+|--------|--------|
+| `dev.bat` | 🚀 Lancer le serveur de développement |
+| `build.bat` | 📦 Builder l'application |
+| `install.bat` | 📥 Installer les dépendances |
+
+**Utilisation**: Double-cliquez sur le fichier ou lancez `.\dev.bat` dans PowerShell.
+
 ## 📍 Navigation
 
 ### Aller dans le projet (WSL)

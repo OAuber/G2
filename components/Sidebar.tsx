@@ -405,15 +405,45 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div className={`px-4 py-2 bg-opacity-50 ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'} flex justify-between items-center text-xs font-semibold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
                 <span>Records ({Object.keys(data.individuals).length})</span>
                 <div className="flex items-center gap-2">
-                  <span title="Visible in 2D View">2D</span>
-                  {selectedIdsFor2D && selectedIdsFor2D.size > 0 && onClear2DSelection && (
+                  <span title="Visible in 2D View">
+                    2D: {selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__') 
+                      ? `${selectedIdsFor2D.size}/${Object.keys(data.individuals).length}` 
+                      : selectedIdsFor2D?.has('__NONE__') 
+                        ? `0/${Object.keys(data.individuals).length}`
+                        : `All (${Object.keys(data.individuals).length})`}
+                  </span>
+                  {onClear2DSelection && onToggle2DSelection && data && (
                       <button 
-                          onClick={onClear2DSelection}
-                          className="hover:text-red-500 transition-colors flex items-center gap-1"
-                          title="Deselect All (Hide All)"
+                          onClick={() => {
+                            // Toggle between All and None
+                            const isShowingAll = !selectedIdsFor2D || selectedIdsFor2D.size === 0 || (selectedIdsFor2D.size === 1 && selectedIdsFor2D.has('__NONE__'));
+                            
+                            if (!isShowingAll) {
+                              // Currently filtered, show All
+                              onClear2DSelection();
+                            } else {
+                              // Currently showing all, hide all by selecting a fake ID
+                              onToggle2DSelection('__NONE__'); // Fake ID that doesn't exist
+                            }
+                          }}
+                          className={`transition-colors flex items-center gap-1 ${
+                            (selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__'))
+                              ? 'hover:text-blue-500' 
+                              : 'hover:text-red-500'
+                          }`}
+                          title={(selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__')) ? "Show All Individuals" : "Hide All"}
                       >
-                          <EyeOff className="w-3 h-3" />
-                          <span className="hidden sm:inline text-[9px]">Clear</span>
+                          {(selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__')) ? (
+                            <>
+                              <Eye className="w-3 h-3" />
+                              <span className="hidden sm:inline text-[9px]">All</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3 h-3" />
+                              <span className="hidden sm:inline text-[9px]">None</span>
+                            </>
+                          )}
                       </button>
                   )}
                 </div>
