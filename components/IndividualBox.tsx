@@ -319,10 +319,10 @@ const IndividualBoxComponent: React.FC<ExtendedProps> = ({
                 <meshBasicMaterial color={birthColor} />
             </mesh>
             <AxialRotator position={[-width/2 - 3, 0, 0]}>
-                <Text fontSize={4} color={arrowColor} anchorX="center" anchorY="middle" outlineWidth={0.2} outlineColor={isDarkMode ? 'black' : 'white'} onClick={(e) => { e.stopPropagation(); onExpandAncestors?.(); }}>&lt;</Text>
+                <Text fontSize={4} color={arrowColor} anchorX="center" anchorY="middle" outlineWidth={0.2} outlineColor={isDarkMode ? 'black' : 'white'} onClick={(e: any) => { e.stopPropagation(); onExpandAncestors?.(); }}>&lt;</Text>
             </AxialRotator>
             <AxialRotator position={[width/2 + 3, 0, 0]}>
-                 <Text fontSize={4} color={arrowColor} anchorX="center" anchorY="middle" outlineWidth={0.2} outlineColor={isDarkMode ? 'black' : 'white'} onClick={(e) => { e.stopPropagation(); onExpandDescendants?.(); }}>&gt;</Text>
+                 <Text fontSize={4} color={arrowColor} anchorX="center" anchorY="middle" outlineWidth={0.2} outlineColor={isDarkMode ? 'black' : 'white'} onClick={(e: any) => { e.stopPropagation(); onExpandDescendants?.(); }}>&gt;</Text>
             </AxialRotator>
         </group>
       )}
