@@ -67,26 +67,31 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     ? 'bg-neutral-700 text-white' 
     : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300';
 
-  // Adjusted offset to 36px to match handle height and prevent content leaking
-  const translateClass = isOpen ? 'translate-y-0' : 'translate-y-[calc(100%-36px)]';
+  // Handle height: py-3 (24px) + text-xs line-height (16px) + border (1px) ≈ 41px → use 42px for safety
+  const HANDLE_H = 42;
+  const translateClass = isOpen ? 'translate-y-0' : `translate-y-[calc(100%-${HANDLE_H}px)]`;
 
   return (
     <div 
-      className={`absolute bottom-0 left-0 right-0 z-[100] transition-transform duration-300 ${translateClass}`}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      className={`absolute bottom-0 left-0 right-0 z-[100] transition-transform duration-300 pointer-events-none ${translateClass}`}
     >
       {/* Handle - Styled as Tab Title */}
       <div className="flex justify-center">
         <button 
           onClick={onToggle}
-          className={`${handleBg} rounded-t-xl px-10 py-3 border-t border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          className={`pointer-events-auto ${handleBg} rounded-t-xl px-10 py-3 border-t border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
         >
           Visualize
         </button>
       </div>
 
-      <div className={`${bgClass} backdrop-blur-md border-t p-4 shadow-2xl`}>
+      <div 
+        className={`pointer-events-auto ${bgClass} backdrop-blur-md border-t p-4 shadow-2xl`}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
         <div className="flex flex-wrap items-center justify-center gap-6 max-w-6xl mx-auto">
           
           {hasData && (

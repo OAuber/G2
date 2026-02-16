@@ -74,17 +74,19 @@ const TopPanel: React.FC<TopPanelProps> = ({
     ? 'bg-neutral-800 border-slate-700 text-white'
     : 'bg-white border-slate-300 text-slate-800';
 
-  // Adjusted offset to 36px to ensure the content background is fully hidden.
-  // Previous 41px was causing a white band to appear on some screens.
-  const translateClass = isOpen ? 'translate-y-0' : '-translate-y-[calc(100%-36px)]';
+  // Handle height: py-3 (24px) + text-xs line-height (16px) + border (1px) ≈ 41px → use 42px for safety
+  const HANDLE_H = 42;
+  const translateClass = isOpen ? 'translate-y-0' : `-translate-y-[calc(100%-${HANDLE_H}px)]`;
 
   return (
     <div 
-      className={`absolute top-0 left-0 right-0 z-[100] transition-transform duration-300 ${translateClass}`}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      className={`absolute top-0 left-0 right-0 z-[100] transition-transform duration-300 pointer-events-none ${translateClass}`}
     >
-      <div className={`${bgClass} backdrop-blur-md border-b px-4 py-2 shadow-xl`}>
+      <div 
+        className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-4 py-2 shadow-xl`}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
         <div className="flex items-stretch gap-3 w-full max-w-3xl mx-auto">
           
           {/* Save Section */}
@@ -183,7 +185,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
       <div className="flex justify-center">
         <button 
           onClick={onToggle}
-          className={`${handleBg} rounded-b-xl px-10 py-3 border-b border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+          className={`pointer-events-auto ${handleBg} rounded-b-xl px-10 py-3 border-b border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
         >
           Share
         </button>
