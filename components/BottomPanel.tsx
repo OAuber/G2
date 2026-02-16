@@ -67,13 +67,13 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     ? 'bg-neutral-700 text-white' 
     : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300';
 
-  // Handle height: py-3 (24px) + text-xs line-height (16px) + border (1px) ≈ 41px → use 42px
-  // IMPORTANT: Tailwind JIT requires complete static class names — never use template literals
-  const translateClass = isOpen ? 'translate-y-0' : 'translate-y-[calc(100%-42px)]';
-
   return (
     <div 
-      className={`absolute bottom-0 left-0 right-0 z-[100] transition-transform duration-300 pointer-events-none ${translateClass}`}
+      className="absolute bottom-0 left-0 right-0 z-[100] pointer-events-none"
+      style={{
+        transform: isOpen ? 'translateY(0)' : 'translateY(calc(100% - 42px))',
+        transition: 'transform 300ms ease',
+      }}
     >
       {/* Handle - Styled as Tab Title */}
       <div className="flex justify-center">
