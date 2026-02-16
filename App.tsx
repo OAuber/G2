@@ -58,6 +58,7 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('2D'); // Changed to 2D default
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
+  const [centerRequest, setCenterRequest] = useState(0);
 
   // Auto Layout State
   const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('none');
@@ -311,6 +312,8 @@ function App() {
     setSelectedIndividual(currentIndi);
     // When changing root manually, we reset the exploration and auto layout
     setSceneExtras([]);
+    // Signal Scene2D to center camera on this individual
+    setCenterRequest(prev => prev + 1);
   };
   
   // Specialized handler for navigation from Details Panel
@@ -787,6 +790,7 @@ function App() {
             sortMode={sortMode}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
+            centerRequest={centerRequest}
           />
         )}
         

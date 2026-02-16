@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Individual, GedcomData, Gender, SortMode } from '../types';
 
 interface Scene2DProps {
@@ -12,6 +12,7 @@ interface Scene2DProps {
   sortMode?: SortMode;
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
+  centerRequest?: number;
 }
 
 // Reduced vertical scale by 20% (was 4)
@@ -30,7 +31,8 @@ const Scene2D: React.FC<Scene2DProps> = ({
   isDarkMode, 
   sortMode = 'birth-asc', // Default to Ascending (Old -> New)
   leftPanelOpen = false,
-  rightPanelOpen = false
+  rightPanelOpen = false,
+  centerRequest = 0
 }) => {
   // Pan & Zoom State
   const [scale, setScale] = useState(1);
@@ -39,7 +41,12 @@ const Scene2D: React.FC<Scene2DProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const lastMousePos = useRef({ x: 0, y: 0 });
-  const hasCentered = useRef(false);
+  const prevCenterRequestRef = useRef(0);
+  const prevIndividualsRef = useRef<Individual[]>([]);
+  const prevMinYearRef = useRef(1900);
+  const prevMaxYearRef = useRef(2024);
+  const transitionResetRef = useRef<ReturnType<typeof setTimeout>>();
+  const [transitionMs, setTransitionMs] = useState(100);
   
   // Track viewport size for grid culling
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -129,28 +136,80 @@ const Scene2D: React.FC<Scene2DProps> = ({
     return { individuals: sortedList, minYear: minY, maxYear: maxY };
   }, [data, sortMode, selectedIds, selectedId]);
 
-  // Reset centering flag when individuals list changes (for re-centering after expansion)
-  useEffect(() => {
-      hasCentered.current = false;
-  }, [individuals.length]);
-
-  // --- Auto Center (WITHOUT changing scale) ---
-  useEffect(() => {
-      if (individuals.length > 0 && !hasCentered.current && containerRef.current) {
-          const wrapperWidth = containerRef.current.parentElement?.clientWidth || 0;
-          const wrapperHeight = containerRef.current.parentElement?.clientHeight || 0;
-          
-          const contentWidth = individuals.length * 28; 
-          const totalHeight = (maxYear - minYear) * PIXELS_PER_YEAR;
-          
-          const startX = (wrapperWidth - contentWidth) / 2 + 50; 
-          const startY = -(totalHeight / 2) + (wrapperHeight / 2);
-          
-          setTranslate({ x: startX, y: startY });
-          // DON'T reset scale - keep user's zoom level
-          hasCentered.current = true;
+  // Helper: compute content-space position of an individual by id
+  const getContentPos = (id: string, indiList: Individual[], minY: number, maxY: number) => {
+      const index = indiList.findIndex(i => i.id === id);
+      if (index === -1) return null;
+      const indi = indiList[index];
+      const x = 76 + index * 28;
+      let dBirth: number | undefined = indi.birthDate?.preciseDate ?? indi.birthDate?.year ?? undefined;
+      let dDeath: number | undefined = indi.deathDate?.preciseDate ?? indi.deathDate?.year ?? undefined;
+      if (dBirth == null) dBirth = undefined;
+      if (dDeath == null) dDeath = undefined;
+      if (dBirth === undefined && dDeath === undefined) {
+          dBirth = minY + 10; dDeath = minY + 10 + DEFAULT_LIFESPAN;
+      } else if (dBirth === undefined) {
+          dBirth = dDeath! - DEFAULT_LIFESPAN;
+      } else if (dDeath === undefined) {
+          dDeath = dBirth + DEFAULT_LIFESPAN;
       }
-  }, [individuals.length, maxYear, minYear]);
+      const barTopY = (maxY - dDeath!) * PIXELS_PER_YEAR;
+      const barBottomY = (maxY - dBirth!) * PIXELS_PER_YEAR;
+      return { x, y: (barTopY + barBottomY) / 2 };
+  };
+
+  // --- Unified Camera Effect ---
+  useLayoutEffect(() => {
+      if (individuals.length === 0) return;
+      const vpEl = viewportRef.current;
+      if (!vpEl) return;
+
+      const vpWidth = vpEl.clientWidth;
+      const vpHeight = vpEl.clientHeight;
+      const isCenterReq = centerRequest !== prevCenterRequestRef.current;
+      const isListChange = individuals !== prevIndividualsRef.current;
+      const isInitialLoad = prevIndividualsRef.current.length === 0;
+
+      if (transitionResetRef.current) clearTimeout(transitionResetRef.current);
+
+      if (isCenterReq && selectedId) {
+          // CASE 1: Sidebar click → smooth center on individual (keep zoom)
+          const pos = getContentPos(selectedId, individuals, minYear, maxYear);
+          if (pos) {
+              setTransitionMs(400);
+              setTranslate({ x: vpWidth / 2 - pos.x * scale, y: vpHeight / 2 - pos.y * scale });
+              transitionResetRef.current = setTimeout(() => setTransitionMs(100), 500);
+          }
+      } else if (isListChange && !isInitialLoad && selectedId) {
+          // CASE 2: Expansion → stabilize selected individual (no camera jump)
+          const oldPos = getContentPos(selectedId, prevIndividualsRef.current, prevMinYearRef.current, prevMaxYearRef.current);
+          const newPos = getContentPos(selectedId, individuals, minYear, maxYear);
+          if (oldPos && newPos) {
+              setTransitionMs(0);
+              setTranslate(prev => ({
+                  x: (oldPos.x * scale + prev.x) - newPos.x * scale,
+                  y: (oldPos.y * scale + prev.y) - newPos.y * scale
+              }));
+              transitionResetRef.current = setTimeout(() => setTransitionMs(100), 50);
+          } else if (newPos) {
+              setTransitionMs(0);
+              setTranslate({ x: vpWidth / 2 - newPos.x * scale, y: vpHeight / 2 - newPos.y * scale });
+              transitionResetRef.current = setTimeout(() => setTransitionMs(100), 50);
+          }
+      } else if (isListChange) {
+          // CASE 3: Initial load or list change without selection → center content
+          const contentWidth = individuals.length * 28;
+          const totalHeight = (maxYear - minYear) * PIXELS_PER_YEAR;
+          setTranslate({ x: (vpWidth - contentWidth) / 2 + 50, y: -(totalHeight / 2) + vpHeight / 2 });
+      }
+
+      prevCenterRequestRef.current = centerRequest;
+      prevIndividualsRef.current = individuals;
+      prevMinYearRef.current = minYear;
+      prevMaxYearRef.current = maxYear;
+
+      return () => { if (transitionResetRef.current) clearTimeout(transitionResetRef.current); };
+  }, [selectedId, individuals, minYear, maxYear, scale, centerRequest]);
 
   // --- Pan & Zoom Handlers ---
   const handleWheel = (e: React.WheelEvent) => {
@@ -288,7 +347,7 @@ const Scene2D: React.FC<Scene2DProps> = ({
         className="flex-1 relative origin-top-left z-10"
         style={{
             transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
-            transition: isPanning ? 'none' : 'transform 0.1s ease-out'
+            transition: isPanning ? 'none' : `transform ${transitionMs}ms ease-out`
         }}
       >
         <div className="absolute top-0 left-0 min-w-full" style={{ height: `${totalHeight + 100}px`, width: '2000px' }}>
