@@ -74,9 +74,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
     ? 'bg-neutral-800 border-slate-700 text-white'
     : 'bg-white border-slate-300 text-slate-800';
 
-  // Handle height: py-3 (24px) + text-xs line-height (16px) + border (1px) ≈ 41px → use 42px for safety
-  const HANDLE_H = 42;
-  const translateClass = isOpen ? 'translate-y-0' : `-translate-y-[calc(100%-${HANDLE_H}px)]`;
+  // Handle height: py-3 (24px) + text-xs line-height (16px) + border (1px) ≈ 41px → use 42px
+  // IMPORTANT: Tailwind JIT requires complete static class names — never use template literals
+  const translateClass = isOpen ? 'translate-y-0' : '-translate-y-[calc(100%-42px)]';
 
   return (
     <div 
