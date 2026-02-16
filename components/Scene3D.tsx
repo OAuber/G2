@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo, useLayoutEffect } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Line, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { Vector3, MOUSE, TOUCH, Group } from 'three';
@@ -10,91 +10,31 @@ import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
-// Utilisation de useLayoutEffect pour garantir que la position est appliquée AVANT le rendu
+// Syncs OrbitControls with the camera position set by the ref callbacks above.
+// Camera positioning is done in ref callbacks (instant, before first paint).
+// This component only handles OrbitControls sync (target, rotation lock, damping).
 const CameraController: React.FC<{
   cameraView: CameraView;
   isOrtho: boolean;
   centerTarget: Vector3;
-  sceneSize: number;
-}> = ({ cameraView, isOrtho, centerTarget, sceneSize }) => {
-  const { camera, controls } = useThree();
-  const controlsImpl = controls as OrbitControlsImpl;
-  const lastView = useRef<CameraView | 'INIT'>('INIT');
-  const [hasPositioned, setHasPositioned] = useState(false);
+}> = ({ cameraView, isOrtho, centerTarget }) => {
+  const lastAppliedKey = useRef('');
 
-  useLayoutEffect(() => {
-    if (!controlsImpl) return;
+  useFrame((state) => {
+    const viewKey = `${cameraView}-${isOrtho}`;
+    if (viewKey === lastAppliedKey.current) return;
 
-    // Reset controls targets to ensure smooth transition
-    controlsImpl.target.copy(centerTarget);
-    
-    // Calculate a reasonable distance based on scene size
-    const offset = Math.max(300, sceneSize * 1.5);
+    const ctrl = state.controls as OrbitControlsImpl;
+    if (!ctrl) return;
 
-    // Force update if view changed or first run
-    if (cameraView !== lastView.current || !hasPositioned) {
-        
-        if (isOrtho) {
-            // ORTHOGRAPHIC POSITIONING
-            const dist = 10000; // Far enough
-            const pos = centerTarget.clone();
+    // Sync OrbitControls target with the scene center
+    ctrl.target.copy(centerTarget);
+    ctrl.enableRotate = cameraView !== 'TOP';
+    ctrl.enableDamping = cameraView !== 'TOP';
+    ctrl.update();
 
-            if (cameraView === 'TOP') {
-                // Pour la vue de dessus, on se place très haut sur Y
-                pos.y += dist;
-                // UP = +X pour que les descendants (generation > 0, +X) soient en haut
-                // et les ancêtres (generation < 0, -X) soient en bas ("racines")
-                camera.up.set(1, 0, 0); 
-            } else if (cameraView === 'ISO_F') {
-                pos.add(new Vector3(dist, dist, dist)); 
-                camera.up.set(0, 1, 0);
-            } else if (cameraView === 'ISO_M') {
-                pos.add(new Vector3(dist, dist, -dist)); 
-                camera.up.set(0, 1, 0);
-            }
-            
-            camera.position.copy(pos);
-            camera.lookAt(centerTarget);
-
-            if (camera.type === 'OrthographicCamera') {
-                // Calcul du zoom pour tout faire rentrer
-                const minDim = Math.min(window.innerWidth, window.innerHeight);
-                const newZoom = Math.max(0.1, minDim / (sceneSize * 1.2));
-                camera.zoom = newZoom;
-                camera.updateProjectionMatrix();
-            }
-
-            // Lock rotation for TOP view to keep it strict
-            controlsImpl.enableRotate = cameraView !== 'TOP';
-            
-            // Si TOP view, on désactive le damping pour un placement immédiat exact
-            if (cameraView === 'TOP') {
-                controlsImpl.enableDamping = false;
-            } else {
-                controlsImpl.enableDamping = true;
-            }
-
-        } else {
-            // PERSPECTIVE POSITIONING
-            const pos = centerTarget.clone();
-            pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
-            
-            camera.position.copy(pos);
-            camera.up.set(0, 1, 0);
-            camera.lookAt(centerTarget);
-            
-            if (camera.type === 'PerspectiveCamera') {
-                camera.updateProjectionMatrix();
-            }
-            controlsImpl.enableRotate = true;
-            controlsImpl.enableDamping = true;
-        }
-
-        controlsImpl.update();
-        lastView.current = cameraView;
-        setHasPositioned(true);
-    }
-  }, [cameraView, isOrtho, centerTarget, sceneSize, camera, controlsImpl, hasPositioned]);
+    lastAppliedKey.current = viewKey;
+  });
 
   return null;
 };
@@ -371,6 +311,40 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
   const isOrtho = !!cameraView;
 
+  // Ref callbacks that fully configure cameras on mount (before first paint).
+  // This eliminates any delay — the camera is positioned correctly from frame 1.
+  const setupOrthoCamera = useCallback((cam: any) => {
+    if (!cam) return;
+    const dist = 10000;
+    const pos = centerTarget.clone();
+    if (cameraView === 'TOP') {
+      pos.y += dist;
+      cam.up.set(1, 0, 0);
+    } else if (cameraView === 'ISO_F') {
+      pos.add(new Vector3(dist, dist, dist));
+      cam.up.set(0, 1, 0);
+    } else if (cameraView === 'ISO_M') {
+      pos.add(new Vector3(dist, dist, -dist));
+      cam.up.set(0, 1, 0);
+    }
+    cam.position.copy(pos);
+    cam.lookAt(centerTarget);
+    const minDim = Math.min(window.innerWidth, window.innerHeight);
+    cam.zoom = Math.max(0.1, minDim / (sceneSize * 1.2));
+    cam.updateProjectionMatrix();
+  }, [cameraView, centerTarget, sceneSize]);
+
+  const setupPerspCamera = useCallback((cam: any) => {
+    if (!cam) return;
+    const offset = Math.max(300, sceneSize * 1.5);
+    const pos = centerTarget.clone();
+    pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
+    cam.position.copy(pos);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(centerTarget);
+    cam.updateProjectionMatrix();
+  }, [centerTarget, sceneSize]);
+
   const getTraitWorldPosition = useCallback((props: any, type: string, offset: number) => {
       const [x, y, z] = props.position;
       const [w, h, d] = props.dimensions;
@@ -609,7 +583,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
         {isOrtho ? (
             <OrthographicCamera 
-                key="ortho" 
+                key={`ortho-${cameraView}`}
+                ref={setupOrthoCamera}
                 makeDefault 
                 near={-100000} 
                 far={200000} 
@@ -617,6 +592,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         ) : (
             <PerspectiveCamera 
                 key="persp" 
+                ref={setupPerspCamera}
                 makeDefault 
                 near={0.1} 
                 far={200000} 
@@ -626,8 +602,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         <CameraController 
             cameraView={cameraView} 
             isOrtho={isOrtho} 
-            centerTarget={centerTarget} 
-            sceneSize={sceneSize} 
+            centerTarget={centerTarget}
         />
 
         <ambientLight intensity={isDarkMode ? 0.5 : 0.8} />
@@ -646,11 +621,24 @@ const Scene3D: React.FC<Scene3DProps> = ({
         {!disableControls && <OrbitControls 
             ref={controlsRef} 
             makeDefault 
-            enableDamping={cameraView !== 'TOP'} // Pas de damping en vue TOP pour éviter le drift
+            enableDamping={cameraView !== 'TOP'}
             dampingFactor={0.1}
             target={centerTarget}
             enablePan={true}
             screenSpacePanning={true}
+            // Uniform mouse mapping across all views:
+            // Left drag = Pan, Right drag = Rotate, Scroll = Zoom on cursor
+            mouseButtons={{
+                LEFT: MOUSE.PAN,
+                MIDDLE: MOUSE.DOLLY,
+                RIGHT: MOUSE.ROTATE,
+            }}
+            touches={{
+                ONE: TOUCH.PAN,
+                TWO: TOUCH.DOLLY_ROTATE,
+            }}
+            // Zoom towards mouse pointer position
+            zoomToCursor={true}
         />}
         
         {autoLayoutMode !== 'none' ? (
