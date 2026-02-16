@@ -68,14 +68,8 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300';
 
   return (
-    <div 
-      className="absolute bottom-0 left-0 right-0 z-[100] pointer-events-none"
-      style={{
-        transform: isOpen ? 'translateY(0)' : 'translateY(calc(100% - 42px))',
-        transition: 'transform 300ms ease',
-      }}
-    >
-      {/* Handle - Styled as Tab Title */}
+    <div className="absolute bottom-0 left-0 right-0 z-[100] pointer-events-none">
+      {/* Handle - Always visible at bottom */}
       <div className="flex justify-center">
         <button 
           onClick={onToggle}
@@ -87,11 +81,16 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
         </button>
       </div>
 
-      <div 
-        className={`pointer-events-auto ${bgClass} backdrop-blur-md border-t p-4 shadow-2xl`}
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
+      {/* Content - collapses via max-height, no transforms */}
+      <div
+        className="overflow-hidden"
+        style={{ maxHeight: isOpen ? '200px' : '0px', transition: 'max-height 300ms ease' }}
       >
+        <div 
+          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-t p-4 shadow-2xl`}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+        >
         <div className="flex flex-wrap items-center justify-center gap-6 max-w-6xl mx-auto">
           
           {hasData && (
@@ -233,6 +232,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
              </button>
           </div>
 
+        </div>
         </div>
       </div>
     </div>

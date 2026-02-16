@@ -75,19 +75,18 @@ const TopPanel: React.FC<TopPanelProps> = ({
     : 'bg-white border-slate-300 text-slate-800';
 
   return (
-    <div 
-      className="absolute top-0 left-0 right-0 z-[100] pointer-events-none"
-      style={{
-        transform: isOpen ? 'translateY(0)' : 'translateY(calc(-100% + 42px))',
-        transition: 'transform 300ms ease',
-      }}
-    >
-      <div 
-        className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-4 py-2 shadow-xl`}
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
+    <div className="absolute top-0 left-0 right-0 z-[100] pointer-events-none">
+      {/* Content - collapses via max-height, no transforms */}
+      <div
+        className="overflow-hidden"
+        style={{ maxHeight: isOpen ? '200px' : '0px', transition: 'max-height 300ms ease' }}
       >
-        <div className="flex items-stretch gap-3 w-full max-w-3xl mx-auto">
+        <div 
+          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-4 py-2 shadow-xl`}
+          onMouseEnter={onMouseEnter}
+          onMouseLeave={onMouseLeave}
+        >
+          <div className="flex items-stretch gap-3 w-full max-w-3xl mx-auto">
           
           {/* Save Section */}
           <div className={`flex-1 rounded-md px-3 py-2 border flex items-center gap-3 ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
@@ -178,6 +177,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
             )}
           </div>
 
+        </div>
         </div>
       </div>
 
