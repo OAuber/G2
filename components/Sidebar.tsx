@@ -208,7 +208,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div 
-      className={`absolute left-0 top-0 bottom-0 w-80 ${bgClass} border-r flex flex-col shadow-xl z-[120] transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      className={`absolute left-0 top-0 bottom-0 w-80 ${bgClass} border-r flex flex-col shadow-xl ${isOpen ? 'z-[130]' : 'z-[120]'} transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >

@@ -257,6 +257,74 @@ const Scene2D: React.FC<Scene2DProps> = ({
     setIsPanning(false);
   };
 
+  // --- Touch Handlers (mobile pan & pinch-to-zoom) ---
+  const touchStartDistance = useRef(0);
+  const touchStartScale = useRef(1);
+  const touchStartMidpoint = useRef({ x: 0, y: 0 });
+  const touchStartTranslate = useRef({ x: 0, y: 0 });
+  const lastTouchPos = useRef({ x: 0, y: 0 });
+  const isTouchPanning = useRef(false);
+  const isPinching = useRef(false);
+
+  const getDistance = (t1: React.Touch, t2: React.Touch) => {
+    const dx = t1.clientX - t2.clientX;
+    const dy = t1.clientY - t2.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const getMidpoint = (t1: React.Touch, t2: React.Touch) => ({
+    x: (t1.clientX + t2.clientX) / 2,
+    y: (t1.clientY + t2.clientY) / 2,
+  });
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      isTouchPanning.current = true;
+      isPinching.current = false;
+      lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+      isTouchPanning.current = false;
+      isPinching.current = true;
+      touchStartDistance.current = getDistance(e.touches[0], e.touches[1]);
+      touchStartScale.current = scale;
+      touchStartMidpoint.current = getMidpoint(e.touches[0], e.touches[1]);
+      touchStartTranslate.current = { ...translate };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 1 && isTouchPanning.current) {
+      const dx = e.touches[0].clientX - lastTouchPos.current.x;
+      const dy = e.touches[0].clientY - lastTouchPos.current.y;
+      setTranslate(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2 && isPinching.current) {
+      const currentDistance = getDistance(e.touches[0], e.touches[1]);
+      const ratio = currentDistance / touchStartDistance.current;
+      const newScale = Math.min(Math.max(0.1, touchStartScale.current * ratio), 5);
+
+      const mid = getMidpoint(e.touches[0], e.touches[1]);
+      const scaleRatio = newScale / touchStartScale.current;
+      const newTx = mid.x - (touchStartMidpoint.current.x - touchStartTranslate.current.x) * scaleRatio;
+      const newTy = mid.y - (touchStartMidpoint.current.y - touchStartTranslate.current.y) * scaleRatio;
+
+      setScale(newScale);
+      setTranslate({ x: newTx, y: newTy });
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) {
+      isPinching.current = false;
+    }
+    if (e.touches.length === 1) {
+      isTouchPanning.current = true;
+      lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 0) {
+      isTouchPanning.current = false;
+    }
+  };
+
   if (!data) return null; // Don't render anything - let the welcome page show through
   
   // Warning for large databases
@@ -330,11 +398,15 @@ const Scene2D: React.FC<Scene2DProps> = ({
     <div 
         ref={viewportRef}
         className={`w-full h-full flex flex-col ${bgClass} overflow-hidden relative cursor-${isPanning ? 'grabbing' : 'grab'}`}
+        style={{ touchAction: 'none' }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
     >
       {/* 1. Grid Overlay (Fixed to Viewport, but synchronized via math) */}
       <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
