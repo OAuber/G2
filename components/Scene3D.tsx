@@ -10,26 +10,24 @@ import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
-// Syncs OrbitControls target with the scene center when the view changes.
-// enableRotate and enableDamping are now handled as reactive props on OrbitControls.
+// Smoothly syncs OrbitControls target whenever centerTarget changes
+// (e.g. new individual selected) without moving the camera.
 const CameraController: React.FC<{
   cameraView: CameraView;
   isOrtho: boolean;
   centerTarget: Vector3;
 }> = ({ cameraView, isOrtho, centerTarget }) => {
-  const lastAppliedKey = useRef('');
+  const lastTarget = useRef(new Vector3());
 
   useFrame((state) => {
-    const viewKey = `${cameraView}-${isOrtho}`;
-    if (viewKey === lastAppliedKey.current) return;
-
     const ctrl = state.controls as OrbitControlsImpl;
     if (!ctrl) return;
 
-    ctrl.target.copy(centerTarget);
-    ctrl.update();
-
-    lastAppliedKey.current = viewKey;
+    if (!lastTarget.current.equals(centerTarget)) {
+      ctrl.target.copy(centerTarget);
+      lastTarget.current.copy(centerTarget);
+      ctrl.update();
+    }
   });
 
   return null;
@@ -81,6 +79,10 @@ const Scene3D: React.FC<Scene3DProps> = ({
   const individualRefs = useRef<Record<string, Group>>({});
   const draggingSnapshot = useRef<Map<string, number>>(new Map());
   const dragDeltaRef = useRef<number>(0);
+
+  // Refs for camera setup — avoid repositioning camera on every centerTarget change
+  const centerTargetRef = useRef(new Vector3());
+  const sceneSizeRef = useRef(100);
 
   // --- Auto Layout Calculation ---
   const { filteredLayoutNodes, allLayoutNodes } = useMemo(() => {
@@ -273,46 +275,76 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
   const { centerTarget, sceneSize } = useMemo(() => {
     if (autoLayoutMode !== 'none' && allLayoutNodes.length > 0) {
+        // Auto-layout: center on selected node, fallback to root, then bounding box center
+        const targetId = selectedId || rootIndividual?.id;
+        const targetNode = targetId ? allLayoutNodes.find(n => n.id === targetId) : null;
+
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
-        const pos = new Vector3();
+        const tmp = new Vector3();
         allLayoutNodes.forEach(node => {
-            pos.setFromMatrixPosition(node.matrix);
-            if(pos.x < minX) minX = pos.x; if(pos.x > maxX) maxX = pos.x;
-            if(pos.y < minY) minY = pos.y; if(pos.y > maxY) maxY = pos.y;
-            if(pos.z < minZ) minZ = pos.z; if(pos.z > maxZ) maxZ = pos.z;
+            tmp.setFromMatrixPosition(node.matrix);
+            if(tmp.x < minX) minX = tmp.x; if(tmp.x > maxX) maxX = tmp.x;
+            if(tmp.y < minY) minY = tmp.y; if(tmp.y > maxY) maxY = tmp.y;
+            if(tmp.z < minZ) minZ = tmp.z; if(tmp.z > maxZ) maxZ = tmp.z;
         });
         const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+
+        if (targetNode) {
+            const pos = new Vector3();
+            pos.setFromMatrixPosition(targetNode.matrix);
+            return { centerTarget: pos, sceneSize: size || 100 };
+        }
         const center = new Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
         return { centerTarget: center, sceneSize: size || 100 };
     }
 
     if (!mainCalculation) return { centerTarget: new Vector3(0,0,0), sceneSize: 100 };
 
-    let minX = mainCalculation.props.position[0], maxX = minX;
-    let minY = mainCalculation.props.position[1], maxY = minY;
-    let minZ = mainCalculation.props.position[2], maxZ = minZ;
+    // Center of rotation = selected individual, fallback to root
+    let orbitCenter: Vector3;
+    if (selectedId && selectedId !== mainCalculation.id) {
+        const sel = extraCalculations.find(s => s.id === selectedId);
+        if (sel) {
+            const [sx, sy, sz] = sel.props.position;
+            orbitCenter = new Vector3(sx, sy, sz);
+        } else {
+            const [rx, ry, rz] = mainCalculation.props.position;
+            orbitCenter = new Vector3(rx, ry, rz);
+        }
+    } else {
+        const [rx, ry, rz] = mainCalculation.props.position;
+        orbitCenter = new Vector3(rx, ry, rz);
+    }
 
+    // Scene size from bounding box (for initial camera distance)
+    const [rx, ry, rz] = mainCalculation.props.position;
+    let minX = rx, maxX = rx, minY = ry, maxY = ry, minZ = rz, maxZ = rz;
     extraCalculations.forEach(s => {
         const [sx, sy, sz] = s.props.position;
         minX = Math.min(minX, sx); maxX = Math.max(maxX, sx);
         minY = Math.min(minY, sy); maxY = Math.max(maxY, sy);
         minZ = Math.min(minZ, sz); maxZ = Math.max(maxZ, sz);
     });
-
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    const center = new Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
 
-    return { centerTarget: center, sceneSize: size };
-  }, [mainCalculation, extraCalculations, allLayoutNodes, autoLayoutMode]);
+    return { centerTarget: orbitCenter, sceneSize: size };
+  }, [mainCalculation, extraCalculations, allLayoutNodes, autoLayoutMode, rootIndividual, selectedId]);
+
+  // Keep refs in sync for camera setup functions
+  centerTargetRef.current = centerTarget;
+  sceneSizeRef.current = sceneSize;
 
   const isOrtho = !!cameraView;
 
-  // Ref callbacks that fully configure cameras on mount (before first paint).
-  // This eliminates any delay — the camera is positioned correctly from frame 1.
+  // Ref callbacks that configure cameras on mount / view change.
+  // Uses refs for centerTarget and sceneSize so the callback doesn't change
+  // when a new individual is selected (camera stays in place).
   const setupOrthoCamera = useCallback((cam: any) => {
     if (!cam) return;
+    const ct = centerTargetRef.current;
+    const sz = sceneSizeRef.current;
     const dist = 10000;
-    const pos = centerTarget.clone();
+    const pos = ct.clone();
     if (cameraView === 'TOP') {
       pos.y += dist;
       cam.up.set(1, 0, 0);
@@ -324,22 +356,25 @@ const Scene3D: React.FC<Scene3DProps> = ({
       cam.up.set(0, 1, 0);
     }
     cam.position.copy(pos);
-    cam.lookAt(centerTarget);
+    cam.lookAt(ct);
     const minDim = Math.min(window.innerWidth, window.innerHeight);
-    cam.zoom = Math.max(0.1, minDim / (sceneSize * 1.2));
+    cam.zoom = Math.max(0.1, minDim / (sz * 1.2));
     cam.updateProjectionMatrix();
-  }, [cameraView, centerTarget, sceneSize]);
+  }, [cameraView]); // Only repositions when view type changes
 
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;
-    const offset = Math.max(300, sceneSize * 1.5);
-    const pos = centerTarget.clone();
+    const ct = centerTargetRef.current;
+    const sz = sceneSizeRef.current;
+    const offset = Math.max(300, sz * 1.5);
+    const pos = ct.clone();
     pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
     cam.position.copy(pos);
     cam.up.set(0, 1, 0);
-    cam.lookAt(centerTarget);
+    cam.lookAt(ct);
     cam.updateProjectionMatrix();
-  }, [centerTarget, sceneSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only positions on first mount — never resets on individual change
 
   const getTraitWorldPosition = useCallback((props: any, type: string, offset: number) => {
       const [x, y, z] = props.position;
@@ -624,6 +659,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             target={centerTarget}
             enablePan={true}
             screenSpacePanning={true}
+            minPolarAngle={Math.PI / 4}
+            maxPolarAngle={3 * Math.PI / 4}
             mouseButtons={{
                 LEFT: MOUSE.PAN,
                 MIDDLE: MOUSE.DOLLY,
