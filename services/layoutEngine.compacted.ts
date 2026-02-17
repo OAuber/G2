@@ -547,8 +547,8 @@ export class GenealogyLayoutEngine {
         matrix.setPosition(x, centerY, z);
 
         const color = new Color(
-             indi.gender === Gender.Female ? '#f472b6' : 
-             indi.gender === Gender.Male ? '#60a5fa' : '#94a3b8'
+             indi.gender === Gender.Female ? '#f9a8d4' : 
+             indi.gender === Gender.Male ? '#93c5fd' : '#d1d5db'
         );
 
         if (existing) {

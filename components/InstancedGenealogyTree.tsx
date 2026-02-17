@@ -25,43 +25,12 @@ interface TraitInstanceInfo {
     relatedId?: string;
 }
 
-interface HighlightBoxProps {
-    node: LayoutNode;
-    color: string;
-    isHover?: boolean;
-}
-
-const HighlightBox: React.FC<HighlightBoxProps> = ({ node, color, isHover = false }) => {
-    const { position, scale } = useMemo(() => {
-        const p = new THREE.Vector3();
-        const s = new THREE.Vector3();
-        const q = new THREE.Quaternion();
-        node.matrix.decompose(p, q, s);
-        
-        const height = s.y;
-        const bottomY = p.y - (height / 2);
-        const visualCenterY = bottomY + (height / 2);
-        
-        return { position: new THREE.Vector3(p.x, visualCenterY, p.z), scale: s };
-    }, [node]);
-
-    return (
-        <group position={position}>
-            {/* Wireframe Box */}
-            <mesh>
-                <boxGeometry args={[scale.x * 1.05, scale.y * 1.01, scale.z * 1.05]} />
-                <meshBasicMaterial color={color} wireframe />
-            </mesh>
-            {/* Semi-transparent fill for better visibility */}
-            {!isHover && (
-                 <mesh>
-                    <boxGeometry args={[scale.x * 1.02, scale.y, scale.z * 1.02]} />
-                    <meshBasicMaterial color={color} transparent opacity={0.1} depthTest={false} />
-                </mesh>
-            )}
-        </group>
-    );
-}
+// Color palettes per gender state
+const COLORS = {
+  default: { [Gender.Female]: '#f9a8d4', [Gender.Male]: '#93c5fd', [Gender.Unknown]: '#d1d5db' },
+  hover:   { [Gender.Female]: '#ec4899', [Gender.Male]: '#38bdf8', [Gender.Unknown]: '#94a3b8' },
+  select:  { [Gender.Female]: '#dc2626', [Gender.Male]: '#2563eb', [Gender.Unknown]: '#f59e0b' },
+};
 
 const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
   nodes, 
@@ -237,7 +206,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       // 1. Box
       tempMatrix.compose(new THREE.Vector3(tempPos.x, bottomY, tempPos.z), tempQuat, tempScale);
       boxMesh.setMatrixAt(i, tempMatrix);
-      boxMesh.setColorAt(i, node.color);
+
+      // Determine color based on hover/selection state
+      const isSelected = node.id === selectedId;
+      const isHovered = hoveredNode?.id === node.id;
+      let nodeColor: THREE.Color;
+      if (isSelected) {
+          nodeColor = new THREE.Color(COLORS.select[node.gender] || COLORS.select[Gender.Unknown]);
+      } else if (isHovered) {
+          nodeColor = new THREE.Color(COLORS.hover[node.gender] || COLORS.hover[Gender.Unknown]);
+      } else {
+          nodeColor = node.color;
+      }
+      boxMesh.setColorAt(i, nodeColor);
 
       // 2. Fading Logic (Populate Buffer)
       let mode = 0;
@@ -256,7 +237,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       pathMatrix.compose(tempPos, pathQuat, pathScale);
       
       pathMesh.setMatrixAt(i, pathMatrix);
-      pathMesh.setColorAt(i, node.color.clone().addScalar(0.1));
+      pathMesh.setColorAt(i, nodeColor.clone().addScalar(isSelected ? 0.05 : isHovered ? 0.08 : 0.1));
 
       // 4. Traits & Connectors
       node.traits.forEach(trait => {
@@ -387,7 +368,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         connectorsGeometryRef.current.computeBoundingSphere();
     }
 
-  }, [nodes, totalTraits, showBoxes, pathGeometry, data]);
+  }, [nodes, totalTraits, showBoxes, pathGeometry, data, hoveredNode, selectedId]);
 
   // --- Interaction Handlers ---
 
@@ -506,19 +487,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
             <bufferGeometry ref={connectorsGeometryRef} />
         </lineSegments>
 
-        {/* Highlights & Labels */}
+        {/* Labels */}
         {selectedNode && (
-            <>
-                <HighlightBox node={selectedNode} color="white" isHover={false} />
-                <RenderLabel node={selectedNode} isHover={false} />
-            </>
+            <RenderLabel node={selectedNode} isHover={false} />
         )}
         
         {hoveredNode && hoveredNode.id !== selectedId && (
-            <>
-                <HighlightBox node={hoveredNode} color="#fbbf24" isHover={true} />
-                <RenderLabel node={hoveredNode} isHover={true} />
-            </>
+            <RenderLabel node={hoveredNode} isHover={true} />
         )}
     </group>
   );
