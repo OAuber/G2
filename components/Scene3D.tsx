@@ -83,6 +83,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   // Refs for camera setup — avoid repositioning camera on every centerTarget change
   const centerTargetRef = useRef(new Vector3());
   const sceneSizeRef = useRef(100);
+  const perspInitialized = useRef(false);
 
   // --- Auto Layout Calculation ---
   const { filteredLayoutNodes, allLayoutNodes } = useMemo(() => {
@@ -364,8 +365,12 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;
+    if (perspInitialized.current) return; // Already positioned with real data
     const ct = centerTargetRef.current;
     const sz = sceneSizeRef.current;
+    // Skip if no real data yet (default fallback values)
+    if (!mainCalculation) return;
+    perspInitialized.current = true;
     const offset = Math.max(300, sz * 1.5);
     const pos = ct.clone();
     pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
@@ -373,8 +378,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
     cam.up.set(0, 1, 0);
     cam.lookAt(ct);
     cam.updateProjectionMatrix();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only positions on first mount — never resets on individual change
+  }, [mainCalculation]); // Fires once when data loads, then flag prevents re-positioning
 
   const getTraitWorldPosition = useCallback((props: any, type: string, offset: number) => {
       const [x, y, z] = props.position;
