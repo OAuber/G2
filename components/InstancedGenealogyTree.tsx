@@ -563,7 +563,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const textColor = isDarkMode ? '#ffffff' : '#000000';
       const outlineW = isDarkMode ? 0.1 : 0;
       const fs = labelFontSize * 0.6;
-      const noDepthWrite = (m: any) => { if (m?.material) m.material.depthWrite = false; };
+      const alwaysVisible = (m: any) => { if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; } };
 
       return (
           <group>
@@ -575,7 +575,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   const firstName = child.givenName?.split(/\s+/)[0] || child.givenName;
                   return (
                       <Text
-                          ref={noDepthWrite}
+                          ref={alwaysVisible}
                           key={`${label.childId}-${label.y.toFixed(0)}`}
                           position={[label.x, label.y + yOffset, label.z]}
                           rotation={[0, label.flip ? Math.PI : 0, 0]}
