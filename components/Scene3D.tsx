@@ -10,19 +10,39 @@ import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
-// Smoothly syncs OrbitControls target whenever centerTarget changes
-// (e.g. new individual selected) without moving the camera.
+// Handles: (1) one-time perspective camera positioning when data first loads,
+//          (2) syncing OrbitControls target when selected individual changes.
 const CameraController: React.FC<{
   cameraView: CameraView;
   isOrtho: boolean;
   centerTarget: Vector3;
-}> = ({ cameraView, isOrtho, centerTarget }) => {
+  sceneSize: number;
+  hasData: boolean;
+}> = ({ cameraView, isOrtho, centerTarget, sceneSize, hasData }) => {
   const lastTarget = useRef(new Vector3());
+  const perspPositioned = useRef(false);
 
   useFrame((state) => {
     const ctrl = state.controls as OrbitControlsImpl;
     if (!ctrl) return;
 
+    // One-time perspective camera positioning when data first arrives
+    if (!isOrtho && !perspPositioned.current && hasData) {
+      perspPositioned.current = true;
+      const offset = Math.max(300, sceneSize * 1.5);
+      const pos = centerTarget.clone();
+      pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
+      state.camera.position.copy(pos);
+      state.camera.up.set(0, 1, 0);
+      state.camera.lookAt(centerTarget);
+      state.camera.updateProjectionMatrix();
+      ctrl.target.copy(centerTarget);
+      lastTarget.current.copy(centerTarget);
+      ctrl.update();
+      return;
+    }
+
+    // Sync orbit target when it changes (new individual selected)
     if (!lastTarget.current.equals(centerTarget)) {
       ctrl.target.copy(centerTarget);
       lastTarget.current.copy(centerTarget);
@@ -83,7 +103,6 @@ const Scene3D: React.FC<Scene3DProps> = ({
   // Refs for camera setup — avoid repositioning camera on every centerTarget change
   const centerTargetRef = useRef(new Vector3());
   const sceneSizeRef = useRef(100);
-  const perspInitialized = useRef(false);
 
   // --- Auto Layout Calculation ---
   const { filteredLayoutNodes, allLayoutNodes } = useMemo(() => {
@@ -363,22 +382,14 @@ const Scene3D: React.FC<Scene3DProps> = ({
     cam.updateProjectionMatrix();
   }, [cameraView]); // Only repositions when view type changes
 
+  // Perspective camera: minimal setup on mount. Actual positioning is handled
+  // by CameraController inside useFrame (reliable in @react-three/fiber).
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;
-    if (perspInitialized.current) return; // Already positioned with real data
-    const ct = centerTargetRef.current;
-    const sz = sceneSizeRef.current;
-    // Skip if no real data yet (default fallback values)
-    if (!mainCalculation) return;
-    perspInitialized.current = true;
-    const offset = Math.max(300, sz * 1.5);
-    const pos = ct.clone();
-    pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
-    cam.position.copy(pos);
     cam.up.set(0, 1, 0);
-    cam.lookAt(ct);
     cam.updateProjectionMatrix();
-  }, [mainCalculation]); // Fires once when data loads, then flag prevents re-positioning
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getTraitWorldPosition = useCallback((props: any, type: string, offset: number) => {
       const [x, y, z] = props.position;
@@ -638,6 +649,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             cameraView={cameraView} 
             isOrtho={isOrtho} 
             centerTarget={centerTarget}
+            sceneSize={sceneSize}
+            hasData={!!mainCalculation}
         />
 
         <ambientLight intensity={isDarkMode ? 0.5 : 0.8} />
