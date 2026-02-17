@@ -85,7 +85,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           metalness: 0.1,
           transparent: true,
           opacity: 0.9,
-          depthWrite: true, // Keep depth write for correct occlusion in most cases
+          depthWrite: false, // Transparent material: don't occlude labels
           side: THREE.DoubleSide
       });
 
@@ -413,15 +413,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
-      const nameRef = useRef<any>(null);
-      const dateRef = useRef<any>(null);
-
-      useLayoutEffect(() => {
-          [nameRef, dateRef].forEach(ref => {
-              if (ref.current?.material) ref.current.material.depthTest = false;
-          });
-      }, []);
-
       if (!data || !data.individuals[node.id]) return null;
 
       const indi = data.individuals[node.id];
@@ -462,7 +453,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         <Billboard position={pos} follow lockX={false} lockY={false} lockZ={false}>
             {/* Name — offset above */}
             <Text
-                ref={nameRef}
                 position={[0, labelOffset, 0]}
                 fontSize={fs}
                 color={textColor}
@@ -470,13 +460,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                 outlineColor={outlineC}
                 anchorX="center"
                 anchorY="middle"
-                renderOrder={100}
+                renderOrder={999}
             >
                 {`${indi.givenName} ${indi.surname}`}
             </Text>
             {/* Dates — offset below, symmetric */}
             <Text
-                ref={dateRef}
                 position={[0, -labelOffset, 0]}
                 fontSize={fs * 0.85}
                 color={textColor}
@@ -484,7 +473,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                 outlineColor={outlineC}
                 anchorX="center"
                 anchorY="middle"
-                renderOrder={100}
+                renderOrder={999}
             >
                 {dateText}
             </Text>
