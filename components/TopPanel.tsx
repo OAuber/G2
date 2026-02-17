@@ -75,7 +75,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
     : 'bg-white border-slate-300 text-slate-800';
 
   return (
-    <div className="absolute top-0 left-0 right-0 z-[100] pointer-events-none">
+    <div className="fixed top-0 left-0 right-0 z-[100] pointer-events-none">
       {/* Content - collapses via max-height, no transforms */}
       <div
         className="overflow-hidden"

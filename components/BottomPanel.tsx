@@ -53,7 +53,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   const containerBg = isDarkMode ? 'bg-neutral-900 border-slate-800' : 'bg-slate-50 border-slate-200';
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-[100] pointer-events-none">
+    <div className="fixed bottom-0 left-0 right-0 z-[100] pointer-events-none">
       {/* Handle - Always visible at bottom */}
       <div className="flex justify-center">
         <button 
