@@ -209,9 +209,7 @@ const Scene2DTimeline: React.FC<Scene2DTimelineProps> = ({
             if (indi) onIndividualClick(indi);
           }}
           labelFontSize={0.15}
-          labelColor={isDarkMode ? 'white' : 'black'}
-          labelOutlineWidth={isDarkMode ? 0.03 : 0}
-          labelOutlineColor={isDarkMode ? '#000000' : 'transparent'}
+          isDarkMode={isDarkMode}
         />
       </Canvas>
       
