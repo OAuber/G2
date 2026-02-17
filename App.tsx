@@ -669,7 +669,11 @@ function App() {
   const handleLinkChildToFamily = () => {};
   const handleCreateFamilyWithChild = () => {};
 
-  const handleUIEnter = () => setIsHoveringUI(true);
+  // Only disable 3D controls on mouse hover — touch devices don't need this
+  // (mouseenter fires on tap but mouseleave never fires, blocking controls)
+  const handleUIEnter = () => {
+    if (matchMedia('(pointer: fine)').matches) setIsHoveringUI(true);
+  };
   const handleUILeave = () => setIsHoveringUI(false);
 
   // Safe Close Handlers to reset hover state
