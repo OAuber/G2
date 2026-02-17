@@ -12,10 +12,8 @@ interface InstancedTreeProps {
   selectedId?: string | null;
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
+  isDarkMode?: boolean;
   labelFontSize?: number;
-  labelColor?: string;
-  labelOutlineWidth?: number;
-  labelOutlineColor?: string;
 }
 
 // Helper to store trait mapping for interaction
@@ -39,10 +37,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   selectedId, 
   onNodeClick, 
   onTraitClick,
+  isDarkMode = true,
   labelFontSize = 3,
-  labelColor = 'white',
-  labelOutlineWidth = 0.2,
-  labelOutlineColor = '#000000'
 }) => {
   const boxMeshRef = useRef<THREE.InstancedMesh>(null);
   const pathMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -417,41 +413,80 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
-      const textRef = useRef<any>(null);
+      const nameRef = useRef<any>(null);
+      const dateRef = useRef<any>(null);
 
       useLayoutEffect(() => {
-          if (textRef.current && textRef.current.material) {
-              // Ensure text renders on top of everything without z-fighting
-              textRef.current.material.depthTest = false;
-          }
+          [nameRef, dateRef].forEach(ref => {
+              if (ref.current?.material) ref.current.material.depthTest = false;
+          });
       }, []);
 
       if (!data || !data.individuals[node.id]) return null;
-      
+
+      const indi = data.individuals[node.id];
       const p = new THREE.Vector3();
       const s = new THREE.Vector3();
       node.matrix.decompose(p, new THREE.Quaternion(), s);
-      const pos = new THREE.Vector3(p.x, p.y + (s.y/2) + 2, p.z);
-      
+      const thickness = s.x;
+      const height = s.y;
+      const depth = s.z;
+
+      // Position at 3/4 along the life path (last quarter toward death)
+      // The path goes diagonally: Y = time, Z = depth (direction depends on gender)
+      const progress = 0.25; // offset from center toward death (0 = center, 0.5 = death end)
+      const zSign = node.gender === Gender.Female ? 1 : -1;
+      const pos = new THREE.Vector3(
+          p.x,
+          p.y + height * progress,
+          p.z + depth * progress * zSign
+      );
+      const fs = isHover ? labelFontSize * 1.17 : labelFontSize;
+      const labelOffset = thickness * 0.8;
+
+      // Text style based on theme
+      const textColor = isDarkMode ? '#ffffff' : '#000000';
+      const outlineW = isDarkMode ? 0.15 : 0;
+      const outlineC = isDarkMode ? '#000000' : '#000000';
+
+      // Date formatting: birth - death with (CAL) markers
+      const bYear = indi.birthDate?.year;
+      const dYear = indi.deathDate?.year;
+      const bCal = indi.birthDate?.isCalculated ? ' (CAL)' : '';
+      const dCal = indi.deathDate?.isCalculated ? ' (CAL)' : '';
+      const birthStr = bYear ? `${bYear}${bCal}` : '?';
+      const deathStr = dYear ? `${dYear}${dCal}` : '?';
+      const dateText = `${birthStr} – ${deathStr}`;
+
       return (
-        <Billboard
-            position={pos}
-            follow={true}
-            lockX={false}
-            lockY={false}
-            lockZ={false}
-        >
+        <Billboard position={pos} follow lockX={false} lockY={false} lockZ={false}>
+            {/* Name — offset above */}
             <Text
-                ref={textRef}
-                fontSize={isHover ? labelFontSize * 1.17 : labelFontSize}
-                color={labelColor}
-                outlineWidth={labelOutlineWidth}
-                outlineColor={labelOutlineColor}
+                ref={nameRef}
+                position={[0, labelOffset, 0]}
+                fontSize={fs}
+                color={textColor}
+                outlineWidth={outlineW}
+                outlineColor={outlineC}
                 anchorX="center"
-                anchorY="bottom"
-                renderOrder={100} // High priority render
+                anchorY="middle"
+                renderOrder={100}
             >
-                {`${data.individuals[node.id].givenName} ${data.individuals[node.id].surname}\n${node.birthYear}`}
+                {`${indi.givenName} ${indi.surname}`}
+            </Text>
+            {/* Dates — offset below, symmetric */}
+            <Text
+                ref={dateRef}
+                position={[0, -labelOffset, 0]}
+                fontSize={fs * 0.85}
+                color={textColor}
+                outlineWidth={outlineW}
+                outlineColor={outlineC}
+                anchorX="center"
+                anchorY="middle"
+                renderOrder={100}
+            >
+                {dateText}
             </Text>
         </Billboard>
       );

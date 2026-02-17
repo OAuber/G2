@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Line, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { Vector3, MOUSE, TOUCH, Group } from 'three';
+import { Vector3, Quaternion, MOUSE, TOUCH, Group } from 'three';
 import { Individual, GedcomData, MarriageTrait, Gender, ChildTrait, DragMode, RenderedPerson, CameraView } from '../types';
 import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geometryService';
 import { IndividualBox } from './IndividualBox';
@@ -311,7 +311,13 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
         if (targetNode) {
             const pos = new Vector3();
-            pos.setFromMatrixPosition(targetNode.matrix);
+            const scl = new Vector3();
+            targetNode.matrix.decompose(pos, new Quaternion(), scl);
+            // Offset to 3/4 along life path (matches label pivot)
+            const progress = 0.25;
+            const zSign = targetNode.gender === Gender.Female ? 1 : -1;
+            pos.y += scl.y * progress;
+            pos.z += scl.z * progress * zSign;
             return { centerTarget: pos, sceneSize: size || 100 };
         }
         const center = new Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
@@ -699,6 +705,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
                 selectedId={selectedId}
                 onNodeClick={handleInstancedNodeClick}
                 onTraitClick={handleInstancedTraitClick}
+                isDarkMode={isDarkMode}
              />
         ) : (
              <group>
