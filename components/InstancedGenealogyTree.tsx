@@ -284,7 +284,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               let cColor = '#cbd5e1';
               if (trait.childId) {
                   const c = nodesMap.get(trait.childId);
-                  if (c) cColor = c.gender === Gender.Female ? '#ef4444' : '#3b82f6';
+                  if (c) {
+                      cColor = c.gender === Gender.Female ? '#ef4444' : '#3b82f6';
+                  } else if (data?.individuals[trait.childId]) {
+                      const child = data.individuals[trait.childId];
+                      cColor = child.gender === Gender.Female ? '#ef4444' : '#3b82f6';
+                  }
               }
               traitColor.set(cColor);
               overrideColor = cColor; 
@@ -382,7 +387,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         connectorsGeometryRef.current.computeBoundingSphere();
     }
 
-  }, [nodes, totalTraits, showBoxes, pathGeometry]);
+  }, [nodes, totalTraits, showBoxes, pathGeometry, data]);
 
   // --- Interaction Handlers ---
 
