@@ -303,7 +303,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
     // Center of rotation = selected individual, fallback to root
     let orbitCenter: Vector3;
     if (selectedId && selectedId !== mainCalculation.id) {
-        const sel = extraCalculations.find(s => s.id === selectedId);
+        const sel = extraCalculations.find(s => s.props.data.id === selectedId);
         if (sel) {
             const [sx, sy, sz] = sel.props.position;
             orbitCenter = new Vector3(sx, sy, sz);
