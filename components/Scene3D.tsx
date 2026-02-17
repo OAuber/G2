@@ -10,9 +10,8 @@ import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
-// Syncs OrbitControls with the camera position set by the ref callbacks above.
-// Camera positioning is done in ref callbacks (instant, before first paint).
-// This component only handles OrbitControls sync (target, rotation lock, damping).
+// Syncs OrbitControls target with the scene center when the view changes.
+// enableRotate and enableDamping are now handled as reactive props on OrbitControls.
 const CameraController: React.FC<{
   cameraView: CameraView;
   isOrtho: boolean;
@@ -27,10 +26,7 @@ const CameraController: React.FC<{
     const ctrl = state.controls as OrbitControlsImpl;
     if (!ctrl) return;
 
-    // Sync OrbitControls target with the scene center
     ctrl.target.copy(centerTarget);
-    ctrl.enableRotate = cameraView !== 'TOP';
-    ctrl.enableDamping = cameraView !== 'TOP';
     ctrl.update();
 
     lastAppliedKey.current = viewKey;
@@ -618,16 +614,16 @@ const Scene3D: React.FC<Scene3DProps> = ({
         
         {showAxes && <axesHelper args={[50]} />}
 
-        {!disableControls && <OrbitControls 
+        <OrbitControls 
             ref={controlsRef} 
             makeDefault 
+            enabled={!disableControls}
+            enableRotate={cameraView !== 'TOP'}
             enableDamping={cameraView !== 'TOP'}
             dampingFactor={0.1}
             target={centerTarget}
             enablePan={true}
             screenSpacePanning={true}
-            // Uniform mouse mapping across all views:
-            // Left drag = Pan, Right drag = Rotate, Scroll = Zoom on cursor
             mouseButtons={{
                 LEFT: MOUSE.PAN,
                 MIDDLE: MOUSE.DOLLY,
@@ -637,9 +633,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
                 ONE: TOUCH.PAN,
                 TWO: TOUCH.DOLLY_ROTATE,
             }}
-            // Zoom towards mouse pointer position
             zoomToCursor={true}
-        />}
+        />
         
         {autoLayoutMode !== 'none' ? (
              <InstancedGenealogyTree 

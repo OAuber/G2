@@ -58,8 +58,6 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
       <div className="flex justify-center">
         <button 
           onClick={onToggle}
-          onMouseEnter={onMouseEnter}
-          onMouseLeave={onMouseLeave}
           style={{ touchAction: 'manipulation' }}
           className={`pointer-events-auto ${handleBg} rounded-t-xl px-10 py-3 border-t border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
         >

@@ -180,8 +180,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
       <div className="flex justify-center">
         <button 
           onClick={onToggle}
-          onMouseEnter={onMouseEnter}
-          onMouseLeave={onMouseLeave}
           style={{ touchAction: 'manipulation' }}
           className={`pointer-events-auto ${handleBg} rounded-b-xl px-8 py-2 border-b border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
         >
