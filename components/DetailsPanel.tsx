@@ -171,6 +171,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   return (
     <div 
       className={`absolute right-0 top-0 bottom-0 w-80 ${bgClass} border-l flex flex-col shadow-xl z-[120] transition-all duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+      style={{ touchAction: 'pan-y' }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -178,6 +179,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       {/* Side Handle (Tab) */}
       <button 
          onClick={onToggle}
+         style={{ touchAction: 'manipulation' }}
          className={`absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 origin-right py-8 px-3 rounded-l-xl border-y border-l border-r-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] text-xs font-bold uppercase tracking-widest whitespace-nowrap">

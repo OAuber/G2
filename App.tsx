@@ -905,10 +905,6 @@ function App() {
             if(bottomPanelOpen) closeBottomPanel();
             else setBottomPanelOpen(true);
         }}
-        showBoxes={showBoxes}
-        showAxes={showAxes}
-        onToggleBoxes={() => setShowBoxes(!showBoxes)}
-        onToggleAxes={() => setShowAxes(!showAxes)}
         dragMode={dragMode}
         onSetDragMode={setDragMode}
         onSetCameraView={handleSetCameraView} 

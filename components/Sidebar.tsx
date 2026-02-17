@@ -209,6 +209,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   return (
     <div 
       className={`absolute left-0 top-0 bottom-0 w-80 ${bgClass} border-r flex flex-col shadow-xl ${isOpen ? 'z-[130]' : 'z-[120]'} transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      style={{ touchAction: 'pan-y' }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
@@ -217,6 +218,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       {/* Side Handle (Tab) */}
       <button 
          onClick={onToggle}
+         style={{ touchAction: 'manipulation' }}
          className={`absolute top-1/2 right-0 translate-x-full -translate-y-1/2 origin-left py-8 px-3 rounded-r-xl border-y border-r border-l-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-bold uppercase tracking-widest whitespace-nowrap">
