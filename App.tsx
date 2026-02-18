@@ -7,7 +7,7 @@ import Scene2D from './components/Scene2D';
 import Scene2DTimeline from './components/Scene2DTimeline';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraView, P2PStatus, P2PMode } from './types';
+import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
 import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
@@ -54,7 +54,8 @@ function App() {
   // New UI Controls State
   const [isLoading, setIsLoading] = useState(false);
   const [dragMode, setDragMode] = useState<DragMode>('descendants');
-  const [cameraView, setCameraView] = useState<CameraView>(null);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('top');
+  const [flyTarget, setFlyTarget] = useState<CameraMode | null>(null); // non-null = animating toward this mode
   const [viewMode, setViewMode] = useState<ViewMode>('2D'); // Changed to 2D default
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
@@ -118,18 +119,18 @@ function App() {
       p2pService.connect(hostId);
   };
 
-  // --- Camera View Handler with Force Update ---
-  const handleSetCameraView = (view: CameraView) => {
-      // If requesting the same view that is currently active, 
-      // force a reset to trigger the effect in CameraController again.
-      // This fixes the "Double Click" issue where the user rotates manually 
-      // but the state remains "TOP", preventing a re-snap.
-      if (view === cameraView) {
-          setCameraView(null);
-          // Small timeout to allow React to process the null state
-          setTimeout(() => setCameraView(view), 10);
-      } else {
-          setCameraView(view);
+  // --- Camera Mode Handler: request animated transition to a target mode ---
+  const handleSetCameraMode = (target: CameraMode) => {
+      if (flyTarget !== null) return; // ignore while animating
+      if (target === cameraMode) return; // already there
+      setFlyTarget(target);
+  };
+
+  // Called by CameraController when animation finishes
+  const handleFlyComplete = () => {
+      if (flyTarget) {
+          setCameraMode(flyTarget);
+          setFlyTarget(null);
       }
   };
   
@@ -213,7 +214,8 @@ function App() {
           }
           
           // Activate TOP view (easiest to understand)
-          setCameraView('TOP');
+          setCameraMode('top');
+          setFlyTarget(null);
           
           // Hide boxes for cleaner view
           setShowBoxes(false);
@@ -762,7 +764,9 @@ function App() {
             onBackgroundClick={handleBackgroundClick}
             onVisibleIdsChange={handleVisibleIdsChange}
             dragMode={dragMode}
-            cameraView={cameraView}
+            cameraMode={cameraMode}
+            flyTarget={flyTarget}
+            onFlyComplete={handleFlyComplete}
             disableControls={isHoveringUI || !!activeInfoPage}
             isDarkMode={isDarkMode}
             extraIndividuals={sceneExtras}
@@ -911,7 +915,8 @@ function App() {
         }}
         dragMode={dragMode}
         onSetDragMode={setDragMode}
-        onSetCameraView={handleSetCameraView} 
+        cameraMode={cameraMode}
+        onSetCameraMode={handleSetCameraMode}
         viewMode={viewMode}
         onSetViewMode={handleSetViewMode}
         isDarkMode={isDarkMode}
@@ -921,6 +926,7 @@ function App() {
         onMouseLeave={handleUILeave}
         autoLayoutMode={autoLayoutMode}
         onSetAutoLayoutMode={setAutoLayoutMode}
+        isAnimating={flyTarget !== null}
       />
 
     </div>

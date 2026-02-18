@@ -2,50 +2,186 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Line, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { Vector3, Quaternion, MOUSE, TOUCH, Group } from 'three';
-import { Individual, GedcomData, MarriageTrait, Gender, ChildTrait, DragMode, RenderedPerson, CameraView } from '../types';
+import { Vector3, Quaternion, Matrix4 as M4, MOUSE, TOUCH, Group } from 'three';
+import { Individual, GedcomData, MarriageTrait, Gender, ChildTrait, DragMode, RenderedPerson, CameraMode } from '../types';
 import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geometryService';
 import { IndividualBox } from './IndividualBox';
 import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
-// Handles: (1) one-time perspective camera positioning when data first loads,
-//          (2) syncing OrbitControls target when selected individual changes.
-const CameraController: React.FC<{
-  cameraView: CameraView;
-  isOrtho: boolean;
-  centerTarget: Vector3;
-  sceneSize: number;
-  hasData: boolean;
-}> = ({ cameraView, isOrtho, centerTarget, sceneSize, hasData }) => {
-  const lastTarget = useRef(new Vector3());
-  const perspPositioned = useRef(false);
+// Handles animated transitions between 3 camera modes: top, individual, free.
+const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-  useFrame((state) => {
+const INDIVIDUAL_WIDTH = 10;
+const FOV_DEG = 50;
+const FOV_RAD = FOV_DEG * Math.PI / 180;
+const TOP_VIEW_PADDING = 1.0; // scene extent multiplier for top view (lower = more zoomed in)
+
+function individualViewDistance(): number {
+    const aspect = window.innerWidth / window.innerHeight;
+    const halfHFov = Math.atan(Math.tan(FOV_RAD / 2) * aspect);
+    const visibleWidth = INDIVIDUAL_WIDTH * 25;
+    return visibleWidth / (2 * Math.tan(halfHFov));
+}
+
+// Ortho zoom factor for the top view
+function topViewOrthoZoom(sceneSize: number): number {
+    const minDim = Math.min(window.innerWidth, window.innerHeight);
+    return Math.max(0.1, minDim / (sceneSize * TOP_VIEW_PADDING));
+}
+
+// Perspective distance that matches the ortho zoom for the top view
+function topViewPerspDistance(sceneSize: number): number {
+    const zoom = topViewOrthoZoom(sceneSize);
+    return window.innerHeight / (2 * zoom * Math.tan(FOV_RAD / 2));
+}
+
+function computeModePosition(mode: CameraMode, ct: Vector3, sceneSize: number, selectedGender: Gender | null): Vector3 {
+    if (mode === 'top') {
+        const dist = topViewPerspDistance(sceneSize);
+        return new Vector3(ct.x, ct.y + dist, ct.z);
+    }
+    if (mode === 'individual') {
+        const dist = individualViewDistance();
+        const zSign = selectedGender === Gender.Female ? 1 : -1;
+        const cos45 = Math.SQRT1_2;
+        return new Vector3(
+            ct.x,
+            ct.y - dist * cos45,
+            ct.z + zSign * dist * cos45
+        );
+    }
+    // free: random-ish 3/4 view, camera on X- side looking toward X+
+    const sz = Math.max(100, sceneSize);
+    const dist = sz * 1.2;
+    const randAngle = (Math.random() - 0.5) * 0.6;
+    const randElev = 0.3 + Math.random() * 0.25;
+    return new Vector3(
+        ct.x - dist * Math.cos(randAngle),
+        ct.y + dist * randElev,
+        ct.z + dist * Math.sin(randAngle) * 0.5
+    );
+}
+
+const CameraController: React.FC<{
+  cameraMode: CameraMode;
+  flyTarget: CameraMode | null;
+  centerTarget: Vector3;
+  individualCenter: Vector3;
+  sceneSize: number;
+  selectedGender: Gender | null;
+  onFlyComplete: () => void;
+}> = ({ cameraMode, flyTarget, centerTarget, individualCenter, sceneSize, selectedGender, onFlyComplete }) => {
+  const lastTarget = useRef(new Vector3());
+
+  // Animation refs
+  const animProgress = useRef(0);
+  const animStartLookAt = useRef(new Vector3());
+  const animEndLookAt = useRef(new Vector3());
+  const animStartDist = useRef(0);
+  const animEndDist = useRef(0);
+  const animStartQuat = useRef(new Quaternion());
+  const animEndQuat = useRef(new Quaternion());
+  const animStarted = useRef(false);
+  const animCompleted = useRef(false);
+  const holdPos = useRef<Vector3 | null>(null);
+  const holdLookAt = useRef<Vector3 | null>(null);
+  const holdUp = useRef<Vector3 | null>(null);
+  const animEndPos = useRef(new Vector3());
+  const FLY_DURATION = 2.5;
+
+  const lookAtForMode = (mode: CameraMode) => mode === 'individual' ? individualCenter : centerTarget;
+  const upForMode = (mode: CameraMode) => mode === 'top' ? new Vector3(1, 0, 0) : new Vector3(0, 1, 0);
+
+  useFrame((state, delta) => {
     const ctrl = state.controls as OrbitControlsImpl;
     if (!ctrl) return;
 
-    // One-time perspective camera positioning when data first arrives
-    if (!isOrtho && !perspPositioned.current && hasData) {
-      perspPositioned.current = true;
-      const offset = Math.max(300, sceneSize * 1.5);
-      const pos = centerTarget.clone();
-      pos.add(new Vector3(0.5 * offset, 0.4 * offset, 0.8 * offset));
+    // --- ANIMATED TRANSITION ---
+    if (flyTarget !== null) {
+      if (!animStarted.current) {
+        animStarted.current = true;
+        animCompleted.current = false;
+        animProgress.current = 0;
+        const startLookAt = lookAtForMode(cameraMode);
+        const endLookAt = lookAtForMode(flyTarget);
+        const startUp = upForMode(cameraMode);
+        const endUp = upForMode(flyTarget);
+        animStartLookAt.current.copy(startLookAt);
+        animEndLookAt.current.copy(endLookAt);
+        const startPos = state.camera.position.clone();
+        const endPos = computeModePosition(flyTarget, endLookAt, sceneSize, selectedGender);
+        animEndPos.current.copy(endPos);
+
+        animStartDist.current = startPos.distanceTo(startLookAt);
+        animEndDist.current = endPos.distanceTo(endLookAt);
+
+        const startMat = new M4().lookAt(startPos, startLookAt, startUp);
+        animStartQuat.current.setFromRotationMatrix(startMat);
+        const endMat = new M4().lookAt(endPos, endLookAt, endUp);
+        animEndQuat.current.setFromRotationMatrix(endMat);
+
+        holdPos.current = null;
+        holdLookAt.current = null;
+        holdUp.current = null;
+      }
+
+      if (animProgress.current < 1) {
+        animProgress.current = Math.min(1, animProgress.current + delta / FLY_DURATION);
+      }
+      const t = easeInOutCubic(animProgress.current);
+
+      const q = new Quaternion().slerpQuaternions(animStartQuat.current, animEndQuat.current, t);
+
+      const lookAt = new Vector3().lerpVectors(animStartLookAt.current, animEndLookAt.current, t);
+      const dist = animStartDist.current + (animEndDist.current - animStartDist.current) * t;
+      const backward = new Vector3(0, 0, 1).applyQuaternion(q);
+      const pos = lookAt.clone().add(backward.multiplyScalar(dist));
+
+      const up = new Vector3(0, 1, 0).applyQuaternion(q);
+
       state.camera.position.copy(pos);
-      state.camera.up.set(0, 1, 0);
-      state.camera.lookAt(centerTarget);
+      state.camera.up.copy(up);
+      state.camera.lookAt(lookAt);
       state.camera.updateProjectionMatrix();
-      ctrl.target.copy(centerTarget);
-      lastTarget.current.copy(centerTarget);
+      ctrl.target.copy(lookAt);
       ctrl.update();
+
+      // Fire completion callback only once; keep rendering at t=1 until React processes the state change
+      if (animProgress.current >= 1 && !animCompleted.current) {
+        animCompleted.current = true;
+        holdPos.current = animEndPos.current.clone();
+        holdLookAt.current = animEndLookAt.current.clone();
+        holdUp.current = upForMode(flyTarget).clone();
+        onFlyComplete();
+      }
+      return;
+    }
+
+    // Reset animation flags when truly idle (flyTarget is null in React state)
+    animStarted.current = false;
+    animCompleted.current = false;
+
+    // Hold final position for one frame to prevent jump during React state transition
+    if (holdPos.current) {
+      state.camera.position.copy(holdPos.current);
+      state.camera.up.copy(holdUp.current || upForMode(cameraMode));
+      state.camera.lookAt(holdLookAt.current || centerTarget);
+      state.camera.updateProjectionMatrix();
+      ctrl.target.copy(holdLookAt.current || centerTarget);
+      ctrl.update();
+      holdPos.current = null;
+      holdLookAt.current = null;
+      holdUp.current = null;
       return;
     }
 
     // Sync orbit target when it changes (new individual selected)
-    if (!lastTarget.current.equals(centerTarget)) {
-      ctrl.target.copy(centerTarget);
-      lastTarget.current.copy(centerTarget);
+    const currentLookAt = lookAtForMode(cameraMode);
+    if (!lastTarget.current.equals(currentLookAt)) {
+      ctrl.target.copy(currentLookAt);
+      lastTarget.current.copy(currentLookAt);
       ctrl.update();
     }
   });
@@ -63,7 +199,9 @@ interface Scene3DProps {
   onBackgroundClick?: () => void;
   onVisibleIdsChange?: (ids: Set<string>) => void;
   dragMode: DragMode;
-  cameraView: CameraView;
+  cameraMode: CameraMode;
+  flyTarget: CameraMode | null;
+  onFlyComplete: () => void;
   disableControls?: boolean;
   isDarkMode: boolean;
   extraIndividuals: RenderedPerson[];
@@ -82,7 +220,9 @@ const Scene3D: React.FC<Scene3DProps> = ({
   onBackgroundClick,
   onVisibleIdsChange,
   dragMode,
-  cameraView,
+  cameraMode,
+  flyTarget,
+  onFlyComplete,
   disableControls = false,
   isDarkMode,
   extraIndividuals,
@@ -293,9 +433,11 @@ const Scene3D: React.FC<Scene3DProps> = ({
      });
   }, [extraIndividuals, mainCalculation, rootIndividual, data, showBoxes, selectedId]);
 
-  const { centerTarget, sceneSize } = useMemo(() => {
+  const { centerTarget, individualCenter, sceneSize } = useMemo(() => {
+    const RIBBON_HALF_WIDTH = 5; // half of INDIVIDUAL_WIDTH (10)
+    const defaultIndiv = new Vector3(0, 0, 0);
+
     if (autoLayoutMode !== 'none' && allLayoutNodes.length > 0) {
-        // Auto-layout: center on selected node, fallback to root, then bounding box center
         const targetId = selectedId || rootIndividual?.id;
         const targetNode = targetId ? allLayoutNodes.find(n => n.id === targetId) : null;
 
@@ -313,20 +455,23 @@ const Scene3D: React.FC<Scene3DProps> = ({
             const pos = new Vector3();
             const scl = new Vector3();
             targetNode.matrix.decompose(pos, new Quaternion(), scl);
-            // Offset to 3/4 along life path (matches label pivot)
+
+            // True geometric center of the ribbon (matrix position is already centered)
+            const indivCenter = new Vector3(pos.x, pos.y, pos.z);
+
+            // Label pivot: offset to 3/4 along life path
             const progress = 0.25;
             const zSign = targetNode.gender === Gender.Female ? 1 : -1;
             pos.y += scl.y * progress;
             pos.z += scl.z * progress * zSign;
-            return { centerTarget: pos, sceneSize: size || 100 };
+            return { centerTarget: pos, individualCenter: indivCenter, sceneSize: size || 100 };
         }
         const center = new Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
-        return { centerTarget: center, sceneSize: size || 100 };
+        return { centerTarget: center, individualCenter: center.clone(), sceneSize: size || 100 };
     }
 
-    if (!mainCalculation) return { centerTarget: new Vector3(0,0,0), sceneSize: 100 };
+    if (!mainCalculation) return { centerTarget: new Vector3(0,0,0), individualCenter: defaultIndiv, sceneSize: 100 };
 
-    // Center of rotation = selected individual, fallback to root
     let orbitCenter: Vector3;
     if (selectedId && selectedId !== mainCalculation.id) {
         const sel = extraCalculations.find(s => s.props.data.id === selectedId);
@@ -342,7 +487,6 @@ const Scene3D: React.FC<Scene3DProps> = ({
         orbitCenter = new Vector3(rx, ry, rz);
     }
 
-    // Scene size from bounding box (for initial camera distance)
     const [rx, ry, rz] = mainCalculation.props.position;
     let minX = rx, maxX = rx, minY = ry, maxY = ry, minZ = rz, maxZ = rz;
     extraCalculations.forEach(s => {
@@ -353,48 +497,43 @@ const Scene3D: React.FC<Scene3DProps> = ({
     });
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
 
-    return { centerTarget: orbitCenter, sceneSize: size };
+    return { centerTarget: orbitCenter, individualCenter: orbitCenter.clone(), sceneSize: size };
   }, [mainCalculation, extraCalculations, allLayoutNodes, autoLayoutMode, rootIndividual, selectedId]);
 
   // Keep refs in sync for camera setup functions
   centerTargetRef.current = centerTarget;
   sceneSizeRef.current = sceneSize;
 
-  const isOrtho = !!cameraView;
+  // Ortho camera only for settled TOP mode (not during animation)
+  const isOrtho = cameraMode === 'top' && flyTarget === null;
+  const isAnimating = flyTarget !== null;
 
-  // Ref callbacks that configure cameras on mount / view change.
-  // Uses refs for centerTarget and sceneSize so the callback doesn't change
-  // when a new individual is selected (camera stays in place).
+  // Determine the gender of the selected individual (for individual view angle)
+  const selectedGender: Gender | null = useMemo(() => {
+    if (!selectedId || !data) return null;
+    return data.individuals[selectedId]?.gender ?? null;
+  }, [selectedId, data]);
+
   const setupOrthoCamera = useCallback((cam: any) => {
     if (!cam) return;
     const ct = centerTargetRef.current;
     const sz = sceneSizeRef.current;
-    const dist = 10000;
-    const pos = ct.clone();
-    if (cameraView === 'TOP') {
-      pos.y += dist;
-      cam.up.set(1, 0, 0);
-    } else if (cameraView === 'ISO_F') {
-      pos.add(new Vector3(dist, dist, dist));
-      cam.up.set(0, 1, 0);
-    } else if (cameraView === 'ISO_M') {
-      pos.add(new Vector3(dist, dist, -dist));
-      cam.up.set(0, 1, 0);
-    }
-    cam.position.copy(pos);
+    cam.position.set(ct.x, ct.y + 10000, ct.z);
+    cam.up.set(1, 0, 0);
     cam.lookAt(ct);
-    const minDim = Math.min(window.innerWidth, window.innerHeight);
-    cam.zoom = Math.max(0.1, minDim / (sz * 1.2));
+    cam.zoom = topViewOrthoZoom(sz);
     cam.updateProjectionMatrix();
-  }, [cameraView]); // Only repositions when view type changes
+  }, [cameraMode]);
 
-  // Perspective camera: minimal setup on mount. Actual positioning is handled
-  // by CameraController inside useFrame (reliable in @react-three/fiber).
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;
-    cam.up.set(0, 1, 0);
+    const ct = centerTargetRef.current;
+    const sz = sceneSizeRef.current;
+    const dist = topViewPerspDistance(sz);
+    cam.position.set(ct.x, ct.y + dist, ct.z);
+    cam.up.set(1, 0, 0);
+    cam.lookAt(ct);
     cam.updateProjectionMatrix();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const getTraitWorldPosition = useCallback((props: any, type: string, offset: number) => {
@@ -635,7 +774,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
 
         {isOrtho ? (
             <OrthographicCamera 
-                key={`ortho-${cameraView}`}
+                key={`ortho-${cameraMode}`}
                 ref={setupOrthoCamera}
                 makeDefault 
                 near={-100000} 
@@ -643,20 +782,23 @@ const Scene3D: React.FC<Scene3DProps> = ({
             />
         ) : (
             <PerspectiveCamera 
-                key="persp" 
+                key="persp"
                 ref={setupPerspCamera}
                 makeDefault 
+                fov={FOV_DEG}
                 near={0.1} 
                 far={200000} 
             />
         )}
 
         <CameraController 
-            cameraView={cameraView} 
-            isOrtho={isOrtho} 
+            cameraMode={cameraMode}
+            flyTarget={flyTarget}
             centerTarget={centerTarget}
+            individualCenter={individualCenter}
             sceneSize={sceneSize}
-            hasData={!!mainCalculation}
+            selectedGender={selectedGender}
+            onFlyComplete={onFlyComplete}
         />
 
         <ambientLight intensity={isDarkMode ? 0.5 : 0.8} />
@@ -675,11 +817,10 @@ const Scene3D: React.FC<Scene3DProps> = ({
         <OrbitControls 
             ref={controlsRef} 
             makeDefault 
-            enabled={!disableControls}
-            enableRotate={cameraView !== 'TOP'}
-            enableDamping={cameraView !== 'TOP'}
+            enabled={!disableControls && !isAnimating}
+            enableRotate={cameraMode === 'free' && !isAnimating}
+            enableDamping={cameraMode === 'free'}
             dampingFactor={0.1}
-            target={centerTarget}
             enablePan={true}
             screenSpacePanning={true}
             minPolarAngle={Math.PI / 4}

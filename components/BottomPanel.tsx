@@ -1,13 +1,14 @@
 import React from 'react';
-import { ArrowUpFromLine, ArrowDownToLine, Cuboid, Sun, Moon, LayoutGrid, ArrowDown } from 'lucide-react';
-import { DragMode, ViewMode, CameraView } from '../types';
+import { ArrowUpFromLine, ArrowDownToLine, Cuboid, Sun, Moon, LayoutGrid, ArrowDown, Orbit } from 'lucide-react';
+import { DragMode, ViewMode, CameraMode } from '../types';
 
 interface BottomPanelProps {
   isOpen: boolean;
   onToggle: () => void;
   dragMode: DragMode;
   onSetDragMode: (mode: DragMode) => void;
-  onSetCameraView: (view: CameraView) => void;
+  cameraMode: CameraMode;
+  onSetCameraMode: (mode: CameraMode) => void;
   viewMode: ViewMode;
   onSetViewMode: (mode: ViewMode) => void;
   isDarkMode: boolean;
@@ -17,6 +18,7 @@ interface BottomPanelProps {
   onMouseLeave?: () => void;
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
   onSetAutoLayoutMode?: (mode: 'none' | 'ancestors' | 'descendants' | 'all') => void;
+  isAnimating?: boolean;
 }
 
 const BottomPanel: React.FC<BottomPanelProps> = ({ 
@@ -24,7 +26,8 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   onToggle,
   dragMode, 
   onSetDragMode,
-  onSetCameraView,
+  cameraMode,
+  onSetCameraMode,
   viewMode,
   onSetViewMode,
   isDarkMode,
@@ -33,7 +36,8 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   onMouseEnter,
   onMouseLeave,
   autoLayoutMode = 'none',
-  onSetAutoLayoutMode
+  onSetAutoLayoutMode,
+  isAnimating = false
 }) => {
   
   const bgClass = isDarkMode ? 'bg-black/95 border-slate-800' : 'bg-white/95 border-slate-300';
@@ -110,7 +114,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                         <button 
                           onClick={() => {
                               if(autoLayoutMode === 'ancestors') onSetAutoLayoutMode('none');
-                              else { onSetAutoLayoutMode('ancestors'); onSetCameraView('TOP'); }
+                              else { onSetAutoLayoutMode('ancestors'); onSetCameraMode('top'); }
                           }}
                           title="Auto-Deploy Ancestors"
                           className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'ancestors' ? 'bg-pink-500 text-white' : btnDefault}`}
@@ -120,7 +124,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                         <button 
                           onClick={() => {
                               if(autoLayoutMode === 'descendants') onSetAutoLayoutMode('none');
-                              else { onSetAutoLayoutMode('descendants'); onSetCameraView('TOP'); }
+                              else { onSetAutoLayoutMode('descendants'); onSetCameraMode('top'); }
                           }}
                           title="Auto-Deploy Descendants"
                           className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'descendants' ? 'bg-blue-500 text-white' : btnDefault}`}
@@ -131,25 +135,21 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                     )}
                   </div>
 
-                  {/* Camera Controls */}
+                  {/* Camera Mode Controls */}
                   <div className="flex gap-0.5">
-                    <button onClick={() => onSetCameraView('TOP')} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Top View">
+                    {/* Individual view */}
+                    <button onClick={() => onSetCameraMode('individual')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'individual' ? btnActive : btnDefault}`} title="Individual View">
+                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                         <rect x="6.5" y="2" width="3" height="12" rx="1" />
+                       </svg>
+                    </button>
+                    {/* Top view */}
+                    <button onClick={() => onSetCameraMode('top')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'top' ? btnActive : btnDefault}`} title="Top View">
                        <ArrowDown className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => onSetCameraView(null)} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Perspective">
-                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                         <line x1="3" y1="8" x2="13" y2="8" /><polyline points="9,4 13,8 9,12" />
-                       </svg>
-                    </button>
-                    <button onClick={() => onSetCameraView('ISO_M')} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Isometric (Women)">
-                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#ec4899" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                         <line x1="12" y1="4" x2="4" y2="12" /><polyline points="7,4 12,4 12,9" />
-                       </svg>
-                    </button>
-                    <button onClick={() => onSetCameraView('ISO_F')} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${btnDefault}`} title="Isometric (Men)">
-                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                         <line x1="4" y1="4" x2="12" y2="12" /><polyline points="9,4 4,4 4,9" />
-                       </svg>
+                    {/* Free 3D view */}
+                    <button onClick={() => onSetCameraMode('free')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'free' ? btnActive : btnDefault}`} title="Free 3D View">
+                       <Orbit className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </>

@@ -9,7 +9,7 @@ export enum Gender {
 
 export type DragMode = 'ancestors' | 'descendants';
 export type ViewMode = '3D' | '2D';
-export type CameraView = 'TOP' | 'ISO_F' | 'ISO_M' | null; 
+export type CameraMode = 'top' | 'individual' | 'free';
 export type IndividualSource = 'imported' | 'manual' | 'p2p';
 export type SortMode = 'name' | 'birth-asc' | 'birth-desc';
 export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
