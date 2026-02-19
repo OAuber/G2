@@ -24,7 +24,7 @@ interface DetailsPanelProps {
   isCreating: boolean;
   onClose: () => void;
   onSelectIndividual: (indi: Individual) => void;
-  onUpdateIndividual: (indi: Individual) => void;
+  onUpdateIndividual: (indi: Individual, formData?: NewPersonData) => void;
   onUpdateFamily: (fam: Family) => void;
   onCreateIndividual: (data: NewPersonData) => void;
   onDeleteIndividual: (id: string) => void;
@@ -125,7 +125,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const handleSaveEdit = () => {
      if(!individual) return;
-     // Basic update of personal info
      const updated: Individual = {
          ...individual,
          givenName: formData.givenName,
@@ -134,7 +133,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
          birthDate: parseDate(formData.birthDate),
          deathDate: parseDate(formData.deathDate)
      };
-     onUpdateIndividual(updated);
+     onUpdateIndividual(updated, formData);
      setIsEditing(false);
   };
 

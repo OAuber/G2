@@ -62,7 +62,7 @@ function App() {
   const [centerRequest, setCenterRequest] = useState(0);
 
   // Auto Layout State
-  const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('none');
+  const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('all');
   
   // Info Pages State
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
@@ -463,20 +463,87 @@ function App() {
     setSelectedIndividual(null);
   };
 
-  const handleUpdateIndividual = (updatedIndi: Individual) => {
+  const handleUpdateIndividual = (updatedIndi: Individual, formData?: NewPersonData) => {
     if (!originalGedcomData) return;
-    
-    // Update Original
-    const newOriginal = {
-        ...originalGedcomData,
-        individuals: { ...originalGedcomData.individuals, [updatedIndi.id]: updatedIndi }
-    };
-    setOriginalGedcomData(newOriginal);
 
-    // Re-calc normalized
-    // In a real app, we might just update the normalized one locally, but full recalc is safer
+    let newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
+    newData.individuals[updatedIndi.id] = {
+        ...newData.individuals[updatedIndi.id],
+        givenName: updatedIndi.givenName,
+        surname: updatedIndi.surname,
+        name: `${updatedIndi.givenName} /${updatedIndi.surname}/`,
+        gender: updatedIndi.gender,
+        birthDate: updatedIndi.birthDate,
+        deathDate: updatedIndi.deathDate
+    };
+
+    if (formData) {
+      const indi = newData.individuals[updatedIndi.id];
+      const wantedFatherId = formData.fatherId || undefined;
+      const wantedMotherId = formData.motherId || undefined;
+
+      const currentFamId = indi.familyChildId;
+      const currentFam = currentFamId ? newData.families[currentFamId] : null;
+      const currentFatherId = currentFam?.husbandId;
+      const currentMotherId = currentFam?.wifeId;
+
+      const parentsChanged = wantedFatherId !== currentFatherId || wantedMotherId !== currentMotherId;
+
+      if (parentsChanged && (wantedFatherId || wantedMotherId)) {
+        // Remove from old family if needed
+        if (currentFam && currentFamId) {
+          currentFam.childrenIds = currentFam.childrenIds.filter(id => id !== updatedIndi.id);
+        }
+
+        // Find or create the target family
+        let targetFamId: string | null = null;
+        const existingFam = Object.values(newData.families).find(f => {
+          if (wantedFatherId && wantedMotherId) return f.husbandId === wantedFatherId && f.wifeId === wantedMotherId;
+          if (wantedFatherId && !wantedMotherId) return f.husbandId === wantedFatherId && !f.wifeId;
+          if (!wantedFatherId && wantedMotherId) return !f.husbandId && f.wifeId === wantedMotherId;
+          return false;
+        });
+
+        if (existingFam) {
+          targetFamId = existingFam.id;
+        } else {
+          targetFamId = getNextId('F', newData);
+          newData.families[targetFamId] = {
+            id: targetFamId,
+            husbandId: wantedFatherId,
+            wifeId: wantedMotherId,
+            childrenIds: []
+          };
+          if (wantedFatherId) {
+            const dad = newData.individuals[wantedFatherId];
+            if (dad) {
+              if (!dad.familySpouseIds) dad.familySpouseIds = [];
+              if (!dad.familySpouseIds.includes(targetFamId)) dad.familySpouseIds.push(targetFamId);
+            }
+          }
+          if (wantedMotherId) {
+            const mom = newData.individuals[wantedMotherId];
+            if (mom) {
+              if (!mom.familySpouseIds) mom.familySpouseIds = [];
+              if (!mom.familySpouseIds.includes(targetFamId)) mom.familySpouseIds.push(targetFamId);
+            }
+          }
+        }
+
+        if (!newData.families[targetFamId].childrenIds.includes(updatedIndi.id)) {
+          newData.families[targetFamId].childrenIds.push(updatedIndi.id);
+        }
+        indi.familyChildId = targetFamId;
+      } else if (parentsChanged && !wantedFatherId && !wantedMotherId && currentFam && currentFamId) {
+        // Parents removed
+        currentFam.childrenIds = currentFam.childrenIds.filter(id => id !== updatedIndi.id);
+        indi.familyChildId = undefined;
+      }
+    }
+
+    setOriginalGedcomData(newData);
     setTimeout(() => {
-         setNormalizedGedcomData(normalizeGedcom(newOriginal));
+         setNormalizedGedcomData(normalizeGedcom(newData));
     }, 10);
   };
 
@@ -654,7 +721,7 @@ function App() {
     setSelectedIdsFor2D(prev => new Set(prev).add(newId));
     // Reset 3D extras on new creation/root change
     setSceneExtras([]);
-    setAutoLayoutMode('none');
+    setAutoLayoutMode('all');
   };
 
   const handleDeleteIndividual = (id: string) => {
