@@ -3,8 +3,7 @@ import { Loader2, X } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 import Scene3D from './components/Scene3D';
-import Scene2D from './components/Scene2D';
-import Scene2DTimeline from './components/Scene2DTimeline';
+import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
@@ -340,13 +339,14 @@ function App() {
 
   const handleInspectIndividual = (indi: Individual) => {
     if (isCreating) setIsCreating(false);
-    // Ensure we use the instance from the CURRENT dataset
     const currentIndi = gedcomData?.individuals[indi.id] || indi;
     setSelectedIndividual(currentIndi);
-    
-    // If "__NONE__" is active (all hidden), remove it and show this individual
-    if (selectedIdsFor2D.has('__NONE__')) {
-      console.log('[App] Removing __NONE__ and showing selected individual');
+
+    if (viewMode === '3D') {
+      setRootIndividual(currentIndi);
+      setAutoLayoutMode('all');
+      setSelectedIdsFor2D(prev => new Set(prev).add(currentIndi.id));
+    } else if (selectedIdsFor2D.has('__NONE__')) {
       setSelectedIdsFor2D(new Set([currentIndi.id]));
     }
   };
@@ -841,31 +841,16 @@ function App() {
             autoLayoutMode={autoLayoutMode}
             onSetAutoLayoutMode={setAutoLayoutMode}
           />
-        ) : gedcomData && Object.keys(gedcomData.individuals).length > 5000 ? (
-          <Scene2DTimeline
-            data={gedcomData}
-            selectedId={selectedIndividual?.id}
-            selectedIds={selectedIdsFor2D}
-            onIndividualClick={handleInspectIndividual}
-            onExpandFamily={handleExpandFamily}
-            isDarkMode={isDarkMode}
-            sortMode={sortMode}
-            leftPanelOpen={leftPanelOpen}
-            rightPanelOpen={rightPanelOpen}
-          />
         ) : (
-          <Scene2D 
+          <Scene2DGrid
             data={gedcomData}
             selectedId={selectedIndividual?.id}
             selectedIds={selectedIdsFor2D}
             onIndividualClick={handleInspectIndividual}
-            onToggleSelection={handleToggle2DSelection}
-            onExpandFamily={handleExpandFamily}
             isDarkMode={isDarkMode}
             sortMode={sortMode}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
-            centerRequest={centerRequest}
           />
         )}
         

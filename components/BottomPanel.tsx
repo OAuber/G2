@@ -113,21 +113,31 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                       <>
                         <button 
                           onClick={() => {
-                              if(autoLayoutMode === 'ancestors') onSetAutoLayoutMode('none');
-                              else { onSetAutoLayoutMode('ancestors'); onSetCameraMode('top'); }
+                              const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
+                              const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
+                              const newAsc = !ascOn;
+                              if (newAsc && descOn) onSetAutoLayoutMode('all');
+                              else if (newAsc) onSetAutoLayoutMode('ancestors');
+                              else if (descOn) onSetAutoLayoutMode('descendants');
+                              else onSetAutoLayoutMode('none');
                           }}
-                          title="Auto-Deploy Ancestors"
-                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'ancestors' ? 'bg-pink-500 text-white' : btnDefault}`}
+                          title="Toggle Ancestors"
+                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'ancestors' || autoLayoutMode === 'all' ? 'bg-pink-500 text-white' : btnDefault}`}
                         >
                           Asc ↑
                         </button>
                         <button 
                           onClick={() => {
-                              if(autoLayoutMode === 'descendants') onSetAutoLayoutMode('none');
-                              else { onSetAutoLayoutMode('descendants'); onSetCameraMode('top'); }
+                              const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
+                              const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
+                              const newDesc = !descOn;
+                              if (ascOn && newDesc) onSetAutoLayoutMode('all');
+                              else if (newDesc) onSetAutoLayoutMode('descendants');
+                              else if (ascOn) onSetAutoLayoutMode('ancestors');
+                              else onSetAutoLayoutMode('none');
                           }}
-                          title="Auto-Deploy Descendants"
-                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'descendants' ? 'bg-blue-500 text-white' : btnDefault}`}
+                          title="Toggle Descendants"
+                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'descendants' || autoLayoutMode === 'all' ? 'bg-blue-500 text-white' : btnDefault}`}
                         >
                           Desc ↓
                         </button>
