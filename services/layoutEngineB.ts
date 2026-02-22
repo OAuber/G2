@@ -1,0 +1,711 @@
+import { Matrix4, Color } from 'three';
+import { GedcomData, Individual, Gender, LayoutParams } from '../types';
+import { GENERATION_PITCH } from './geometryService';
+
+export const LAYOUT_CONFIG = {
+    GENERATION_PITCH: GENERATION_PITCH,
+    BOX_THICKNESS: 10,
+    MIN_GAP: 2,
+    SPOUSE_GAP: 0,
+    DEFAULT_LIFESPAN: 80,
+    CURRENT_YEAR: new Date().getFullYear(),
+    LEAF_WIDTH_RATIO: 0.6,
+};
+
+export interface LayoutNode {
+    id: string;
+    matrix: Matrix4;
+    color: Color;
+    generation: number;
+    birthYear: number;
+    lifespan: number;
+    gender: Gender;
+    hasBirthDate: boolean;
+    hasDeathDate: boolean;
+    traits: {
+        type: 'birth' | 'death' | 'marriage' | 'child';
+        offset: number;
+        spouseId?: string;
+        childId?: string;
+    }[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tree node for algorithm B                                          */
+/* ------------------------------------------------------------------ */
+interface TreeNodeB {
+    id: string;
+    children: TreeNodeB[];
+    leaves: TreeNodeB[];
+    spouses: TreeNodeB[];
+    width: number;
+    selfWidth: number;
+    centerShift: number;
+    lifespan: number;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Engine B                                                           */
+/* ------------------------------------------------------------------ */
+export class GenealogyLayoutEngineB {
+    private data: GedcomData;
+    private nodes: Map<string, LayoutNode> = new Map();
+    private visited = new Set<string>();
+    private cfg: typeof LAYOUT_CONFIG;
+
+    constructor(data: GedcomData, params?: Partial<LayoutParams>) {
+        this.data = data;
+        this.cfg = { ...LAYOUT_CONFIG };
+        if (params) {
+            if (params.generationPitch !== undefined) this.cfg.GENERATION_PITCH = params.generationPitch;
+            if (params.minGap !== undefined) this.cfg.MIN_GAP = params.minGap;
+            if (params.leafWidthRatio !== undefined) this.cfg.LEAF_WIDTH_RATIO = params.leafWidthRatio;
+        }
+    }
+
+    public computeLayout(rootId: string): LayoutNode[] {
+        this.nodes.clear();
+        this.visited.clear();
+
+        const root = this.data.individuals[rootId];
+        if (!root) return [];
+
+        this.visited.add(rootId);
+
+        const descendantTree = this.buildDescendantTree(rootId);
+        const ancestorTree = this.buildAncestorTree(rootId);
+
+        this.layoutDescendants(descendantTree, 0, 0);
+        this.layoutAncestors(ancestorTree, 0, 0);
+
+        return Array.from(this.nodes.values());
+    }
+
+    /* ============================================================== */
+    /*  Helpers                                                        */
+    /* ============================================================== */
+
+    private getLifespan(id: string): number {
+        const indi = this.data.individuals[id];
+        if (!indi) return this.cfg.DEFAULT_LIFESPAN;
+        const birth = indi.birthDate?.year ?? 1900;
+        let death = indi.deathDate?.year;
+        if (!death) death = birth + this.cfg.DEFAULT_LIFESPAN;
+        return Math.max(1, death - birth);
+    }
+
+    private getBirthYear(id: string): number {
+        return this.data.individuals[id]?.birthDate?.year ?? 1900;
+    }
+
+    private getMarriageYear(famId: string, selfId: string, spouseId?: string): number {
+        const fam = this.data.families[famId];
+        if (!fam) return 0;
+        if (fam.marriageDate?.year) return fam.marriageDate.year;
+        if (fam.childrenIds?.length) {
+            const fc = this.data.individuals[fam.childrenIds[0]];
+            if (fc?.birthDate?.year) return fc.birthDate.year - 1;
+        }
+        const selfBirth = this.getBirthYear(selfId);
+        let otherBirth = selfBirth;
+        if (spouseId) {
+            otherBirth = this.getBirthYear(spouseId);
+        } else {
+            const otherId = fam.husbandId === selfId ? fam.wifeId : fam.husbandId;
+            if (otherId) otherBirth = this.getBirthYear(otherId);
+        }
+        return Math.max(selfBirth, otherBirth) + 20;
+    }
+
+    private getZOffsetAtTime(indi: Individual, birth: number, life: number, time: number): number {
+        const progress = Math.min(1, Math.max(0, (time - birth) / life));
+        const depth = life;
+        return indi.gender === Gender.Female
+            ? -(depth / 2) + depth * progress
+            : (depth / 2) - depth * progress;
+    }
+
+    private calculateGroupZBounds(centerId: string, spouseNodes: TreeNodeB[]): { min: number; max: number; width: number } {
+        const centerIndi = this.data.individuals[centerId];
+        if (!centerIndi) return { min: 0, max: 0, width: this.cfg.DEFAULT_LIFESPAN };
+
+        const centerLifespan = this.getLifespan(centerId);
+        const centerBirth = this.getBirthYear(centerId);
+
+        let minZ = -centerLifespan / 2;
+        let maxZ = centerLifespan / 2;
+
+        for (const sp of spouseNodes) {
+            const spIndi = this.data.individuals[sp.id];
+            if (!spIndi) continue;
+
+            const spLife = this.getLifespan(sp.id);
+            const spBirth = this.getBirthYear(sp.id);
+
+            const famId = centerIndi.familySpouseIds?.find(fid => {
+                const f = this.data.families[fid];
+                return f && (f.husbandId === sp.id || f.wifeId === sp.id);
+            });
+            const mYear = famId
+                ? this.getMarriageYear(famId, centerId, sp.id)
+                : Math.max(centerBirth, spBirth) + 20;
+
+            const cOff = this.getZOffsetAtTime(centerIndi, centerBirth, centerLifespan, mYear);
+            const sOff = this.getZOffsetAtTime(spIndi, spBirth, spLife, mYear);
+
+            const relZ = cOff - sOff;
+            minZ = Math.min(minZ, relZ - spLife / 2);
+            maxZ = Math.max(maxZ, relZ + spLife / 2);
+        }
+
+        return { min: minZ, max: maxZ, width: maxZ - minZ };
+    }
+
+    private getSpouseZ(nodeId: string, spouseId: string, selfZ: number, lifespan: number): number {
+        const selfIndi = this.data.individuals[nodeId];
+        const spIndi = this.data.individuals[spouseId];
+        if (!selfIndi || !spIndi) return selfZ;
+
+        const famId = selfIndi.familySpouseIds?.find(fid => {
+            const f = this.data.families[fid];
+            return f && (f.husbandId === spouseId || f.wifeId === spouseId);
+        });
+        const mYear = famId
+            ? this.getMarriageYear(famId, nodeId, spouseId)
+            : Math.max(this.getBirthYear(nodeId), this.getBirthYear(spouseId)) + 20;
+
+        const selfOff = this.getZOffsetAtTime(selfIndi, this.getBirthYear(nodeId), lifespan, mYear);
+        const spOff = this.getZOffsetAtTime(spIndi, this.getBirthYear(spouseId), this.getLifespan(spouseId), mYear);
+        return selfZ + selfOff - spOff;
+    }
+
+    private placeSpouses(nodeId: string, selfZ: number, lifespan: number, spouses: TreeNodeB[], x: number, dir: number) {
+        for (const sp of spouses) {
+            const spZ = this.getSpouseZ(nodeId, sp.id, selfZ, lifespan);
+            this.createNodeMatrix(sp.id, x, spZ, dir);
+        }
+    }
+
+    private gpGroupWidth(gps: TreeNodeB[]): number {
+        return gps.reduce((s, n) => s + n.width, 0)
+            + Math.max(0, gps.length - 1) * this.cfg.MIN_GAP;
+    }
+
+    private leafGroupWidth(grp: TreeNodeB[]): number {
+        if (grp.length === 0) return 0;
+        return grp.reduce((s, l) => s + l.width, 0)
+            + Math.max(0, grp.length - 1) * this.cfg.MIN_GAP;
+    }
+
+    private assignLeavesToGaps(
+        ordBranch: TreeNodeB[], ordLeaves: TreeNodeB[], reverseZ: boolean,
+    ): TreeNodeB[][] {
+        const groups: TreeNodeB[][] = Array.from(
+            { length: ordBranch.length + 1 }, () => [],
+        );
+        let bi = 0, li = 0, gi = 0;
+        while (bi < ordBranch.length || li < ordLeaves.length) {
+            if (bi < ordBranch.length &&
+                (li >= ordLeaves.length ||
+                    (reverseZ
+                        ? this.getBirthYear(ordBranch[bi].id) >= this.getBirthYear(ordLeaves[li].id)
+                        : this.getBirthYear(ordBranch[bi].id) <= this.getBirthYear(ordLeaves[li].id)
+                    )
+                )) {
+                bi++;
+                gi = bi;
+            } else {
+                groups[gi].push(ordLeaves[li]);
+                li++;
+            }
+        }
+        return groups;
+    }
+
+    private placeLeafNode(leaf: TreeNodeB, x: number, center: number, dir: number) {
+        const selfZ = center - leaf.centerShift;
+        this.createNodeMatrix(leaf.id, x, selfZ, dir);
+        this.placeSpouses(leaf.id, selfZ, leaf.lifespan, leaf.spouses, x, dir);
+    }
+
+    /* ============================================================== */
+    /*  DESCENDANT tree building                                       */
+    /* ============================================================== */
+
+    private buildDescendantTree(indiId: string): TreeNodeB {
+        const indi = this.data.individuals[indiId];
+        const lifespan = this.getLifespan(indiId);
+
+        const spouseNodes: TreeNodeB[] = [];
+        const allChildren: TreeNodeB[] = [];
+
+        if (indi.familySpouseIds) {
+            for (const famId of indi.familySpouseIds) {
+                const fam = this.data.families[famId];
+                if (!fam) continue;
+
+                const spouseId = fam.husbandId === indiId ? fam.wifeId : fam.husbandId;
+                if (spouseId && !this.visited.has(spouseId)) {
+                    this.visited.add(spouseId);
+                    const sLife = this.getLifespan(spouseId);
+                    const sWidth = sLife * this.cfg.LEAF_WIDTH_RATIO;
+                    spouseNodes.push({
+                        id: spouseId, children: [], leaves: [], spouses: [],
+                        width: sWidth, selfWidth: sWidth, centerShift: 0, lifespan: sLife,
+                    });
+                }
+                if (fam.childrenIds) {
+                    for (const cid of fam.childrenIds) {
+                        if (!this.visited.has(cid)) {
+                            this.visited.add(cid);
+                            allChildren.push(this.buildDescendantTree(cid));
+                        }
+                    }
+                }
+            }
+        }
+
+        allChildren.sort((a, b) => this.getBirthYear(a.id) - this.getBirthYear(b.id));
+
+        const branching: TreeNodeB[] = [];
+        const leaves: TreeNodeB[] = [];
+        for (const c of allChildren) {
+            if (c.children.length > 0 || c.leaves.length > 0) {
+                branching.push(c);
+            } else {
+                leaves.push(c);
+            }
+        }
+
+        const bounds = this.calculateGroupZBounds(indiId, spouseNodes);
+        let groupWidth = bounds.width;
+        const centerShift = (bounds.min + bounds.max) / 2;
+
+        if (spouseNodes.length === 0 && allChildren.length === 0) {
+            groupWidth *= this.cfg.LEAF_WIDTH_RATIO;
+        }
+
+        let childrenWidth = 0;
+        if (branching.length > 0) {
+            const branchW = branching.reduce((s, c) => s + c.width, 0)
+                + Math.max(0, branching.length - 1) * this.cfg.MIN_GAP;
+
+            if (leaves.length === 0) {
+                childrenWidth = branchW;
+            } else {
+                const leafGroups = this.assignLeavesToGaps(branching, leaves, false);
+                const MG = this.cfg.MIN_GAP;
+
+                let overflow = 0;
+                for (let g = 1; g < branching.length; g++) {
+                    const grp = leafGroups[g];
+                    if (grp.length === 0) continue;
+                    const lw = this.leafGroupWidth(grp);
+                    const halfL = (branching[g - 1].width - branching[g - 1].selfWidth) / 2;
+                    const halfR = (branching[g].width - branching[g].selfWidth) / 2;
+                    const avail = halfL + MG + halfR;
+                    overflow += Math.max(0, lw + 2 * MG - avail);
+                }
+
+                const leftGrp = leafGroups[0];
+                if (leftGrp.length > 0) {
+                    const lw = this.leafGroupWidth(leftGrp);
+                    const halfUnused = (branching[0].width - branching[0].selfWidth) / 2;
+                    overflow += Math.max(0, lw + MG - halfUnused);
+                }
+
+                const rightGrp = leafGroups[branching.length];
+                if (rightGrp.length > 0) {
+                    const lw = this.leafGroupWidth(rightGrp);
+                    const last = branching.length - 1;
+                    const halfUnused = (branching[last].width - branching[last].selfWidth) / 2;
+                    overflow += Math.max(0, lw + MG - halfUnused);
+                }
+
+                childrenWidth = branchW + overflow;
+            }
+        } else if (leaves.length > 0) {
+            childrenWidth = this.leafGroupWidth(leaves);
+        }
+
+        const totalWidth = Math.max(groupWidth, childrenWidth);
+
+        return {
+            id: indiId, children: branching, leaves, spouses: spouseNodes,
+            width: totalWidth, selfWidth: groupWidth,
+            centerShift: spouseNodes.length > 0 ? centerShift : 0,
+            lifespan,
+        };
+    }
+
+    /* ============================================================== */
+    /*  ANCESTOR tree building                                         */
+    /* ============================================================== */
+
+    private buildAncestorTree(indiId: string): TreeNodeB {
+        const indi = this.data.individuals[indiId];
+        const lifespan = this.getLifespan(indiId);
+        const parentsNodes: TreeNodeB[] = [];
+
+        if (indi.familyChildId) {
+            const fam = this.data.families[indi.familyChildId];
+            if (fam) {
+                const fId = fam.husbandId;
+                const mId = fam.wifeId;
+
+                let fatherNode: TreeNodeB | null = null;
+                let motherNode: TreeNodeB | null = null;
+
+                if (fId && !this.visited.has(fId)) {
+                    this.visited.add(fId);
+                    fatherNode = this.buildAncestorTree(fId);
+                }
+                if (mId && !this.visited.has(mId)) {
+                    this.visited.add(mId);
+                    motherNode = this.buildAncestorTree(mId);
+                }
+
+                if (fatherNode && motherNode) {
+                    fatherNode.spouses.push(motherNode);
+                    const cb = this.calculateGroupZBounds(fatherNode.id, [motherNode]);
+                    fatherNode.selfWidth = cb.width;
+                    fatherNode.centerShift = (cb.min + cb.max) / 2;
+                    const fHasAnc = fatherNode.children.length > 0;
+                    const mHasAnc = motherNode.children.length > 0;
+                    let ancestorsWidth = 0;
+                    if (fHasAnc && mHasAnc) {
+                        ancestorsWidth = fatherNode.width + motherNode.width + this.cfg.MIN_GAP;
+                    } else if (fHasAnc) {
+                        ancestorsWidth = fatherNode.width;
+                    } else if (mHasAnc) {
+                        ancestorsWidth = motherNode.width;
+                    }
+                    fatherNode.width = Math.max(cb.width, ancestorsWidth);
+                    parentsNodes.push(fatherNode);
+                } else if (fatherNode) {
+                    parentsNodes.push(fatherNode);
+                } else if (motherNode) {
+                    parentsNodes.push(motherNode);
+                }
+            }
+        }
+
+        let selfWidth = lifespan;
+        if (parentsNodes.length === 0) {
+            selfWidth *= this.cfg.LEAF_WIDTH_RATIO;
+        }
+
+        const parentsWidth = parentsNodes.reduce((s, p) => s + p.width, 0)
+            + Math.max(0, parentsNodes.length - 1) * this.cfg.MIN_GAP;
+        const totalWidth = Math.max(selfWidth, parentsWidth);
+
+        return {
+            id: indiId, children: parentsNodes, leaves: [], spouses: [],
+            width: totalWidth, selfWidth, centerShift: 0, lifespan,
+        };
+    }
+
+    /* ============================================================== */
+    /*  DESCENDANT layout                                              */
+    /* ============================================================== */
+
+    private layoutDescendants(node: TreeNodeB, x: number, zCenter: number) {
+        const selfZ = zCenter - node.centerShift;
+        this.createNodeMatrix(node.id, x, selfZ, 1);
+        this.placeSpouses(node.id, selfZ, node.lifespan, node.spouses, x, 1);
+
+        const { children: branching, leaves } = node;
+        const allCount = branching.length + leaves.length;
+        if (allCount === 0) return;
+
+        const childX = x + this.cfg.GENERATION_PITCH;
+        const MG = this.cfg.MIN_GAP;
+
+        const nodeIndi = this.data.individuals[node.id];
+        const hasFemalePartner = (nodeIndi?.familySpouseIds ?? []).some(famId => {
+            const fam = this.data.families[famId];
+            if (!fam) return false;
+            const spId = fam.husbandId === node.id ? fam.wifeId : fam.husbandId;
+            if (!spId) return false;
+            const spIndi = this.data.individuals[spId];
+            return spIndi?.gender === Gender.Female;
+        });
+        const reverseZ = (nodeIndi?.gender === Gender.Male) && !hasFemalePartner;
+
+        let cMinZ = selfZ - node.lifespan / 2;
+        let cMaxZ = selfZ + node.lifespan / 2;
+        for (const sp of node.spouses) {
+            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan);
+            const spLife = this.getLifespan(sp.id);
+            cMinZ = Math.min(cMinZ, spZ - spLife / 2);
+            cMaxZ = Math.max(cMaxZ, spZ + spLife / 2);
+        }
+        const coupleCenter = (cMinZ + cMaxZ) / 2;
+
+        const hasDesc = (c: TreeNodeB) => c.children.length > 0 || c.leaves.length > 0;
+
+        const allSorted = [...branching, ...leaves]
+            .sort((a, b) => this.getBirthYear(a.id) - this.getBirthYear(b.id));
+        const ordAll = reverseZ ? [...allSorted].reverse() : allSorted;
+
+        // --- Single child ---
+        if (ordAll.length === 1) {
+            let connectZ = coupleCenter;
+            if (node.spouses.length > 0 && nodeIndi?.gender === Gender.Male) {
+                connectZ = this.getSpouseZ(node.id, node.spouses[0].id, selfZ, node.lifespan);
+            }
+            const child = ordAll[0];
+            if (hasDesc(child)) {
+                this.layoutDescendants(child, childX, connectZ);
+            } else {
+                this.placeLeafNode(child, childX, connectZ, 1);
+            }
+            return;
+        }
+
+        // --- Separate into ordered branching / leaves ---
+        const ordBranch = ordAll.filter(c => hasDesc(c));
+        const ordLeaves = ordAll.filter(c => !hasDesc(c));
+
+        // --- All leaves, no branching ---
+        if (ordBranch.length === 0) {
+            const totalW = this.leafGroupWidth(ordLeaves);
+            let cur = coupleCenter - totalW / 2;
+            for (const leaf of ordLeaves) {
+                this.placeLeafNode(leaf, childX, cur + leaf.width / 2, 1);
+                cur += leaf.width + MG;
+            }
+            return;
+        }
+
+        // --- Interleaving with gap expansion ---
+        const leafGroups = this.assignLeavesToGaps(ordBranch, ordLeaves, reverseZ);
+        const lastBI = ordBranch.length - 1;
+
+        // Interior gap expansions
+        const gapExp: number[] = [];
+        for (let i = 0; i < lastBI; i++) {
+            const grp = leafGroups[i + 1];
+            if (grp.length === 0) { gapExp.push(0); continue; }
+            const lw = this.leafGroupWidth(grp);
+            const halfL = (ordBranch[i].width - ordBranch[i].selfWidth) / 2;
+            const halfR = (ordBranch[i + 1].width - ordBranch[i + 1].selfWidth) / 2;
+            const avail = halfL + MG + halfR;
+            gapExp.push(Math.max(0, lw + 2 * MG - avail));
+        }
+
+        // Edge overflows
+        const leftGrp = leafGroups[0];
+        const leftLW = this.leafGroupWidth(leftGrp);
+        const halfUnused0 = (ordBranch[0].width - ordBranch[0].selfWidth) / 2;
+        const leftExtra = leftGrp.length > 0 ? Math.max(0, leftLW + MG - halfUnused0) : 0;
+
+        const rightGrp = leafGroups[ordBranch.length];
+        const rightLW = this.leafGroupWidth(rightGrp);
+        const halfUnusedN = (ordBranch[lastBI].width - ordBranch[lastBI].selfWidth) / 2;
+        const rightExtra = rightGrp.length > 0 ? Math.max(0, rightLW + MG - halfUnusedN) : 0;
+
+        // Expanded branching width
+        const expandedBranchW = ordBranch.reduce((s, c) => s + c.width, 0)
+            + lastBI * MG
+            + gapExp.reduce((s, e) => s + e, 0);
+        const totalW = leftExtra + expandedBranchW + rightExtra;
+
+        // Pre-compute branching centers
+        const branchCenters: number[] = [];
+        let cur = coupleCenter - totalW / 2 + leftExtra;
+        for (let i = 0; i <= lastBI; i++) {
+            branchCenters.push(cur + ordBranch[i].width / 2);
+            cur += ordBranch[i].width;
+            if (i < lastBI) cur += MG + gapExp[i];
+        }
+
+        // Place branching children
+        for (let i = 0; i <= lastBI; i++) {
+            this.layoutDescendants(ordBranch[i], childX, branchCenters[i]);
+        }
+
+        // Place left edge leaves (right-aligned against the first couple)
+        if (leftGrp.length > 0) {
+            const coupleLeft = branchCenters[0] - ordBranch[0].selfWidth / 2;
+            let lc = coupleLeft - MG - leftLW;
+            for (const leaf of leftGrp) {
+                this.placeLeafNode(leaf, childX, lc + leaf.width / 2, 1);
+                lc += leaf.width + MG;
+            }
+        }
+
+        // Place interior leaves (centered between adjacent couples)
+        for (let g = 1; g <= lastBI; g++) {
+            const grp = leafGroups[g];
+            if (grp.length === 0) continue;
+            const coupleRight = branchCenters[g - 1] + ordBranch[g - 1].selfWidth / 2;
+            const coupleLeft = branchCenters[g] - ordBranch[g].selfWidth / 2;
+            const gapMid = (coupleRight + coupleLeft) / 2;
+            const lw = this.leafGroupWidth(grp);
+            let lc = gapMid - lw / 2;
+            for (const leaf of grp) {
+                this.placeLeafNode(leaf, childX, lc + leaf.width / 2, 1);
+                lc += leaf.width + MG;
+            }
+        }
+
+        // Place right edge leaves (left-aligned against the last couple)
+        if (rightGrp.length > 0) {
+            const coupleRight = branchCenters[lastBI] + ordBranch[lastBI].selfWidth / 2;
+            let lc = coupleRight + MG;
+            for (const leaf of rightGrp) {
+                this.placeLeafNode(leaf, childX, lc + leaf.width / 2, 1);
+                lc += leaf.width + MG;
+            }
+        }
+    }
+
+    /* ============================================================== */
+    /*  ANCESTOR layout                                                */
+    /*  Convention matching A: paternal GPs → +Z, maternal GPs → −Z   */
+    /* ============================================================== */
+
+    private layoutAncestors(node: TreeNodeB, x: number, zCenter: number) {
+        const selfZ = zCenter - node.centerShift;
+        this.createNodeMatrix(node.id, x, selfZ, -1);
+
+        let minZ = selfZ - node.lifespan / 2;
+        let maxZ = selfZ + node.lifespan / 2;
+
+        const spouseZList: { node: TreeNodeB; z: number }[] = [];
+        for (const sp of node.spouses) {
+            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan);
+            this.createNodeMatrix(sp.id, x, spZ, -1);
+            const spLife = this.getLifespan(sp.id);
+            minZ = Math.min(minZ, spZ - spLife / 2);
+            maxZ = Math.max(maxZ, spZ + spLife / 2);
+            spouseZList.push({ node: sp, z: spZ });
+        }
+
+        const patGPs = node.children;
+        const motherEntry = spouseZList.length > 0 ? spouseZList[0] : null;
+        const matGPs = motherEntry ? motherEntry.node.children : [];
+
+        if (patGPs.length === 0 && matGPs.length === 0) return;
+
+        const parentX = x - this.cfg.GENERATION_PITCH;
+
+        if (matGPs.length === 0) {
+            this.layoutGPGroup(patGPs, parentX, zCenter);
+            return;
+        }
+        if (patGPs.length === 0) {
+            this.layoutGPGroup(matGPs, parentX, zCenter);
+            return;
+        }
+
+        // Both exist: paternal → +Z side, maternal → −Z side (matching A)
+        const patW = this.gpGroupWidth(patGPs);
+        const matW = this.gpGroupWidth(matGPs);
+        const coupleCenter = (minZ + maxZ) / 2;
+        const MG = this.cfg.MIN_GAP;
+
+        // Compact positioning: use geometric mean of selfWidth and full width
+        // so shallow sides stay close to center while deep sides expand outward.
+        const patTopSW = patGPs.length === 1 ? patGPs[0].selfWidth : patW;
+        const matTopSW = matGPs.length === 1 ? matGPs[0].selfWidth : matW;
+        const patEffW = Math.sqrt(patW * patTopSW);
+        const matEffW = Math.sqrt(matW * matTopSW);
+
+        const patCenter = coupleCenter + matEffW / 2 + MG / 2;
+        const matCenter = coupleCenter - patEffW / 2 - MG / 2;
+
+        this.layoutGPGroup(patGPs, parentX, patCenter);
+        this.layoutGPGroup(matGPs, parentX, matCenter);
+    }
+
+    private layoutGPGroup(gps: TreeNodeB[], x: number, center: number) {
+        if (gps.length === 1) {
+            this.layoutAncestors(gps[0], x, center);
+            return;
+        }
+        const totalW = this.gpGroupWidth(gps);
+        let cursor = center - totalW / 2;
+        for (const gp of gps) {
+            this.layoutAncestors(gp, x, cursor + gp.width / 2);
+            cursor += gp.width + this.cfg.MIN_GAP;
+        }
+    }
+
+    /* ============================================================== */
+    /*  createNodeMatrix                                               */
+    /* ============================================================== */
+
+    private createNodeMatrix(id: string, x: number, z: number, direction: number) {
+        const existing = this.nodes.get(id);
+        const indi = this.data.individuals[id];
+        if (!indi) return;
+
+        const birthYear = this.getBirthYear(id);
+        let deathYear = indi.deathDate?.year;
+        if (!deathYear) deathYear = birthYear + this.cfg.DEFAULT_LIFESPAN;
+
+        const lifespan = Math.max(1, deathYear - birthYear);
+        const centerY = (birthYear + lifespan / 2) - this.cfg.CURRENT_YEAR;
+
+        const matrix = new Matrix4();
+        matrix.makeScale(this.cfg.BOX_THICKNESS, lifespan, lifespan);
+        matrix.setPosition(x, centerY, z);
+
+        const color = new Color(
+            indi.gender === Gender.Female ? '#f9a8d4'
+                : indi.gender === Gender.Male ? '#93c5fd'
+                : '#d1d5db',
+        );
+
+        if (existing) {
+            existing.matrix = matrix;
+            return;
+        }
+
+        const traits: LayoutNode['traits'] = [];
+        if (indi.birthDate?.year) traits.push({ type: 'birth', offset: 0 });
+        if (indi.deathDate?.year) traits.push({ type: 'death', offset: lifespan });
+
+        if (indi.familySpouseIds) {
+            for (const famId of indi.familySpouseIds) {
+                const fam = this.data.families[famId];
+                if (!fam) continue;
+
+                const spouseId = fam.husbandId === id ? fam.wifeId : fam.husbandId;
+                const mYear = this.getMarriageYear(famId, id, spouseId);
+                const offset = mYear - birthYear;
+
+                if (offset > 0 && offset < lifespan) {
+                    traits.push({ type: 'marriage', offset, spouseId });
+                }
+
+                if (fam.childrenIds) {
+                    const isFather = indi.gender === Gender.Male;
+                    const hasMother = !!fam.wifeId;
+                    if (!(isFather && hasMother)) {
+                        for (const childId of fam.childrenIds) {
+                            const child = this.data.individuals[childId];
+                            if (child) {
+                                const cBirth = this.getBirthYear(childId);
+                                const cOff = cBirth - birthYear;
+                                traits.push({ type: 'child', offset: Math.min(Math.max(0, cOff), lifespan), childId });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        this.nodes.set(id, {
+            id, matrix, color,
+            generation: Math.round(x / this.cfg.GENERATION_PITCH),
+            birthYear, lifespan,
+            gender: indi.gender,
+            hasBirthDate: !!indi.birthDate?.year,
+            hasDeathDate: !!indi.deathDate?.year,
+            traits,
+        });
+    }
+}

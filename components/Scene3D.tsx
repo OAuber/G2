@@ -3,9 +3,9 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { Vector3, Quaternion, Matrix4 as M4, MOUSE, TOUCH } from 'three';
-import { Individual, GedcomData, Gender, DragMode, RenderedPerson, CameraMode } from '../types';
+import { Individual, GedcomData, Gender, DragMode, RenderedPerson, CameraMode, LayoutParams } from '../types';
 import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geometryService';
-import { GenealogyLayoutEngine, LayoutNode } from '../services/layoutEngine';
+import { LayoutNode, GenealogyLayoutEngineB } from '../services/layoutEngineB';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 // --- Camera Controller ---
@@ -207,6 +207,7 @@ interface Scene3DProps {
   setExtraIndividuals: React.Dispatch<React.SetStateAction<RenderedPerson[]>>;
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
   onSetAutoLayoutMode?: (mode: 'none' | 'ancestors' | 'descendants' | 'all') => void;
+  layoutParams?: LayoutParams;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -227,7 +228,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
   extraIndividuals,
   setExtraIndividuals,
   autoLayoutMode = 'none',
-  onSetAutoLayoutMode
+  onSetAutoLayoutMode,
+  layoutParams,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
@@ -239,7 +241,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
     if (autoLayoutMode === 'none' || !data || !rootIndividual) return { filteredLayoutNodes: [], allLayoutNodes: [] };
     
     try {
-        const engine = new GenealogyLayoutEngine(data);
+        const engine = new GenealogyLayoutEngineB(data, layoutParams);
         const allNodes = engine.computeLayout(rootIndividual.id);
         let filtered: LayoutNode[] = [];
     
@@ -255,7 +257,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         console.error("Layout Engine Error:", e);
         return { filteredLayoutNodes: [], allLayoutNodes: [] };
     }
-  }, [autoLayoutMode, data, rootIndividual]);
+  }, [autoLayoutMode, data, rootIndividual, layoutParams]);
 
 
   useEffect(() => {

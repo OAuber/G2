@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { User, Plus, Trash2, Edit, Link2 } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { User, Plus, Trash2, Edit, Link2, X } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender } from '../types';
 import { parseDate } from '../services/gedcomParser';
 
@@ -38,6 +38,154 @@ interface DetailsPanelProps {
   isDarkMode: boolean;
 }
 
+/* ------------------------------------------------------------------ */
+/*  SearchSelect: searchable dropdown replacing native <select>        */
+/*  Only renders up to MAX_RESULTS items → scales to any dataset size  */
+/* ------------------------------------------------------------------ */
+const MAX_RESULTS = 30;
+
+interface SearchSelectProps {
+  value: string;
+  onChange: (id: string) => void;
+  options: Individual[];
+  placeholder: string;
+  inputBg: string;
+  textClass: string;
+  subTextClass: string;
+}
+
+const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
+  value, onChange, options, placeholder, inputBg, textClass, subTextClass,
+}) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const selectedName = useMemo(() => {
+    if (!value) return '';
+    const p = options.find(o => o.id === value);
+    return p ? `${p.givenName} ${p.surname}` : value;
+  }, [value, options]);
+
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return options.slice(0, MAX_RESULTS);
+    return options.filter(p =>
+      `${p.givenName} ${p.surname}`.toLowerCase().includes(q),
+    ).slice(0, MAX_RESULTS);
+  }, [options, query]);
+
+  const handleFocus = useCallback(() => { setOpen(true); setQuery(''); }, []);
+  const handleBlur = useCallback(() => { setTimeout(() => setOpen(false), 160); }, []);
+
+  return (
+    <div className="relative">
+      <input
+        className={`w-full rounded px-2 py-1 pr-7 text-sm border outline-none ${inputBg}`}
+        placeholder={placeholder}
+        value={open ? query : selectedName}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onChange={e => setQuery(e.target.value)}
+      />
+      {value && !open && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-red-400 hover:text-red-300"
+        ><X className="w-3 h-3" /></button>
+      )}
+      {open && (
+        <div className={`absolute z-50 left-0 right-0 mt-1 max-h-44 overflow-y-auto rounded border shadow-lg ${inputBg}`}>
+          <div
+            className={`px-2 py-1 text-xs italic cursor-pointer hover:bg-blue-500/20 ${subTextClass}`}
+            onMouseDown={e => { e.preventDefault(); onChange(''); setOpen(false); }}
+          >— None —</div>
+          {filtered.map(p => (
+            <div
+              key={p.id}
+              className={`px-2 py-1 text-xs cursor-pointer hover:bg-blue-500/20 ${textClass} ${p.id === value ? 'bg-blue-500/30 font-bold' : ''}`}
+              onMouseDown={e => { e.preventDefault(); onChange(p.id); setOpen(false); setQuery(''); }}
+            >
+              {p.givenName} {p.surname}
+              {p.birthDate?.year ? ` (${p.birthDate.year})` : ''}
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div className={`px-2 py-1 text-xs italic ${subTextClass}`}>No match</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/*  SearchMultiSelect: searchable checkbox list for children           */
+/* ------------------------------------------------------------------ */
+interface SearchMultiSelectProps {
+  values: string[];
+  onChange: (ids: string[]) => void;
+  options: Individual[];
+  inputBg: string;
+  textClass: string;
+  subTextClass: string;
+}
+
+const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
+  values, onChange, options, inputBg, textClass, subTextClass,
+}) => {
+  const [query, setQuery] = useState('');
+
+  const filtered = useMemo(() => {
+    const selected = options.filter(p => values.includes(p.id));
+    const q = query.toLowerCase().trim();
+    if (!q) {
+      const others = options.filter(p => !values.includes(p.id)).slice(0, MAX_RESULTS);
+      return [...selected, ...others];
+    }
+    const matches = options.filter(p =>
+      `${p.givenName} ${p.surname}`.toLowerCase().includes(q),
+    ).slice(0, MAX_RESULTS);
+    return matches;
+  }, [options, query, values]);
+
+  const toggle = useCallback((id: string, checked: boolean) => {
+    onChange(checked ? [...values, id] : values.filter(v => v !== id));
+  }, [values, onChange]);
+
+  return (
+    <div>
+      <input
+        className={`w-full rounded px-2 py-1 text-sm border outline-none mb-1 ${inputBg}`}
+        placeholder="Search children…"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+      />
+      <div className={`max-h-32 overflow-y-auto rounded border ${inputBg} p-1.5 space-y-0.5`}>
+        {filtered.length === 0 ? (
+          <p className={`text-xs italic px-1 ${subTextClass}`}>No match</p>
+        ) : filtered.map(p => (
+          <label
+            key={p.id}
+            className={`flex items-center gap-2 cursor-pointer p-1 rounded text-xs ${values.includes(p.id) ? 'bg-blue-500/20' : ''} hover:bg-blue-500/10`}
+          >
+            <input
+              type="checkbox"
+              checked={values.includes(p.id)}
+              onChange={e => toggle(p.id, e.target.checked)}
+              className="w-3.5 h-3.5"
+            />
+            <span className={textClass}>{p.givenName} {p.surname}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/*  DetailsPanel                                                       */
+/* ------------------------------------------------------------------ */
 const DetailsPanel: React.FC<DetailsPanelProps> = ({ 
   individual, 
   data, 
@@ -69,9 +217,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   useEffect(() => {
     if (isCreating) {
       setFormData({ givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: [] });
-      setIsEditing(false); // NOT editing, we're creating - relationships should be active!
+      setIsEditing(false);
     } else if (individual && data) {
-      // Pre-fill form for editing
       let fatherId = '', motherId = '', spouseId = '', childrenIds: string[] = [];
       
       if (individual.familyChildId && data.families[individual.familyChildId]) {
@@ -81,7 +228,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       }
       
       if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
-         // Simplify: Take the first spouse for editing form
          const fam = data.families[individual.familySpouseIds[0]];
          if (fam) {
             spouseId = (fam.husbandId === individual.id ? fam.wifeId : fam.husbandId) || '';
@@ -89,7 +235,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
          }
       }
 
-      // Get marriage date from first family
       let marriageDate = '';
       if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
         const fam = data.families[individual.familySpouseIds[0]];
@@ -110,14 +255,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       });
       setIsEditing(false);
     } else {
-      // Reset editing mode if no individual is selected (and not creating)
-      // This ensures the "Create New" button reappears when deselecting an individual
       setIsEditing(false);
     }
     setShowDeleteConfirm(false);
   }, [isCreating, individual?.id, data]);
 
-  const allIndividuals = useMemo(() => data ? (Object.values(data.individuals) as Individual[]).sort((a, b) => (a.givenName + a.surname).localeCompare(b.givenName + b.surname)) : [], [data]);
+  const allIndividuals = useMemo(() =>
+    data ? (Object.values(data.individuals) as Individual[]).sort((a, b) =>
+      (a.givenName + a.surname).localeCompare(b.givenName + b.surname)
+    ) : [],
+  [data]);
+
   const availableMen = useMemo(() => allIndividuals.filter(i => i.gender === Gender.Male), [allIndividuals]);
   const availableWomen = useMemo(() => allIndividuals.filter(i => i.gender === Gender.Female), [allIndividuals]);
 
@@ -144,17 +292,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const cardBg = isDarkMode ? 'bg-neutral-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
   const actionBtnClass = isDarkMode ? 'bg-neutral-700 hover:bg-neutral-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white';
 
-  // Tab Handle Styles
   const handleBg = isDarkMode 
     ? 'bg-black text-slate-400 border-slate-800 hover:bg-neutral-900' 
     : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50';
 
-  // --- Safe Extraction Helpers for Render ---
   const parentFamily = (individual && data && individual.familyChildId) ? data.families[individual.familyChildId] : null;
   const fatherId = parentFamily?.husbandId;
   const motherId = parentFamily?.wifeId;
   
-  // Date Calc Helper
   const DateDisplay = ({ label, date }: { label: string, date?: { year: number | null, isCalculated?: boolean } }) => (
       <div className="flex justify-between items-center">
           <span className={subTextClass}>{label}</span>
@@ -186,7 +331,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </span>
       </button>
 
-      {/* Top Creation Button (Replacing Header) */}
+      {/* Top Creation Button */}
       <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
         {!isCreating && (
             <button onClick={onCreateNew} className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg}`}>
@@ -230,26 +375,37 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <input placeholder="Death Year" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathDate} onChange={e => setFormData({...formData, deathDate: e.target.value})} />
              </div>
 
-             {/* Relationships Logic - Active for both Creation and Editing */}
-             <div className={`space-y-3 pt-2`}>
+             {/* Relationships — searchable dropdowns */}
+             <div className="space-y-3 pt-2">
                 <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Relationships</label>
                 
-                <select className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.fatherId} onChange={e => setFormData({...formData, fatherId: e.target.value})}>
-                    <option value="">Select Father...</option>
-                    {availableMen.map(p => <option key={p.id} value={p.id}>{p.givenName} {p.surname}</option>)}
-                </select>
+                <label className={`block text-[10px] ${subTextClass}`}>Father</label>
+                <SearchSelect
+                  value={formData.fatherId}
+                  onChange={id => setFormData({...formData, fatherId: id})}
+                  options={availableMen}
+                  placeholder="Search father…"
+                  inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
+                />
 
-                <select className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.motherId} onChange={e => setFormData({...formData, motherId: e.target.value})}>
-                    <option value="">Select Mother...</option>
-                    {availableWomen.map(p => <option key={p.id} value={p.id}>{p.givenName} {p.surname}</option>)}
-                </select>
+                <label className={`block text-[10px] ${subTextClass}`}>Mother</label>
+                <SearchSelect
+                  value={formData.motherId}
+                  onChange={id => setFormData({...formData, motherId: id})}
+                  options={availableWomen}
+                  placeholder="Search mother…"
+                  inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
+                />
 
-                <select className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.spouseId} onChange={e => setFormData({...formData, spouseId: e.target.value})}>
-                    <option value="">Select Spouse...</option>
-                    {allIndividuals.map(p => <option key={p.id} value={p.id}>{p.givenName} {p.surname}</option>)}
-                </select>
+                <label className={`block text-[10px] ${subTextClass}`}>Spouse</label>
+                <SearchSelect
+                  value={formData.spouseId}
+                  onChange={id => setFormData({...formData, spouseId: id})}
+                  options={allIndividuals}
+                  placeholder="Search spouse…"
+                  inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
+                />
                 
-                {/* Marriage Date - only shown if spouse is selected */}
                 {formData.spouseId && (
                   <div>
                     <label className={`block text-xs ${subTextClass} mb-1`}>Marriage Year</label>
@@ -262,40 +418,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   </div>
                 )}
                 
-                {/* Children - Checkbox list (better UX for multiple selection) */}
+                {/* Children — searchable multi-select */}
                 <div>
                   <label className={`block text-xs font-bold ${subTextClass} mb-2`}>
                     Children ({formData.childrenIds.length} selected)
                   </label>
-                  <div className={`max-h-32 overflow-y-auto rounded border ${inputBg} p-2 space-y-1`}>
-                    {allIndividuals.length === 0 ? (
-                      <p className={`text-xs italic ${subTextClass}`}>No other individuals to select</p>
-                    ) : (
-                      allIndividuals.map(p => (
-                        <label 
-                          key={p.id} 
-                          className={`flex items-center gap-2 cursor-pointer hover:bg-opacity-80 p-1 rounded ${
-                            formData.childrenIds.includes(p.id) ? 'bg-blue-500/20' : ''
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={formData.childrenIds.includes(p.id)}
-                            onChange={e => {
-                              const newChildren = e.target.checked
-                                ? [...formData.childrenIds, p.id]
-                                : formData.childrenIds.filter(id => id !== p.id);
-                              setFormData({...formData, childrenIds: newChildren});
-                            }}
-                            className="w-4 h-4"
-                          />
-                          <span className={`text-xs ${textClass}`}>
-                            {p.givenName} {p.surname}
-                          </span>
-                        </label>
-                      ))
-                    )}
-                  </div>
+                  <SearchMultiSelect
+                    values={formData.childrenIds}
+                    onChange={ids => setFormData({...formData, childrenIds: ids})}
+                    options={allIndividuals}
+                    inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
+                  />
                 </div>
              </div>
 
@@ -343,7 +476,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
             {/* Relationships Display */}
             <div className="space-y-4">
-                {/* Parents */}
                 <div>
                     <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Parents</h4>
                     {parentFamily ? (
@@ -364,7 +496,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     ) : <div className={`text-xs italic ${subTextClass}`}>No parents recorded.</div>}
                 </div>
 
-                {/* Spouses & Children */}
                 <div>
                     <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Family Unions</h4>
                     {individual.familySpouseIds && individual.familySpouseIds.length > 0 ? (

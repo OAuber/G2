@@ -11,7 +11,28 @@ export type DragMode = 'ancestors' | 'descendants';
 export type ViewMode = '3D' | '2D';
 export type CameraMode = 'top' | 'individual' | 'free';
 export type IndividualSource = 'imported' | 'manual' | 'p2p';
-export type SortMode = 'name' | 'birth-asc' | 'birth-desc';
+export type SortMode = 'name' | 'birth-asc' | 'birth-desc' | 'death-asc' | 'death-desc' | 'lifespan';
+export type FilterTag =
+  | 'manual'
+  | 'male'
+  | 'female'
+  | 'unknown-gender'
+  | 'unknown-dates'
+  | 'calculated-dates'
+  | 'no-parents'
+  | 'no-spouse';
+export interface LayoutParams {
+  generationPitch: number;
+  minGap: number;
+  leafWidthRatio: number;
+}
+
+export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
+  generationPitch: 40,
+  minGap: 2,
+  leafWidthRatio: 0.6,
+};
+
 export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type P2PMode = 'host' | 'client' | null;
 

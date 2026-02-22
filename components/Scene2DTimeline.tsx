@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrthographicCamera, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode } from '../types';
-import { LayoutNode } from '../services/layoutEngine';
+import { LayoutNode } from '../services/layoutEngineB';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 
 interface Scene2DTimelineProps {

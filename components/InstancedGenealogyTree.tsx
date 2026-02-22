@@ -2,7 +2,7 @@ import React, { useLayoutEffect, useRef, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useFrame } from '@react-three/fiber';
 import { Text, Billboard } from '@react-three/drei';
-import { LayoutNode } from '../services/layoutEngine';
+import { LayoutNode } from '../services/layoutEngineB';
 import { Gender, GedcomData } from '../types';
 
 interface InstancedTreeProps {

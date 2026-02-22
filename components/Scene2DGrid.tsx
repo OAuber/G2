@@ -1,8 +1,9 @@
-import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect } from 'react';
+import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrthographicCamera } from '@react-three/drei';
+import { OrthographicCamera, Text } from '@react-three/drei';
 import * as THREE from 'three';
-import { Individual, GedcomData, Gender, SortMode } from '../types';
+import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
+import { matchesFilters, applySortMode } from './Sidebar';
 
 interface Scene2DGridProps {
   data: GedcomData | null;
@@ -11,6 +12,7 @@ interface Scene2DGridProps {
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
   sortMode?: SortMode;
+  activeFilters?: Set<FilterTag>;
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
 }
@@ -18,21 +20,21 @@ interface Scene2DGridProps {
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
-const CELL_W = 1;
 const CELL_H = 1.4;
-const GAP = 0.10;
-const STEP_X = CELL_W + GAP;
-const STEP_Y = CELL_H + GAP;
-const MARGIN = GAP;
+const DEFAULT_LIFESPAN = 80;
+const MAX_REFERENCE_LIFESPAN = 120;
+
+const YEAR = CELL_H / MAX_REFERENCE_LIFESPAN;
+const RIBBON_W  = 10 * YEAR;
+const TRAIT_W   = 12 * YEAR;
+const TIRET_W   =  4 * YEAR;
+const TRAIT_H   =  1.5 * YEAR;
+const STEP_X    = 40 * YEAR;   // ribbon (10) + gap (30)
+const STEP_Y    = CELL_H + 10 * YEAR;
+const MARGIN    = 5 * YEAR;
 
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 500;
-
-const RIBBON_W = 0.25;
-const TRAIT_H = 0.04;
-const TIRET_W = 0.12;
-const DEFAULT_LIFESPAN = 80;
-const MAX_REFERENCE_LIFESPAN = 120;
 
 /* ------------------------------------------------------------------ */
 /*  Color palettes (aligned with 3D view)                              */
@@ -56,23 +58,6 @@ const COLORS_SELECT: Record<string, THREE.Color> = {
 function defaultColor(g: Gender)  { return COLORS_DEFAULT[g] ?? COLORS_DEFAULT[Gender.Unknown]; }
 function hoverColor(g: Gender)    { return COLORS_HOVER[g]   ?? COLORS_HOVER[Gender.Unknown]; }
 function selectColor(g: Gender)   { return COLORS_SELECT[g]  ?? COLORS_SELECT[Gender.Unknown]; }
-
-/* ------------------------------------------------------------------ */
-/*  Sorting                                                            */
-/* ------------------------------------------------------------------ */
-function sortIndividuals(list: Individual[], mode: SortMode): Individual[] {
-  const sorted = [...list];
-  switch (mode) {
-    case 'birth-asc':
-      return sorted.sort((a, b) => (a.birthDate?.year ?? 9999) - (b.birthDate?.year ?? 9999));
-    case 'birth-desc':
-      return sorted.sort((a, b) => (b.birthDate?.year ?? 0) - (a.birthDate?.year ?? 0));
-    case 'name':
-      return sorted.sort((a, b) => `${a.surname}${a.givenName}`.localeCompare(`${b.surname}${b.givenName}`));
-    default:
-      return sorted;
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /*  Ribbon data: traits computed from GEDCOM                           */
@@ -237,8 +222,11 @@ const GridContent: React.FC<GridContentProps> = ({
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
+  const [hoveredIdx, setHoveredIdx] = useState(-1);
   const colsRef = useRef(0);
   const initializedRef = useRef(false);
+  const needsCenterRef = useRef(false);
+  const prevSelectedIdRef = useRef(selectedId);
   const { camera } = useThree();
 
   const ribbonData = useMemo(
@@ -250,6 +238,11 @@ const GridContent: React.FC<GridContentProps> = ({
     if (ribbonData.length === 0) return DEFAULT_LIFESPAN;
     return MAX_REFERENCE_LIFESPAN;
   }, [ribbonData]);
+
+  const selectedIdx = useMemo(() => {
+    if (!selectedId) return -1;
+    return ribbonData.findIndex(rd => rd.individual.id === selectedId);
+  }, [ribbonData, selectedId]);
 
   const totalTraits = useMemo(
     () => ribbonData.reduce((s, r) => s + r.traits.length, 0),
@@ -265,10 +258,15 @@ const GridContent: React.FC<GridContentProps> = ({
       'aFadingMode',
       new THREE.InstancedBufferAttribute(new Float32Array(count), 1),
     );
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
     return g;
   }, [individuals.length]);
 
-  const traitGeometry = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
+  const traitGeometry = useMemo(() => {
+    const g = new THREE.PlaneGeometry(1, 1);
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
+    return g;
+  }, []);
 
   /* ---- Materials ---- */
 
@@ -333,6 +331,13 @@ const GridContent: React.FC<GridContentProps> = ({
     colsRef.current = 0;
   }, [ribbonData]);
 
+  useEffect(() => {
+    if (selectedId && selectedId !== prevSelectedIdRef.current) {
+      needsCenterRef.current = true;
+    }
+    prevSelectedIdRef.current = selectedId;
+  }, [selectedId]);
+
   /* ---- Colors & fading (sync, before first paint) ---- */
 
   useLayoutEffect(() => {
@@ -380,6 +385,16 @@ const GridContent: React.FC<GridContentProps> = ({
     const cols = Math.max(1, Math.floor(visW / STEP_X));
     const needsReflow = cols !== colsRef.current;
 
+    // Center camera on newly selected individual
+    if (needsCenterRef.current && colsRef.current > 0 && initializedRef.current) {
+      needsCenterRef.current = false;
+      const idx = ribbonData.findIndex(rd => rd.individual.id === selectedId);
+      if (idx >= 0) {
+        const row = Math.floor(idx / colsRef.current);
+        ortho.position.y = -row * STEP_Y;
+      }
+    }
+
     if (!needsReflow && initializedRef.current) {
       ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
       return;
@@ -425,23 +440,23 @@ const GridContent: React.FC<GridContentProps> = ({
 
         switch (trait.type) {
           case 'birth':
-            tw = RIBBON_W * 1.3;
+            tw = TRAIT_W;
             tx = cx;
             tc.set(rd.individual.gender === Gender.Female ? '#ef4444' : '#3b82f6');
             break;
           case 'death':
-            tw = RIBBON_W * 1.3;
+            tw = TRAIT_W;
             tx = cx;
             tc.set(isDarkMode ? '#94a3b8' : '#374151');
             break;
           case 'marriage':
-            tw = RIBBON_W * 1.3;
+            tw = TRAIT_W;
             tx = cx;
             tc.set('#9ca3af');
             break;
           default: { // child tiret
             tw = TIRET_W;
-            tx = cx + RIBBON_W / 2 + TIRET_W / 2 + 0.02;
+            tx = cx + RIBBON_W / 2 + TIRET_W / 2 + YEAR;
             const child = trait.childId && data ? data.individuals[trait.childId] : null;
             if (child?.gender === Gender.Female)     tc.set('#ef4444');
             else if (child?.gender === Gender.Male)  tc.set('#3b82f6');
@@ -502,6 +517,7 @@ const GridContent: React.FC<GridContentProps> = ({
     }
 
     hoveredRef.current = id;
+    setHoveredIdx(id);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [ribbonData, selectedId]);
 
@@ -517,6 +533,7 @@ const GridContent: React.FC<GridContentProps> = ({
     }
 
     hoveredRef.current = -1;
+    setHoveredIdx(-1);
     document.body.style.cursor = 'default';
   }, [ribbonData, selectedId]);
 
@@ -528,6 +545,62 @@ const GridContent: React.FC<GridContentProps> = ({
     }
   }, [ribbonData, onIndividualClick]);
 
+  /* ---- Label helper ---- */
+
+  const RibbonLabel = ({ index, isHover }: { index: number; isHover: boolean }) => {
+    if (index < 0 || index >= ribbonData.length || colsRef.current === 0) return null;
+
+    const rd = ribbonData[index];
+    const indi = rd.individual;
+    const cols = colsRef.current;
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const cx = col * STEP_X;
+    const cy = -row * STEP_Y;
+    const rH = (rd.lifespan / maxLifespan) * CELL_H;
+
+    const progress = Math.min(50, rd.lifespan) / rd.lifespan;
+    const labelY = cy - rH / 2 + progress * rH;
+    const labelX = cx + RIBBON_W / 2 + 2 * YEAR;
+
+    const bYear = indi.birthDate?.year;
+    const dYear = indi.deathDate?.year;
+    const bCal = indi.birthDate?.isCalculated ? ' ~' : '';
+    const dCal = indi.deathDate?.isCalculated ? ' ~' : '';
+    const nameText = `${indi.givenName} ${indi.surname}`;
+    const dateText = `${bYear ? bYear + bCal : '?'} – ${dYear ? dYear + dCal : '?'}`;
+
+    const textColor = isDarkMode ? '#ffffff' : '#1e293b';
+    const outlineW = isDarkMode ? 0.06 : 0;
+    const fs = isHover ? 5.5 * YEAR : 5 * YEAR;
+
+    return (
+      <group position={[labelX, labelY, 0.02]}>
+        <Text
+          fontSize={fs}
+          color={textColor}
+          outlineWidth={outlineW}
+          outlineColor="#000000"
+          anchorX="left"
+          anchorY="bottom"
+        >
+          {nameText}
+        </Text>
+        <Text
+          position={[0, -fs * 0.15, 0]}
+          fontSize={fs * 0.8}
+          color={textColor}
+          outlineWidth={outlineW}
+          outlineColor="#000000"
+          anchorX="left"
+          anchorY="top"
+        >
+          {dateText}
+        </Text>
+      </group>
+    );
+  };
+
   if (ribbonData.length === 0) return null;
 
   return (
@@ -535,6 +608,7 @@ const GridContent: React.FC<GridContentProps> = ({
       <instancedMesh
         ref={ribbonMeshRef}
         args={[ribbonGeometry, ribbonMaterial, ribbonData.length]}
+        frustumCulled={false}
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
         onClick={handleClick}
@@ -542,7 +616,13 @@ const GridContent: React.FC<GridContentProps> = ({
       <instancedMesh
         ref={traitsMeshRef}
         args={[traitGeometry, traitMaterial, Math.max(1, totalTraits)]}
+        frustumCulled={false}
       />
+
+      {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} />}
+      {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
+        <RibbonLabel index={hoveredIdx} isHover={true} />
+      )}
     </group>
   );
 };
@@ -557,6 +637,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   onIndividualClick,
   isDarkMode,
   sortMode = 'birth-asc',
+  activeFilters,
 }) => {
   const individuals = useMemo(() => {
     if (!data) return [];
@@ -567,8 +648,11 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
     } else if (selectedIds && selectedIds.size > 0) {
       list = all.filter(i => selectedIds.has(i.id));
     }
-    return sortIndividuals(list, sortMode);
-  }, [data, sortMode, selectedIds]);
+    if (activeFilters && activeFilters.size > 0) {
+      list = list.filter(i => matchesFilters(i, activeFilters));
+    }
+    return applySortMode(list, sortMode);
+  }, [data, sortMode, selectedIds, activeFilters]);
 
   if (!data) return null;
 

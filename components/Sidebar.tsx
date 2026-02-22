@@ -1,9 +1,76 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Calendar, ArrowUpDown, Eye, EyeOff, ArrowUp, ArrowDown, Sparkles } from 'lucide-react';
-import { Individual, GedcomData, SortMode } from '../types';
+import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff, Sparkles, SlidersHorizontal, Check } from 'lucide-react';
+import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { parseGedcom } from '../services/gedcomParser';
 import { getDemoGedcom } from '../services/demoData';
 
+/* ------------------------------------------------------------------ */
+/*  Sort & Filter definitions                                          */
+/* ------------------------------------------------------------------ */
+const SORT_OPTIONS: { value: SortMode; label: string }[] = [
+  { value: 'birth-desc', label: 'Naissance ↓' },
+  { value: 'birth-asc',  label: 'Naissance ↑' },
+  { value: 'death-desc', label: 'Décès ↓' },
+  { value: 'death-asc',  label: 'Décès ↑' },
+  { value: 'lifespan',   label: 'Durée de vie ↓' },
+  { value: 'name',        label: 'Nom A→Z' },
+];
+
+const FILTER_OPTIONS: { value: FilterTag; label: string; color: string }[] = [
+  { value: 'manual',          label: 'Créés manuellement', color: 'text-green-400' },
+  { value: 'male',            label: 'Hommes',             color: 'text-blue-400' },
+  { value: 'female',          label: 'Femmes',             color: 'text-pink-400' },
+  { value: 'unknown-gender',  label: 'Genre inconnu',      color: 'text-slate-400' },
+  { value: 'unknown-dates',   label: 'Dates inconnues',    color: 'text-amber-400' },
+  { value: 'calculated-dates',label: 'Dates calculées',    color: 'text-yellow-400' },
+  { value: 'no-parents',      label: 'Sans parents',       color: 'text-orange-400' },
+  { value: 'no-spouse',       label: 'Sans conjoint',      color: 'text-violet-400' },
+];
+
+export function matchesFilters(indi: Individual, filters: Set<FilterTag>): boolean {
+  if (filters.size === 0) return true;
+  for (const f of filters) {
+    switch (f) {
+      case 'manual':           if (indi.source === 'manual') return true; break;
+      case 'male':             if (indi.gender === Gender.Male) return true; break;
+      case 'female':           if (indi.gender === Gender.Female) return true; break;
+      case 'unknown-gender':   if (indi.gender === Gender.Unknown) return true; break;
+      case 'unknown-dates':    if (!indi.birthDate?.year || !indi.deathDate?.year) return true; break;
+      case 'calculated-dates': if (indi.birthDate?.isCalculated || indi.deathDate?.isCalculated) return true; break;
+      case 'no-parents':       if (!indi.familyChildId) return true; break;
+      case 'no-spouse':        if (!indi.familySpouseIds?.length) return true; break;
+    }
+  }
+  return false;
+}
+
+export function applySortMode(list: Individual[], mode: SortMode): Individual[] {
+  const sorted = [...list];
+  switch (mode) {
+    case 'name':
+      return sorted.sort((a, b) => `${a.surname} ${a.givenName}`.localeCompare(`${b.surname} ${b.givenName}`));
+    case 'birth-asc':
+      return sorted.sort((a, b) => (a.birthDate?.year ?? 9999) - (b.birthDate?.year ?? 9999));
+    case 'birth-desc':
+      return sorted.sort((a, b) => (b.birthDate?.year ?? 0) - (a.birthDate?.year ?? 0));
+    case 'death-asc':
+      return sorted.sort((a, b) => (a.deathDate?.year ?? 9999) - (b.deathDate?.year ?? 9999));
+    case 'death-desc':
+      return sorted.sort((a, b) => (b.deathDate?.year ?? 0) - (a.deathDate?.year ?? 0));
+    case 'lifespan':
+      return sorted.sort((a, b) => {
+        const lA = (a.deathDate?.year ?? (a.birthDate?.year ?? 0) + 80) - (a.birthDate?.year ?? 0);
+        const lB = (b.deathDate?.year ?? (b.birthDate?.year ?? 0) + 80) - (b.birthDate?.year ?? 0);
+        return lB - lA;
+      });
+    default:
+      return sorted;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Props                                                              */
+/* ------------------------------------------------------------------ */
 interface SidebarProps {
   onDataLoaded: (data: GedcomData, name?: string) => void;
   onSelectIndividual: (indi: Individual) => void;
@@ -21,12 +88,15 @@ interface SidebarProps {
   isDarkMode: boolean;
   sortMode?: SortMode;
   onSetSortMode?: (mode: SortMode) => void;
-  
-  // Normalization
+  activeFilters: Set<FilterTag>;
+  onToggleFilter: (tag: FilterTag) => void;
   isNormalized: boolean;
   onToggleNormalization: () => void;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Component                                                          */
+/* ------------------------------------------------------------------ */
 const Sidebar: React.FC<SidebarProps> = ({ 
   onDataLoaded, 
   onSelectIndividual, 
@@ -44,16 +114,18 @@ const Sidebar: React.FC<SidebarProps> = ({
   isDarkMode,
   sortMode,
   onSetSortMode,
+  activeFilters,
+  onToggleFilter,
   isNormalized,
   onToggleNormalization,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to selected item
   useEffect(() => {
     if (selectedId && isOpen) {
-       // Small delay to allow rendering if list changed
        setTimeout(() => {
            const element = document.getElementById(`sidebar-item-${selectedId}`);
            if (element) {
@@ -62,6 +134,16 @@ const Sidebar: React.FC<SidebarProps> = ({
        }, 50);
     }
   }, [selectedId, isOpen, sortMode, searchTerm]);
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -116,50 +198,25 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const filteredList = useMemo(() => {
     if (!data) return [];
-    const list = Object.values(data.individuals) as Individual[];
-    
-    // Sort logic (Global)
-    const sorted = list.sort((a, b) => {
-      if (sortMode === 'name') {
-        const nameA = `${a.surname} ${a.givenName}`;
-        const nameB = `${b.surname} ${b.givenName}`;
-        return nameA.localeCompare(nameB);
-      } else {
-        // Sort logic ALIGNED with Scene2D: Date First, then Generation
-        const isAsc = sortMode === 'birth-asc';
+    let list = Object.values(data.individuals) as Individual[];
 
-        // 1. Date
-        const dateA = a.birthDate?.year ?? -99999;
-        const dateB = b.birthDate?.year ?? -99999;
-        if (dateA !== dateB) {
-            return isAsc ? dateA - dateB : dateB - dateA;
-        }
+    if (activeFilters.size > 0) {
+      list = list.filter(p => matchesFilters(p, activeFilters));
+    }
 
-        // 2. Generation (Fallback)
-        const genA = a.generation ?? 0;
-        const genB = b.generation ?? 0;
-        if (genA !== genB) {
-            return isAsc ? genA - genB : genB - genA;
-        }
-
-        return (a.givenName || '').localeCompare(b.givenName || '');
-      }
-    });
+    const sorted = applySortMode(list, sortMode || 'birth-asc');
 
     if (!searchTerm) {
-        // Optimization: Render only 200 items max
-        // BUG FIX: If the selected ID is beyond 200, we MUST include it otherwise 
-        // the list doesn't show the active selection, breaking the visual sync.
         const slice = sorted.slice(0, 200);
         if (selectedId && !slice.find(p => p.id === selectedId)) {
              const selectedItem = data.individuals[selectedId];
-             if (selectedItem) slice.unshift(selectedItem); // Force insert at top
+             if (selectedItem) slice.unshift(selectedItem);
         }
         return slice;
     }
     
     return sorted.filter(p => `${p.givenName} ${p.surname}`.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [data, searchTerm, sortMode, selectedId]);
+  }, [data, searchTerm, sortMode, selectedId, activeFilters]);
 
   // Styles
   const bgClass = isDarkMode ? 'bg-black border-slate-800' : 'bg-slate-50 border-slate-300';
@@ -170,14 +227,13 @@ const Sidebar: React.FC<SidebarProps> = ({
   const buttonImportClass = isDarkMode 
     ? 'bg-neutral-800 hover:bg-neutral-700 border-slate-700' 
     : 'bg-white hover:bg-slate-100 border-slate-300';
-  
-  const sortBtnActive = isDarkMode ? 'bg-slate-700 text-white border-slate-600' : 'bg-slate-300 text-slate-900 border-slate-400';
-  const sortBtnDefault = isDarkMode ? 'border-slate-700 hover:bg-slate-800 text-slate-400' : 'border-slate-300 hover:bg-slate-200 text-slate-600';
 
-  // Tab Handle Styles
   const handleBg = isDarkMode 
     ? 'bg-black text-slate-400 border-slate-800 hover:bg-neutral-900' 
     : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50';
+
+  const menuBg = isDarkMode ? 'bg-neutral-900 border-slate-700' : 'bg-white border-slate-300';
+  const menuItemHover = isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100';
 
   const getSourceIcon = (source?: string) => {
       if (source === 'manual') return <span title="Manual Entry"><UserIcon className="w-3 h-3 text-green-500" /></span>;
@@ -196,15 +252,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
   ` : '';
 
-  const handleSortDateClick = () => {
-     if (!onSetSortMode) return;
-     if (sortMode === 'birth-desc') {
-         onSetSortMode('birth-asc');
-     } else {
-         // Default or from name -> Descending (Newest first)
-         onSetSortMode('birth-desc');
-     }
-  };
+  const activeSortLabel = SORT_OPTIONS.find(o => o.value === sortMode)?.label ?? 'Naissance ↓';
 
   return (
     <div 
@@ -236,7 +284,6 @@ const Sidebar: React.FC<SidebarProps> = ({
           <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
         </label>
         
-        {/* Normalization Toggle */}
         {data && (
             <button 
                 onClick={onToggleNormalization}
@@ -258,14 +305,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             </button>
         )}
-
-        {/* P2P section moved to TopPanel */}
       </div>
 
-      {/* Search & Sort & Header - Fixed at Top */}
+      {/* Search + Sort/Filter Menu */}
       {data && (
         <div className={`flex flex-col border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
             <div className="p-4 space-y-3 pb-3">
+              {/* Search bar */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
@@ -277,28 +323,75 @@ const Sidebar: React.FC<SidebarProps> = ({
                   disabled={!data}
                 />
               </div>
+
+              {/* Sort/Filter button + dropdown */}
               {onSetSortMode && (
-                <div className="flex gap-2">
-                    <button 
-                      onClick={handleSortDateClick}
-                      className={`flex-1 flex items-center justify-center gap-2 px-2 py-1.5 rounded text-xs border transition-colors ${sortMode?.includes('birth') ? sortBtnActive : sortBtnDefault}`}
-                    >
-                      <Calendar className="w-3 h-3" /> 
-                      Sort Date
-                      {sortMode === 'birth-asc' && <ArrowUp className="w-3 h-3" />}
-                      {sortMode === 'birth-desc' && <ArrowDown className="w-3 h-3" />}
-                    </button>
-                    <button 
-                      onClick={() => onSetSortMode('name')}
-                      className={`flex-1 flex items-center justify-center gap-2 px-2 py-1.5 rounded text-xs border transition-colors ${sortMode === 'name' ? sortBtnActive : sortBtnDefault}`}
-                    >
-                      <ArrowUpDown className="w-3 h-3" /> Sort Name
-                    </button>
+                <div className="relative" ref={menuRef}>
+                  <button
+                    onClick={() => setMenuOpen(o => !o)}
+                    className={`w-full flex items-center justify-between px-3 py-1.5 rounded border text-xs transition-colors ${
+                      activeFilters.size > 0
+                        ? 'bg-blue-500/20 border-blue-500/50 text-blue-400'
+                        : isDarkMode ? 'border-slate-700 hover:bg-slate-800 text-slate-300' : 'border-slate-300 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                      <span className="font-medium">{activeSortLabel}</span>
+                      {activeFilters.size > 0 && (
+                        <span className="bg-blue-500 text-white rounded-full px-1.5 py-0 text-[10px] font-bold leading-4">
+                          {activeFilters.size}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] opacity-60">Tri & Filtres</span>
+                  </button>
+
+                  {menuOpen && (
+                    <div className={`absolute z-50 left-0 right-0 mt-1 rounded-lg border shadow-xl overflow-hidden ${menuBg}`}>
+                      {/* Sort section */}
+                      <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} ${isDarkMode ? 'bg-black/40' : 'bg-slate-50'}`}>
+                        Tri
+                      </div>
+                      {SORT_OPTIONS.map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => { onSetSortMode(opt.value); }}
+                          className={`w-full flex items-center justify-between px-3 py-1.5 text-xs ${menuItemHover} ${
+                            sortMode === opt.value ? (isDarkMode ? 'text-white bg-slate-800' : 'text-slate-900 bg-slate-100 font-bold') : textClass
+                          }`}
+                        >
+                          <span>{opt.label}</span>
+                          {sortMode === opt.value && <Check className="w-3 h-3 text-blue-500" />}
+                        </button>
+                      ))}
+
+                      {/* Filter section */}
+                      <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'bg-black/40 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                        Filtres (union)
+                      </div>
+                      {FILTER_OPTIONS.map(opt => {
+                        const active = activeFilters.has(opt.value);
+                        return (
+                          <button
+                            key={opt.value}
+                            onClick={() => onToggleFilter(opt.value)}
+                            className={`w-full flex items-center justify-between px-3 py-1.5 text-xs ${menuItemHover} ${
+                              active ? (isDarkMode ? 'bg-slate-800' : 'bg-slate-100') : ''
+                            } ${textClass}`}
+                          >
+                            <span className={active ? opt.color : ''}>{opt.label}</span>
+                            {active && <Check className={`w-3 h-3 ${opt.color}`} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* FIXED Header for Records & Selection */}
+            {/* Header for Records & Selection */}
             <div className={`px-4 py-2 bg-opacity-50 ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'} flex justify-between items-center text-xs font-semibold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
                 <span>Records ({Object.keys(data.individuals).length})</span>
                 <div className="flex items-center gap-2">
@@ -312,19 +405,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                   {onClear2DSelection && onToggle2DSelection && data && (
                       <button 
                           onClick={() => {
-                            // Detect current state
                             const isHidingAll = selectedIdsFor2D?.has('__NONE__');
                             const hasSelection = selectedIdsFor2D && selectedIdsFor2D.size > 0 && !isHidingAll;
                             const isShowingAll = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
                             
                             if (isHidingAll) {
-                              // None mode → Show All
-                              onClear2DSelection(); // Clear to show all
+                              onClear2DSelection();
                             } else if (isShowingAll) {
-                              // All mode → Hide All  
                               onToggle2DSelection('__NONE__');
                             } else {
-                              // Filtered mode → Show All
                               onClear2DSelection();
                             }
                           }}
@@ -368,7 +457,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           <div className="p-2 space-y-1">
             {filteredList.map((indi) => {
-              // Determine if individual is visible in 2D
               const isNoneMode = selectedIdsFor2D?.has('__NONE__');
               const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
               const isSelected2D = isNoneMode ? false : (isAllMode ? true : selectedIdsFor2D.has(indi.id));
@@ -406,7 +494,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                   </button>
 
-                  {/* 2D Toggle */}
                   <button 
                      onClick={(e) => { e.stopPropagation(); onToggle2DSelection?.(indi.id); }}
                      className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}

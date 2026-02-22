@@ -1,6 +1,20 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { ArrowUpFromLine, ArrowDownToLine, Cuboid, Sun, Moon, LayoutGrid, ArrowDown, Orbit } from 'lucide-react';
-import { DragMode, ViewMode, CameraMode } from '../types';
+import { DragMode, ViewMode, CameraMode, LayoutParams, DEFAULT_LAYOUT_PARAMS } from '../types';
+
+interface SliderDef {
+  key: keyof LayoutParams;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+}
+
+const SLIDER_DEFS: SliderDef[] = [
+  { key: 'generationPitch', label: 'Générations', min: 20, max: 100, step: 5 },
+  { key: 'minGap',          label: 'Écart',       min: 0,  max: 20,  step: 1 },
+  { key: 'leafWidthRatio',  label: 'Feuilles',    min: 0.2, max: 1.0, step: 0.05 },
+];
 
 interface BottomPanelProps {
   isOpen: boolean;
@@ -18,6 +32,8 @@ interface BottomPanelProps {
   onMouseLeave?: () => void;
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
   onSetAutoLayoutMode?: (mode: 'none' | 'ancestors' | 'descendants' | 'all') => void;
+  layoutParams?: LayoutParams;
+  onSetLayoutParams?: (params: LayoutParams) => void;
   isAnimating?: boolean;
 }
 
@@ -37,6 +53,8 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   onMouseLeave,
   autoLayoutMode = 'none',
   onSetAutoLayoutMode,
+  layoutParams = DEFAULT_LAYOUT_PARAMS,
+  onSetLayoutParams,
   isAnimating = false
 }) => {
   
@@ -56,6 +74,20 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     
   const containerBg = isDarkMode ? 'bg-neutral-900 border-slate-800' : 'bg-slate-50 border-slate-200';
 
+  const handleSliderChange = useCallback((key: keyof LayoutParams, value: number) => {
+    if (!onSetLayoutParams) return;
+    onSetLayoutParams({ ...layoutParams, [key]: value });
+  }, [layoutParams, onSetLayoutParams]);
+
+  const handleReset = useCallback(() => {
+    if (!onSetLayoutParams) return;
+    onSetLayoutParams({ ...DEFAULT_LAYOUT_PARAMS });
+  }, [onSetLayoutParams]);
+
+  const isDefault = layoutParams.generationPitch === DEFAULT_LAYOUT_PARAMS.generationPitch
+    && layoutParams.minGap === DEFAULT_LAYOUT_PARAMS.minGap
+    && layoutParams.leafWidthRatio === DEFAULT_LAYOUT_PARAMS.leafWidthRatio;
+
   return (
     <div className="fixed bottom-0 left-0 right-0 z-[100] pointer-events-none">
       {/* Handle - Always visible at bottom */}
@@ -72,7 +104,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
       {/* Content - collapses via max-height, no transforms */}
       <div
         className="overflow-hidden"
-        style={{ maxHeight: isOpen ? '120px' : '0px', transition: 'max-height 300ms ease' }}
+        style={{ maxHeight: isOpen ? '300px' : '0px', transition: 'max-height 300ms ease' }}
       >
         <div 
           className={`pointer-events-auto ${bgClass} backdrop-blur-md border-t px-3 py-2 shadow-2xl`}
@@ -80,6 +112,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
         >
+        {/* Row 1: existing controls */}
         <div className="flex flex-wrap items-center justify-center gap-3 max-w-6xl mx-auto">
           
           {hasData && (
@@ -147,17 +180,14 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
 
                   {/* Camera Mode Controls */}
                   <div className="flex gap-0.5">
-                    {/* Individual view */}
                     <button onClick={() => onSetCameraMode('individual')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'individual' ? btnActive : btnDefault}`} title="Individual View">
                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                          <rect x="6.5" y="2" width="3" height="12" rx="1" />
                        </svg>
                     </button>
-                    {/* Top view */}
                     <button onClick={() => onSetCameraMode('top')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'top' ? btnActive : btnDefault}`} title="Top View">
                        <ArrowDown className="w-3.5 h-3.5" />
                     </button>
-                    {/* Free 3D view */}
                     <button onClick={() => onSetCameraMode('free')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'free' ? btnActive : btnDefault}`} title="Free 3D View">
                        <Orbit className="w-3.5 h-3.5" />
                     </button>
@@ -174,6 +204,47 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
           </button>
 
         </div>
+
+        {/* Row 2: Layout parameter sliders (3D only) */}
+        {hasData && viewMode === '3D' && onSetLayoutParams && (
+          <div className="flex flex-wrap items-center justify-center gap-4 max-w-5xl mx-auto mt-1.5 pt-1.5 border-t border-dashed"
+               style={{ borderColor: isDarkMode ? '#334155' : '#cbd5e1' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                 className={isDarkMode ? 'text-slate-500' : 'text-slate-400'}>
+              <line x1="4" y1="6" x2="20" y2="6"/><circle cx="8" cy="6" r="2"/>
+              <line x1="4" y1="12" x2="20" y2="12"/><circle cx="16" cy="12" r="2"/>
+              <line x1="4" y1="18" x2="20" y2="18"/><circle cx="12" cy="18" r="2"/>
+            </svg>
+            {SLIDER_DEFS.map(sd => (
+              <label key={sd.key} className="flex items-center gap-1.5 cursor-default" title={sd.key}>
+                <span className={`text-[10px] font-semibold w-[62px] text-right ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                  {sd.label}
+                </span>
+                <input
+                  type="range"
+                  min={sd.min}
+                  max={sd.max}
+                  step={sd.step}
+                  value={layoutParams[sd.key]}
+                  onChange={e => handleSliderChange(sd.key, parseFloat(e.target.value))}
+                  className="w-20 h-1 accent-blue-500 cursor-pointer"
+                />
+                <span className={`text-[10px] font-mono w-7 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                  {layoutParams[sd.key]}
+                </span>
+              </label>
+            ))}
+            {!isDefault && (
+              <button
+                onClick={handleReset}
+                className={`text-[10px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500' : 'border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400'}`}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        )}
+
         </div>
       </div>
     </div>

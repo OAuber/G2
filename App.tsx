@@ -6,7 +6,7 @@ import Scene3D from './components/Scene3D';
 import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
+import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
 import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
@@ -59,9 +59,11 @@ function App() {
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
   const [centerRequest, setCenterRequest] = useState(0);
+  const [activeFilters, setActiveFilters] = useState<Set<FilterTag>>(new Set());
 
   // Auto Layout State
   const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('all');
+  const [layoutParams, setLayoutParams] = useState<LayoutParams>({ ...DEFAULT_LAYOUT_PARAMS });
   
   // Info Pages State
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
@@ -740,6 +742,15 @@ function App() {
 
   // Only disable 3D controls on mouse hover — touch devices don't need this
   // (mouseenter fires on tap but mouseleave never fires, blocking controls)
+  const handleToggleFilter = (tag: FilterTag) => {
+    setActiveFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  };
+
   const handleUIEnter = () => {
     if (matchMedia('(pointer: fine)').matches) setIsHoveringUI(true);
   };
@@ -812,6 +823,8 @@ function App() {
         isDarkMode={isDarkMode}
         sortMode={sortMode}
         onSetSortMode={setSortMode}
+        activeFilters={activeFilters}
+        onToggleFilter={handleToggleFilter}
         
         // Normalization Props
         isNormalized={isNormalized}
@@ -840,6 +853,7 @@ function App() {
             setExtraIndividuals={setSceneExtras}
             autoLayoutMode={autoLayoutMode}
             onSetAutoLayoutMode={setAutoLayoutMode}
+            layoutParams={layoutParams}
           />
         ) : (
           <Scene2DGrid
@@ -849,6 +863,7 @@ function App() {
             onIndividualClick={handleInspectIndividual}
             isDarkMode={isDarkMode}
             sortMode={sortMode}
+            activeFilters={activeFilters}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
           />
@@ -978,6 +993,8 @@ function App() {
         onMouseLeave={handleUILeave}
         autoLayoutMode={autoLayoutMode}
         onSetAutoLayoutMode={setAutoLayoutMode}
+        layoutParams={layoutParams}
+        onSetLayoutParams={setLayoutParams}
         isAnimating={flyTarget !== null}
       />
 
