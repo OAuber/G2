@@ -1,6 +1,9 @@
 import React, { useCallback } from 'react';
-import { ArrowUpFromLine, ArrowDownToLine, Cuboid, Sun, Moon, LayoutGrid, ArrowDown, Orbit } from 'lucide-react';
-import { DragMode, ViewMode, CameraMode, LayoutParams, DEFAULT_LAYOUT_PARAMS } from '../types';
+import { Sun, Moon } from 'lucide-react';
+import { DisplayMode, LayoutParams, DEFAULT_LAYOUT_PARAMS } from '../types';
+
+const PINK = '#f9a8d4';
+const BLUE = '#93c5fd';
 
 interface SliderDef {
   key: keyof LayoutParams;
@@ -11,20 +14,16 @@ interface SliderDef {
 }
 
 const SLIDER_DEFS: SliderDef[] = [
-  { key: 'generationPitch', label: 'Générations', min: 20, max: 100, step: 5 },
-  { key: 'minGap',          label: 'Écart',       min: 0,  max: 20,  step: 1 },
-  { key: 'leafWidthRatio',  label: 'Feuilles',    min: 0.2, max: 1.0, step: 0.05 },
+  { key: 'generationPitch', label: 'Gen.', min: 20, max: 100, step: 5 },
+  { key: 'minGap',          label: 'Gap',  min: 0,  max: 20,  step: 1 },
+  { key: 'leafWidthRatio',  label: 'Leaf', min: 0.2, max: 1.0, step: 0.05 },
 ];
 
 interface BottomPanelProps {
   isOpen: boolean;
   onToggle: () => void;
-  dragMode: DragMode;
-  onSetDragMode: (mode: DragMode) => void;
-  cameraMode: CameraMode;
-  onSetCameraMode: (mode: CameraMode) => void;
-  viewMode: ViewMode;
-  onSetViewMode: (mode: ViewMode) => void;
+  displayMode: DisplayMode;
+  onSetDisplayMode: (mode: DisplayMode) => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
   hasData: boolean;
@@ -37,15 +36,73 @@ interface BottomPanelProps {
   isAnimating?: boolean;
 }
 
-const BottomPanel: React.FC<BottomPanelProps> = ({ 
+/* ────────────────────── SVG Icon components ────────────────────── */
+
+const Icon2DIndividual = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <rect x="9" y="3" width="6" height="18" rx="1.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+  </svg>
+);
+
+const Icon3DIndividual = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <line x1="12" y1="4"  x2="12" y2="20" stroke={PINK} strokeWidth="2.5" strokeLinecap="round"/>
+    <line x1="4"  y1="12" x2="20" y2="12" stroke={BLUE} strokeWidth="2.5" strokeLinecap="round"/>
+  </svg>
+);
+
+const Icon2DGrid = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <rect x="5" y="4" width="5" height="16" rx="1" fill={PINK} opacity="0.8"/>
+    <rect x="14" y="4" width="5" height="16" rx="1" fill={BLUE} opacity="0.8"/>
+  </svg>
+);
+
+const Icon3DTop = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <rect x="3" y="6"  width="18" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/>
+    <rect x="3" y="6"  width="9"  height="4" rx="0" fill={PINK} opacity="0.6"/>
+    <rect x="12" y="6" width="9"  height="4" rx="0" fill={BLUE} opacity="0.6"/>
+    <rect x="5" y="14" width="18" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="0.8"/>
+    <rect x="5" y="14"  width="9"  height="4" rx="0" fill={PINK} opacity="0.6"/>
+    <rect x="14" y="14" width="9"  height="4" rx="0" fill={BLUE} opacity="0.6"/>
+  </svg>
+);
+
+const Icon3DFree = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <line x1="5" y1="19" x2="19" y2="5"  stroke={PINK} strokeWidth="2.5" strokeLinecap="round"/>
+    <line x1="19" y1="19" x2="5" y2="5"  stroke={BLUE} strokeWidth="2.5" strokeLinecap="round"/>
+  </svg>
+);
+
+const IconAsc = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <polygon points="12,3 3,21 21,21" fill="white" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+  </svg>
+);
+
+const IconDesc = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <polygon points="12,21 3,3 21,3" fill="white" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+  </svg>
+);
+
+/* ────────────────────── Main component ────────────────────── */
+
+const VIEW_BUTTONS: { mode: DisplayMode; icon: React.FC; title: string }[] = [
+  { mode: '2d-individual', icon: Icon2DIndividual, title: 'Individual' },
+  { mode: '2d-grid',       icon: Icon2DGrid,       title: 'Grid' },
+  { mode: '3d-individual', icon: Icon3DIndividual, title: 'Close-up' },
+  { mode: '3d-top',        icon: Icon3DTop,        title: 'Top view' },
+  { mode: '3d-free',       icon: Icon3DFree,       title: 'Free view' },
+];
+
+const BottomPanel: React.FC<BottomPanelProps> = ({
   isOpen,
   onToggle,
-  dragMode, 
-  onSetDragMode,
-  cameraMode,
-  onSetCameraMode,
-  viewMode,
-  onSetViewMode,
+  displayMode,
+  onSetDisplayMode,
   isDarkMode,
   onToggleTheme,
   hasData,
@@ -55,24 +112,20 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   onSetAutoLayoutMode,
   layoutParams = DEFAULT_LAYOUT_PARAMS,
   onSetLayoutParams,
-  isAnimating = false
+  isAnimating = false,
 }) => {
-  
   const bgClass = isDarkMode ? 'bg-black/95 border-slate-800' : 'bg-white/95 border-slate-300';
-  
-  const handleBg = isDarkMode 
-    ? 'bg-black text-slate-400 border-slate-800 hover:bg-neutral-900' 
+  const handleBg = isDarkMode
+    ? 'bg-black text-slate-400 border-slate-800 hover:bg-neutral-900'
     : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50';
 
-  const btnDefault = isDarkMode 
-    ? 'text-slate-400 hover:text-slate-200 hover:bg-neutral-800' 
-    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100';
-    
+  const btnBase = 'w-9 h-9 flex items-center justify-center rounded-lg border transition-all';
+  const btnDefault = isDarkMode
+    ? `${btnBase} border-transparent text-slate-400 hover:text-slate-200 hover:bg-neutral-800`
+    : `${btnBase} border-transparent text-slate-500 hover:text-slate-900 hover:bg-slate-100`;
   const btnActive = isDarkMode
-    ? 'bg-neutral-700 text-white shadow-md'
-    : 'bg-slate-200 text-slate-800 shadow-sm hover:bg-slate-300';
-    
-  const containerBg = isDarkMode ? 'bg-neutral-900 border-slate-800' : 'bg-slate-50 border-slate-200';
+    ? `${btnBase} bg-neutral-700 border-slate-600 text-white shadow-md`
+    : `${btnBase} bg-slate-200 border-slate-300 text-slate-800 shadow-sm`;
 
   const handleSliderChange = useCallback((key: keyof LayoutParams, value: number) => {
     if (!onSetLayoutParams) return;
@@ -88,11 +141,39 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     && layoutParams.minGap === DEFAULT_LAYOUT_PARAMS.minGap
     && layoutParams.leafWidthRatio === DEFAULT_LAYOUT_PARAMS.leafWidthRatio;
 
+  const is3D = displayMode.startsWith('3d');
+
+  const toggleAsc = () => {
+    if (!onSetAutoLayoutMode) return;
+    const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
+    const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
+    const newAsc = !ascOn;
+    if (newAsc && descOn) onSetAutoLayoutMode('all');
+    else if (newAsc) onSetAutoLayoutMode('ancestors');
+    else if (descOn) onSetAutoLayoutMode('descendants');
+    else onSetAutoLayoutMode('none');
+  };
+
+  const toggleDesc = () => {
+    if (!onSetAutoLayoutMode) return;
+    const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
+    const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
+    const newDesc = !descOn;
+    if (ascOn && newDesc) onSetAutoLayoutMode('all');
+    else if (newDesc) onSetAutoLayoutMode('descendants');
+    else if (ascOn) onSetAutoLayoutMode('ancestors');
+    else onSetAutoLayoutMode('none');
+  };
+
+  const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
+  const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
+  const ascClass = ascOn ? btnActive : btnDefault;
+  const descClass = descOn ? btnActive : btnDefault;
+
   return (
     <div className="fixed bottom-0 left-0 right-0 z-[100] pointer-events-none">
-      {/* Handle - Always visible at bottom */}
       <div className="flex justify-center">
-        <button 
+        <button
           onClick={onToggle}
           style={{ touchAction: 'manipulation' }}
           className={`pointer-events-auto ${handleBg} rounded-t-xl px-10 py-3 border-t border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
@@ -101,150 +182,87 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
         </button>
       </div>
 
-      {/* Content - collapses via max-height, no transforms */}
-      <div
-        className="overflow-hidden"
-        style={{ maxHeight: isOpen ? '300px' : '0px', transition: 'max-height 300ms ease' }}
-      >
-        <div 
+      <div className="overflow-hidden"
+           style={{ maxHeight: isOpen ? '300px' : '0px', transition: 'max-height 300ms ease' }}>
+        <div
           className={`pointer-events-auto ${bgClass} backdrop-blur-md border-t px-3 py-2 shadow-2xl`}
           style={{ touchAction: 'pan-y' }}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
         >
-        {/* Row 1: existing controls */}
-        <div className="flex flex-wrap items-center justify-center gap-3 max-w-6xl mx-auto">
-          
-          {hasData && (
-            <>
-              {/* View Mode Switcher */}
-              <div className={`flex rounded-lg p-0.5 border ${containerBg}`}>
-                <button onClick={() => onSetViewMode('2D')} className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold transition-all ${viewMode === '2D' ? btnActive : btnDefault}`}>
-                  <LayoutGrid className="w-3 h-3" /> 2D
+          {/* Row 1: view buttons + toggles + theme */}
+          <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-4xl mx-auto">
+            {hasData && (
+              <>
+                {/* Buttons 1-5: view modes */}
+                {VIEW_BUTTONS.map(vb => {
+                  const Icon = vb.icon;
+                  return (
+                    <button
+                      key={vb.mode}
+                      onClick={() => onSetDisplayMode(vb.mode)}
+                      disabled={isAnimating}
+                      title={vb.title}
+                      className={displayMode === vb.mode ? btnActive : btnDefault}
+                    >
+                      <Icon />
+                    </button>
+                  );
+                })}
+
+                <div className={`w-px h-6 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`} />
+
+                {/* Buttons 6-7: ancestor/descendant toggles */}
+                <button onClick={toggleAsc} disabled={isAnimating} title="Ascendants" className={ascClass}>
+                  <IconAsc />
                 </button>
-                <button onClick={() => onSetViewMode('3D')} className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold transition-all ${viewMode === '3D' ? btnActive : btnDefault}`}>
-                  <Cuboid className="w-3 h-3" /> 3D
+                <button onClick={toggleDesc} disabled={isAnimating} title="Descendants" className={descClass}>
+                  <IconDesc />
                 </button>
-              </div>
 
-              {/* 3D Specific Controls */}
-              {viewMode === '3D' && (
-                <>
-                  {/* Drag / Layout Mode */}
-                  <div className={`flex rounded-lg p-0.5 border ${containerBg}`}>
-                    {autoLayoutMode === 'none' && (
-                      <>
-                        <button onClick={() => onSetDragMode('ancestors')} className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold transition-all ${dragMode === 'ancestors' ? btnActive : btnDefault}`}>
-                          <ArrowUpFromLine className="w-3 h-3" /> Anc.
-                        </button>
-                        <button onClick={() => onSetDragMode('descendants')} className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold transition-all ${dragMode === 'descendants' ? btnActive : btnDefault}`}>
-                          <ArrowDownToLine className="w-3 h-3" /> Desc.
-                        </button>
-                      </>
-                    )}
-                    {onSetAutoLayoutMode && (
-                      <>
-                        <button 
-                          onClick={() => {
-                              const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
-                              const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
-                              const newAsc = !ascOn;
-                              if (newAsc && descOn) onSetAutoLayoutMode('all');
-                              else if (newAsc) onSetAutoLayoutMode('ancestors');
-                              else if (descOn) onSetAutoLayoutMode('descendants');
-                              else onSetAutoLayoutMode('none');
-                          }}
-                          title="Toggle Ancestors"
-                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'ancestors' || autoLayoutMode === 'all' ? 'bg-pink-500 text-white' : btnDefault}`}
-                        >
-                          Asc ↑
-                        </button>
-                        <button 
-                          onClick={() => {
-                              const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
-                              const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
-                              const newDesc = !descOn;
-                              if (ascOn && newDesc) onSetAutoLayoutMode('all');
-                              else if (newDesc) onSetAutoLayoutMode('descendants');
-                              else if (ascOn) onSetAutoLayoutMode('ancestors');
-                              else onSetAutoLayoutMode('none');
-                          }}
-                          title="Toggle Descendants"
-                          className={`px-2 py-1 rounded-md text-xs font-bold ${autoLayoutMode === 'descendants' || autoLayoutMode === 'all' ? 'bg-blue-500 text-white' : btnDefault}`}
-                        >
-                          Desc ↓
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Camera Mode Controls */}
-                  <div className="flex gap-0.5">
-                    <button onClick={() => onSetCameraMode('individual')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'individual' ? btnActive : btnDefault}`} title="Individual View">
-                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                         <rect x="6.5" y="2" width="3" height="12" rx="1" />
-                       </svg>
-                    </button>
-                    <button onClick={() => onSetCameraMode('top')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'top' ? btnActive : btnDefault}`} title="Top View">
-                       <ArrowDown className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => onSetCameraMode('free')} disabled={isAnimating} className={`w-7 h-6 flex items-center justify-center rounded border ${containerBg} ${cameraMode === 'free' ? btnActive : btnDefault}`} title="Free 3D View">
-                       <Orbit className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-
-          {/* Theme - Always Visible */}
-          <button onClick={onToggleTheme} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}>
-            {isDarkMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-            <span className="text-xs font-bold">{isDarkMode ? 'Dark' : 'Light'}</span>
-          </button>
-
-        </div>
-
-        {/* Row 2: Layout parameter sliders (3D only) */}
-        {hasData && viewMode === '3D' && onSetLayoutParams && (
-          <div className="flex flex-wrap items-center justify-center gap-4 max-w-5xl mx-auto mt-1.5 pt-1.5 border-t border-dashed"
-               style={{ borderColor: isDarkMode ? '#334155' : '#cbd5e1' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-                 className={isDarkMode ? 'text-slate-500' : 'text-slate-400'}>
-              <line x1="4" y1="6" x2="20" y2="6"/><circle cx="8" cy="6" r="2"/>
-              <line x1="4" y1="12" x2="20" y2="12"/><circle cx="16" cy="12" r="2"/>
-              <line x1="4" y1="18" x2="20" y2="18"/><circle cx="12" cy="18" r="2"/>
-            </svg>
-            {SLIDER_DEFS.map(sd => (
-              <label key={sd.key} className="flex items-center gap-1.5 cursor-default" title={sd.key}>
-                <span className={`text-[10px] font-semibold w-[62px] text-right ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {sd.label}
-                </span>
-                <input
-                  type="range"
-                  min={sd.min}
-                  max={sd.max}
-                  step={sd.step}
-                  value={layoutParams[sd.key]}
-                  onChange={e => handleSliderChange(sd.key, parseFloat(e.target.value))}
-                  className="w-20 h-1 accent-blue-500 cursor-pointer"
-                />
-                <span className={`text-[10px] font-mono w-7 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                  {layoutParams[sd.key]}
-                </span>
-              </label>
-            ))}
-            {!isDefault && (
-              <button
-                onClick={handleReset}
-                className={`text-[10px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500' : 'border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400'}`}
-              >
-                Reset
-              </button>
+                <div className={`w-px h-6 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`} />
+              </>
             )}
-          </div>
-        )}
 
+            <button
+              onClick={onToggleTheme}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
+            >
+              {isDarkMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+              <span className="text-xs font-bold">{isDarkMode ? 'Dark' : 'Light'}</span>
+            </button>
+          </div>
+
+          {/* Row 2: sliders (3D only) */}
+          {hasData && is3D && onSetLayoutParams && (
+            <div className="flex flex-wrap items-center justify-center gap-3 max-w-5xl mx-auto mt-2 pt-2 border-t border-dashed"
+                 style={{ borderColor: isDarkMode ? '#334155' : '#cbd5e1' }}>
+              {SLIDER_DEFS.map(sd => (
+                <label key={sd.key} className="flex items-center gap-1.5 cursor-default" title={sd.key}>
+                  <span className={`text-[10px] font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                    {sd.label}
+                  </span>
+                  <input
+                    type="range"
+                    min={sd.min} max={sd.max} step={sd.step}
+                    value={layoutParams[sd.key]}
+                    onChange={e => handleSliderChange(sd.key, parseFloat(e.target.value))}
+                    className="w-24 h-1 accent-blue-500 cursor-pointer"
+                  />
+                  <span className={`text-[10px] font-mono w-8 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                    {layoutParams[sd.key]}
+                  </span>
+                </label>
+              ))}
+              {!isDefault && (
+                <button onClick={handleReset}
+                  className={`text-[10px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500' : 'border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400'}`}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

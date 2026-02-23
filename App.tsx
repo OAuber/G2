@@ -6,7 +6,7 @@ import Scene3D from './components/Scene3D';
 import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, DragMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
+import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
 import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
@@ -53,9 +53,13 @@ function App() {
   // New UI Controls State
   const [isLoading, setIsLoading] = useState(false);
   const [dragMode, setDragMode] = useState<DragMode>('descendants');
-  const [cameraMode, setCameraMode] = useState<CameraMode>('top');
-  const [flyTarget, setFlyTarget] = useState<CameraMode | null>(null); // non-null = animating toward this mode
-  const [viewMode, setViewMode] = useState<ViewMode>('2D'); // Changed to 2D default
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('2d-grid');
+  const [flyTarget, setFlyTarget] = useState<CameraMode | null>(null);
+
+  const viewMode: ViewMode = displayMode.startsWith('3d') ? '3D' : '2D';
+  const cameraMode: CameraMode = displayMode === '3d-individual' ? 'individual'
+    : displayMode === '3d-top' ? 'top' : displayMode === '3d-free' ? 'free' : 'top';
+  const is2dIndividual = displayMode === '2d-individual';
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
   const [centerRequest, setCenterRequest] = useState(0);
@@ -120,119 +124,44 @@ function App() {
       p2pService.connect(hostId);
   };
 
-  // --- Camera Mode Handler: request animated transition to a target mode ---
-  const handleSetCameraMode = (target: CameraMode) => {
-      if (flyTarget !== null) return; // ignore while animating
-      if (target === cameraMode) return; // already there
-      setFlyTarget(target);
-  };
-
   // Called by CameraController when animation finishes
   const handleFlyComplete = () => {
       if (flyTarget) {
-          setCameraMode(flyTarget);
+          const map: Record<CameraMode, DisplayMode> = { individual: '3d-individual', top: '3d-top', free: '3d-free' };
+          setDisplayMode(map[flyTarget]);
           setFlyTarget(null);
       }
   };
-  
-  // --- View Mode Handler with Smart Transitions ---
-  const handleSetViewMode = (mode: ViewMode) => {
+
+  const handleSetDisplayMode = (target: DisplayMode) => {
+      if (flyTarget !== null) return;
+
       const wasIn2D = viewMode === '2D';
-      const goingTo3D = mode === '3D';
-      
+      const goingTo3D = target.startsWith('3d');
+
+      const targetCam: CameraMode = target === '3d-individual' ? 'individual'
+          : target === '3d-top' ? 'top' : 'free';
+
       if (wasIn2D && goingTo3D) {
-          // Transition 2D → 3D
-          console.log('[App] Transition 2D → 3D', { 
-              hasSelection: selectedIdsFor2D.size > 0,
-              selectedIndividual: selectedIndividual?.id,
-              rootIndividual: rootIndividual?.id,
-              sceneExtras: sceneExtras.length
-          });
-          
-          // SYNC: Set rootIndividual to match selectedIndividual
-          // So 3D view builds tree around the individual selected in 2D
-          console.log('[App] Current state:', {
-              selectedIndividualId: selectedIndividual?.id,
-              selectedIndividualName: selectedIndividual ? `${selectedIndividual.givenName} ${selectedIndividual.surname}` : 'none',
-              rootIndividualId: rootIndividual?.id,
-              rootIndividualName: rootIndividual ? `${rootIndividual.givenName} ${rootIndividual.surname}` : 'none',
-              needsSync: selectedIndividual && selectedIndividual.id !== rootIndividual?.id
-          });
-          
           if (selectedIndividual && selectedIndividual.id !== rootIndividual?.id) {
-              console.log('[App] ✓ Syncing rootIndividual to selectedIndividual:', 
-                  `${selectedIndividual.givenName} ${selectedIndividual.surname}`);
               setRootIndividual(selectedIndividual);
-          } else if (selectedIndividual) {
-              console.log('[App] ✓ rootIndividual already matches selectedIndividual');
-          } else {
-              console.warn('[App] ⚠️ No selectedIndividual to sync!');
           }
-          
-          // SMART SYNC: Detect if 2D selection is ancestors-only or descendants-only
-          // and set autoLayoutMode accordingly
-          
-          if (selectedIdsFor2D.size > 0 && gedcomData && selectedIndividual) {
-              // Check what's in the selection relative to selectedIndividual
-              let hasAncestors = false;
-              let hasDescendants = false;
-              
-              selectedIdsFor2D.forEach(id => {
-                  if (id === selectedIndividual.id) return; // Skip self
-                  
-                  const indi = gedcomData.individuals[id];
-                  if (!indi) return;
-                  
-                  // Simple heuristic: compare generations
-                  const selectedGen = selectedIndividual.generation ?? 0;
-                  const indiGen = indi.generation ?? 0;
-                  
-                  if (indiGen < selectedGen) {
-                      hasAncestors = true; // Lower generation = ancestor
-                  } else if (indiGen > selectedGen) {
-                      hasDescendants = true; // Higher generation = descendant
-                  }
-              });
-              
-              // Set autoLayoutMode based on what was selected in 2D
-              if (hasAncestors && !hasDescendants) {
-                  console.log('[App] 2D had ancestors only → 3D autoLayoutMode = ancestors');
-                  setAutoLayoutMode('ancestors');
-              } else if (hasDescendants && !hasAncestors) {
-                  console.log('[App] 2D had descendants only → 3D autoLayoutMode = descendants');
-                  setAutoLayoutMode('descendants');
-              } else {
-                  console.log('[App] 2D had mixed or all → 3D autoLayoutMode = all');
-                  setAutoLayoutMode('all');
-              }
-              
-              // Clear sceneExtras - let autoLayout handle it
-              setSceneExtras([]);
-          } else {
-              // No selection in 2D, show full tree
-              setAutoLayoutMode('all');
-              setSceneExtras([]);
-          }
-          
-          // Activate TOP view (easiest to understand)
-          setCameraMode('top');
-          setFlyTarget(null);
-          
-          // Hide boxes for cleaner view
+          setAutoLayoutMode('all');
+          setSceneExtras([]);
           setShowBoxes(false);
-          
-      } else if (!wasIn2D && !goingTo3D) {
-          // Transition 3D → 2D
-          console.log('[App] Transition 3D → 2D', {
-              hasSelection: selectedIdsFor2D.size > 0,
-              selectedIndividual: selectedIndividual?.id
-          });
-          
-          // selectedIdsFor2D is already synced by handleVisibleIdsChange
-          // So the 2D view will automatically show what was visible in 3D
+          setDisplayMode(target);
+          setFlyTarget(targetCam);
+          return;
       }
-      
-      setViewMode(mode);
+
+      if (!wasIn2D && goingTo3D && target !== displayMode) {
+          if (targetCam !== cameraMode) {
+              setFlyTarget(targetCam);
+              return;
+          }
+      }
+
+      setDisplayMode(target);
   };
 
   const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
@@ -719,11 +648,10 @@ function App() {
     setRootIndividual(newData.individuals[newId]);
     setSelectedIndividual(newData.individuals[newId]);
     
-    // Auto Select in 2D View
     setSelectedIdsFor2D(prev => new Set(prev).add(newId));
-    // Reset 3D extras on new creation/root change
     setSceneExtras([]);
     setAutoLayoutMode('all');
+    setDisplayMode('2d-individual');
   };
 
   const handleDeleteIndividual = (id: string) => {
@@ -866,6 +794,7 @@ function App() {
             activeFilters={activeFilters}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
+            singleIndividual={is2dIndividual}
           />
         )}
         
@@ -980,12 +909,8 @@ function App() {
             if(bottomPanelOpen) closeBottomPanel();
             else setBottomPanelOpen(true);
         }}
-        dragMode={dragMode}
-        onSetDragMode={setDragMode}
-        cameraMode={cameraMode}
-        onSetCameraMode={handleSetCameraMode}
-        viewMode={viewMode}
-        onSetViewMode={handleSetViewMode}
+        displayMode={displayMode}
+        onSetDisplayMode={handleSetDisplayMode}
         isDarkMode={isDarkMode}
         onToggleTheme={() => setIsDarkMode(!isDarkMode)}
         hasData={!!gedcomData}

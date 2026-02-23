@@ -15,6 +15,7 @@ interface Scene2DGridProps {
   activeFilters?: Set<FilterTag>;
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
+  singleIndividual?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,10 +215,11 @@ interface GridContentProps {
   selectedId?: string | null;
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
+  singleIndividual?: boolean;
 }
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, onIndividualClick, isDarkMode,
+  individuals, data, selectedId, onIndividualClick, isDarkMode, singleIndividual = false,
 }) => {
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -395,8 +397,13 @@ const GridContent: React.FC<GridContentProps> = ({
       }
     }
 
+    if (singleIndividual && ribbonData.length === 1) {
+      ortho.position.x = 0;
+      ortho.position.y = 0;
+    }
+
     if (!needsReflow && initializedRef.current) {
-      ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
+      if (!singleIndividual) ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
       return;
     }
 
@@ -481,14 +488,19 @@ const GridContent: React.FC<GridContentProps> = ({
     if (traitsMesh.instanceColor) traitsMesh.instanceColor.needsUpdate = true;
 
     // Camera
-    const gridCx = ((cols - 1) * STEP_X) / 2;
-    if (!initializedRef.current) {
-      ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
+    if (singleIndividual && ribbonData.length === 1) {
+      ortho.position.set(0, 0, 100);
       initializedRef.current = true;
     } else {
-      const newRow = Math.floor(anchorIndex / cols);
-      ortho.position.x = gridCx;
-      ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
+      const gridCx = ((cols - 1) * STEP_X) / 2;
+      if (!initializedRef.current) {
+        ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
+        initializedRef.current = true;
+      } else {
+        const newRow = Math.floor(anchorIndex / cols);
+        ortho.position.x = gridCx;
+        ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
+      }
     }
   });
 
@@ -638,9 +650,14 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   isDarkMode,
   sortMode = 'birth-asc',
   activeFilters,
+  singleIndividual = false,
 }) => {
   const individuals = useMemo(() => {
     if (!data) return [];
+    if (singleIndividual && selectedId) {
+      const indi = data.individuals[selectedId];
+      return indi ? [indi] : [];
+    }
     const all = Object.values(data.individuals) as Individual[];
     let list = all;
     if (selectedIds?.has('__NONE__')) {
@@ -652,7 +669,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       list = list.filter(i => matchesFilters(i, activeFilters));
     }
     return applySortMode(list, sortMode);
-  }, [data, sortMode, selectedIds, activeFilters]);
+  }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId]);
 
   if (!data) return null;
 
@@ -662,7 +679,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
         <OrthographicCamera
           makeDefault
           position={[0, 0, 100]}
-          zoom={40}
+          zoom={singleIndividual ? 200 : 40}
           near={0.1}
           far={10000}
         />
@@ -678,6 +695,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           selectedId={selectedId}
           onIndividualClick={onIndividualClick}
           isDarkMode={isDarkMode}
+          singleIndividual={singleIndividual}
         />
       </Canvas>
 

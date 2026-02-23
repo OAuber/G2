@@ -181,6 +181,18 @@ const CameraController: React.FC<{
     if (!lastTarget.current.equals(currentLookAt)) {
       ctrl.target.copy(currentLookAt);
       lastTarget.current.copy(currentLookAt);
+
+      if (cameraMode === 'top') {
+        state.camera.position.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
+        state.camera.up.set(1, 0, 0);
+        state.camera.lookAt(currentLookAt);
+        const orthoCam = state.camera as any;
+        if (orthoCam.isOrthographicCamera) {
+          orthoCam.zoom = topViewOrthoZoom(sceneSize);
+          orthoCam.updateProjectionMatrix();
+        }
+      }
+
       ctrl.update();
     }
   });
