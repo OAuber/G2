@@ -74,6 +74,8 @@ function App() {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
   const [emulateRevealShortcut, setEmulateRevealShortcut] = useState(false);
+  const [topViewLabelMaxZSpan, setTopViewLabelMaxZSpan] = useState(500);
+  const [labelFontSize, setLabelFontSize] = useState(3);
   const relationshipRevealEnabled = isShortcutModifierPressed || emulateRevealShortcut;
   
   // Track if mouse is over UI to disable 3D controls
@@ -810,6 +812,40 @@ function App() {
                 {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
                 <span className="text-sm font-semibold">{isDarkMode ? 'Dark' : 'Light'}</span>
               </button>
+
+              <div className="mt-4 space-y-4 text-sm">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold">Top labels appear at max visible years (Z)</span>
+                    <span className="font-mono">{topViewLabelMaxZSpan}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={100}
+                    max={2000}
+                    step={25}
+                    value={topViewLabelMaxZSpan}
+                    onChange={(e) => setTopViewLabelMaxZSpan(Number(e.target.value))}
+                    className="w-full"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold">3D label font size</span>
+                    <span className="font-mono">{labelFontSize.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1.5}
+                    max={5}
+                    step={0.1}
+                    value={labelFontSize}
+                    onChange={(e) => setLabelFontSize(Number(e.target.value))}
+                    className="w-full"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -871,6 +907,8 @@ function App() {
             autoLayoutMode={autoLayoutMode}
             onSetAutoLayoutMode={setAutoLayoutMode}
             layoutParams={layoutParams}
+            topViewLabelMaxZSpan={topViewLabelMaxZSpan}
+            labelFontSize={labelFontSize}
           />
         ) : (
           <Scene2DGrid

@@ -221,6 +221,8 @@ interface Scene3DProps {
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
   onSetAutoLayoutMode?: (mode: 'none' | 'ancestors' | 'descendants' | 'all') => void;
   layoutParams?: LayoutParams;
+  topViewLabelMaxZSpan?: number;
+  labelFontSize?: number;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -244,6 +246,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
   autoLayoutMode = 'none',
   onSetAutoLayoutMode,
   layoutParams,
+  topViewLabelMaxZSpan = 500,
+  labelFontSize = 3,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
@@ -635,6 +639,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             cameraMode={cameraMode}
+            topViewLabelMaxZSpan={topViewLabelMaxZSpan}
+            labelFontSize={labelFontSize}
         />
     </Canvas>
   );

@@ -17,6 +17,7 @@ interface InstancedTreeProps {
   relationshipRevealEnabled?: boolean;
   cameraMode?: CameraMode;
   labelFontSize?: number;
+  topViewLabelMaxZSpan?: number;
 }
 
 // Helper to store trait mapping for interaction
@@ -53,6 +54,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   relationshipRevealEnabled = false,
   cameraMode = 'individual',
   labelFontSize = 3,
+  topViewLabelMaxZSpan = 500,
 }) => {
   const { camera } = useThree();
   const boxMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -67,6 +69,20 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const activePathRef = useRef<Set<string>>(new Set());
   const baseConnectorColorsRef = useRef<Float32Array | null>(null);
+
+  const isTopLabelVisible = (cam: THREE.Camera): boolean => {
+      if (!isTopView) {
+          return true;
+      }
+      const ortho = cam as THREE.OrthographicCamera;
+      if (!ortho.isOrthographicCamera) {
+          return true;
+      }
+      // In top view, screen horizontal axis maps to world Z.
+      // Visible span along Z ≈ frustum width / zoom.
+      const visibleZSpan = Math.abs((ortho.right - ortho.left) / Math.max(ortho.zoom, 0.0001));
+      return visibleZSpan <= topViewLabelMaxZSpan;
+  };
 
   // Geometries
   const boxGeometry = useMemo(() => {
@@ -632,8 +648,30 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const fromNegativeZ = !fromPositiveZ;
       const birthAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
       const deathAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
-      const topNameAnchor: 'left' | 'right' = node.gender === Gender.Female ? 'right' : 'left';
-      const topNameShift = node.gender === Gender.Female ? thickness * 0.68 : -thickness * 0.68;
+      const topNameAnchor: 'left' | 'right' = node.gender === Gender.Female ? 'left' : 'right';
+      const topNameShift = node.gender === Gender.Female ? thickness * 1.06 : -thickness * 1.06;
+      const fullName = `${indi.givenName} ${indi.surname}`.trim();
+      const marriageCount = node.traits.reduce((acc, t) => acc + (t.type === 'marriage' ? 1 : 0), 0);
+      const jitterHash = node.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+      const outwardSteps = [1.2, 2.0, 2.8];
+      const outwardStep = outwardSteps[jitterHash % outwardSteps.length];
+      // In top view with multiple unions, push labels farther from the ribbon (never closer).
+      const topNameJitter = (isTopView && marriageCount > 1) ? -(outwardStep * fs * 0.7) : 0;
+      const nameFacingRef = useRef<THREE.Group>(null);
+      const namePosRef = useRef(new THREE.Vector3());
+      namePosRef.current.copy(namePos);
+      useFrame(() => {
+          const g = nameFacingRef.current;
+          if (!g) return;
+          if (isTopView) {
+              g.quaternion.copy(camera.quaternion);
+              return;
+          }
+          const np = namePosRef.current;
+          const dx = camera.position.x - np.x;
+          const dz = camera.position.z - np.z;
+          g.rotation.set(0, Math.atan2(dx, dz), 0);
+      });
       const marriageLabels = node.traits
           .filter((t): t is { type: 'marriage'; offset: number; spouseId?: string } => t.type === 'marriage')
           .map((t, idx) => {
@@ -657,18 +695,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
       return (
         <>
-          <Billboard
-              position={namePos}
-              follow
-              lockX={isTopView ? false : true}
-              lockY={false}
-              lockZ={isTopView ? false : true}
-          >
+          <group position={namePos} ref={nameFacingRef}>
               {/* Name moved to former date line position */}
               <Text
                   ref={alwaysOnTop}
-                  position={[isTopView ? topNameShift : 0, -labelOffset, 0]}
-                  rotation={[0, isTopView ? 0 : (fromNegativeZ ? Math.PI : 0), 0]}
+                  position={[isTopView ? topNameShift : 0, -labelOffset + topNameJitter, 0]}
+                  rotation={[0, 0, 0]}
                   fontSize={fs}
                   color={textColor}
                   outlineWidth={outlineW}
@@ -677,9 +709,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   anchorY="middle"
                   renderOrder={999}
               >
-                  {`${indi.givenName} ${indi.surname}`}
+                  {fullName}
               </Text>
-          </Billboard>
+          </group>
 
           {/* Birth date on birth trait axis, opposite side of ribbon */}
           <Billboard
@@ -762,6 +794,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const MAX_LABELS = isTopView ? 220 : 80;
 
       useFrame(({ camera }) => {
+          const topLabelsEnabled = isTopLabelVisible(camera);
+          if (!topLabelsEnabled) {
+              if (lastKeyRef.current !== '__hidden__') {
+                  lastKeyRef.current = '__hidden__';
+                  setVisibleLabels([]);
+              }
+              return;
+          }
           const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
           const camDir = new THREE.Vector3();
           camera.getWorldDirection(camDir);
@@ -841,6 +881,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const MAX = isTopView ? 220 : 40;
 
       useFrame(({ camera }) => {
+          const topLabelsEnabled = isTopLabelVisible(camera);
+          if (!topLabelsEnabled) {
+              if (lastKeyRef.current !== '__hidden__') {
+                  lastKeyRef.current = '__hidden__';
+                  setVisibleIds([]);
+              }
+              return;
+          }
           const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
           const nearby: Array<{ id: string; dist: number }> = [];
           const tmpP = new THREE.Vector3();
