@@ -215,6 +215,7 @@ interface Scene3DProps {
   onFlyComplete: () => void;
   disableControls?: boolean;
   isDarkMode: boolean;
+  relationshipRevealEnabled?: boolean;
   extraIndividuals: RenderedPerson[];
   setExtraIndividuals: React.Dispatch<React.SetStateAction<RenderedPerson[]>>;
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
@@ -237,6 +238,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   onFlyComplete,
   disableControls = false,
   isDarkMode,
+  relationshipRevealEnabled = false,
   extraIndividuals,
   setExtraIndividuals,
   autoLayoutMode = 'none',
@@ -631,6 +633,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             onNodeClick={handleInstancedNodeClick}
             onTraitClick={handleInstancedTraitClick}
             isDarkMode={isDarkMode}
+            relationshipRevealEnabled={relationshipRevealEnabled}
+            cameraMode={cameraMode}
         />
     </Canvas>
   );

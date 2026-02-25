@@ -1,9 +1,10 @@
 import React, { useLayoutEffect, useRef, useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useFrame } from '@react-three/fiber';
+import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { Text, Billboard } from '@react-three/drei';
 import { LayoutNode } from '../services/layoutEngineB';
-import { Gender, GedcomData } from '../types';
+import { CameraMode, Gender, GedcomData } from '../types';
+import { findRelationshipPath } from '../services/relationshipPath';
 
 interface InstancedTreeProps {
   nodes: LayoutNode[];
@@ -13,6 +14,8 @@ interface InstancedTreeProps {
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
   isDarkMode?: boolean;
+  relationshipRevealEnabled?: boolean;
+  cameraMode?: CameraMode;
   labelFontSize?: number;
 }
 
@@ -43,12 +46,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   nodes, 
   data, 
   showBoxes = true, 
-  selectedId, 
+  selectedId,
   onNodeClick, 
   onTraitClick,
   isDarkMode = true,
+  relationshipRevealEnabled = false,
+  cameraMode = 'individual',
   labelFontSize = 3,
 }) => {
+  const { camera } = useThree();
   const boxMeshRef = useRef<THREE.InstancedMesh>(null);
   const pathMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -57,6 +63,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const [hoveredNode, setHoveredNode] = useState<LayoutNode | null>(null);
   const traitMapRef = useRef<TraitInstanceInfo[]>([]);
   const childLabelsDataRef = useRef<ChildLabelData[]>([]);
+  const isTopView = cameraMode === 'top';
+
+  const activePathRef = useRef<Set<string>>(new Set());
+  const baseConnectorColorsRef = useRef<Float32Array | null>(null);
 
   // Geometries
   const boxGeometry = useMemo(() => {
@@ -214,14 +224,11 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       tempMatrix.compose(new THREE.Vector3(tempPos.x, bottomY, tempPos.z), tempQuat, tempScale);
       boxMesh.setMatrixAt(i, tempMatrix);
 
-      // Determine color based on hover/selection state
+      // Determine color based on selection state (hover/path handled in separate effect)
       const isSelected = node.id === selectedId;
-      const isHovered = hoveredNode?.id === node.id;
       let nodeColor: THREE.Color;
       if (isSelected) {
           nodeColor = new THREE.Color(COLORS.select[node.gender] || COLORS.select[Gender.Unknown]);
-      } else if (isHovered) {
-          nodeColor = new THREE.Color(COLORS.hover[node.gender] || COLORS.hover[Gender.Unknown]);
       } else {
           nodeColor = node.color;
       }
@@ -244,7 +251,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       pathMatrix.compose(tempPos, pathQuat, pathScale);
       
       pathMesh.setMatrixAt(i, pathMatrix);
-      pathMesh.setColorAt(i, nodeColor.clone().addScalar(isSelected ? 0.05 : isHovered ? 0.08 : 0.1));
+      pathMesh.setColorAt(i, nodeColor.clone().addScalar(isSelected ? 0.05 : 0.1));
 
       // 4. Traits & Connectors
       node.traits.forEach(trait => {
@@ -289,8 +296,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
               // Collect data for child name label
               if (trait.childId) {
+                  const dashLen = thickness / 3;
+                  const childLabelOffset = dashLen * (isTopView ? 1.55 : 1.15);
                   childLabelsDataRef.current.push({
-                      x: tempPos.x + (thickness / 2) + dashLen,
+                      x: tempPos.x + (thickness / 2) + childLabelOffset,
                       y: traitY,
                       z: traitZ,
                       childId: trait.childId,
@@ -403,8 +412,99 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         connectorsGeometryRef.current.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
         connectorsGeometryRef.current.computeBoundingSphere();
     }
+    baseConnectorColorsRef.current = new Float32Array(lineColors);
 
-  }, [nodes, totalTraits, showBoxes, pathGeometry, data, hoveredNode, selectedId]);
+  }, [nodes, totalTraits, showBoxes, pathGeometry, data, selectedId, isTopView]);
+
+  const isConnectorOnPath = (parentId: string, childId: string, pathIds: Set<string>) => {
+    // Normal case: connector parent <-> child is directly on the node path set
+    if (pathIds.has(parentId) && pathIds.has(childId)) return true;
+    if (!data || !pathIds.has(childId)) return false;
+
+    // Some child connectors are attached to only one spouse in layoutEngineB.
+    // If the opposite co-parent is on the path, keep this connector highlighted too.
+    const parent = data.individuals[parentId];
+    if (!parent?.familySpouseIds) return false;
+    for (const famId of parent.familySpouseIds) {
+      const fam = data.families[famId];
+      if (!fam?.childrenIds?.includes(childId)) continue;
+      const coParentId = fam.husbandId === parentId ? fam.wifeId : fam.husbandId;
+      if (coParentId && pathIds.has(coParentId)) return true;
+    }
+    return false;
+  };
+
+  const applyPathColors = (pathIds: Set<string>) => {
+    const pathMesh = pathMeshRef.current;
+    const boxMesh = boxMeshRef.current;
+    if (!pathMesh || !boxMesh) return;
+
+    const hasPath = pathIds.size > 0;
+    const bg = new THREE.Color(isDarkMode ? '#000000' : '#f0f9ff');
+    const FADE = 0.93;
+
+    nodes.forEach((node, i) => {
+      const isSelected = node.id === selectedId;
+      const hasPathConnector = hasPath && node.traits.some(
+        trait => trait.type === 'child'
+          && !!trait.childId
+          && nodesMap.has(trait.childId)
+          && isConnectorOnPath(node.id, trait.childId, pathIds),
+      );
+      const isOnPath = hasPath && (pathIds.has(node.id) || hasPathConnector);
+      let c: THREE.Color;
+      if (isSelected) {
+        c = new THREE.Color(COLORS.select[node.gender] || COLORS.select[Gender.Unknown]);
+      } else if (isOnPath || !hasPath) {
+        c = node.color;
+      } else {
+        c = node.color.clone().lerp(bg, FADE);
+      }
+      boxMesh.setColorAt(i, c);
+      pathMesh.setColorAt(i, c.clone().addScalar(isSelected ? 0.05 : (isOnPath || !hasPath) ? 0.1 : 0.02));
+    });
+
+    if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
+    if (pathMesh.instanceColor) pathMesh.instanceColor.needsUpdate = true;
+
+    if (connectorsGeometryRef.current && baseConnectorColorsRef.current) {
+      const colorAttr = connectorsGeometryRef.current.getAttribute('color') as THREE.BufferAttribute;
+      if (colorAttr) {
+        const base = baseConnectorColorsRef.current;
+        const arr = colorAttr.array as Float32Array;
+        if (hasPath) {
+          const bgR = bg.r, bgG = bg.g, bgB = bg.b;
+          let ci = 0;
+          nodes.forEach(node => {
+            node.traits.forEach(trait => {
+              if (trait.type === 'child' && trait.childId && nodesMap.has(trait.childId)) {
+                const onPathConn = isConnectorOnPath(node.id, trait.childId, pathIds);
+                if (!onPathConn) {
+                  for (let k = 0; k < 6; k++) {
+                    const bgC = k % 3 === 0 ? bgR : k % 3 === 1 ? bgG : bgB;
+                    arr[ci + k] = base[ci + k] + (bgC - base[ci + k]) * FADE;
+                  }
+                } else {
+                  for (let k = 0; k < 6; k++) arr[ci + k] = base[ci + k];
+                }
+                ci += 6;
+              }
+            });
+          });
+        } else {
+          arr.set(base);
+        }
+        colorAttr.needsUpdate = true;
+      }
+    }
+
+    activePathRef.current = pathIds;
+  };
+
+  useLayoutEffect(() => {
+    if (relationshipRevealEnabled) return;
+    applyPathColors(new Set());
+  }, [relationshipRevealEnabled]);
 
   // --- Interaction Handlers ---
 
@@ -422,6 +522,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           const node = nodes[e.instanceId];
           if (hoveredNode?.id !== node.id) {
               setHoveredNode(node);
+              if (relationshipRevealEnabled && selectedId && node.id !== selectedId && data) {
+                  try {
+                      const pathIds = findRelationshipPath(data, selectedId, node.id);
+                      applyPathColors(pathIds);
+                  } catch (_e) { /* ignore */ }
+              } else {
+                  applyPathColors(new Set());
+              }
           }
       }
   };
@@ -429,6 +537,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const handleBoxOut = () => {
       document.body.style.cursor = 'auto';
       setHoveredNode(null);
+      applyPathColors(new Set());
   };
 
   const handleTraitClick = (e: ThreeEvent<MouseEvent>) => {
@@ -446,10 +555,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
   };
 
-  const selectedNode = useMemo(() => {
-      if (!selectedId) return null;
-      return nodes.find(n => n.id === selectedId) || null;
-  }, [selectedId, nodes]);
+  const selectedSpouseIds = useMemo<string[]>(() => {
+      if (!data || !selectedId) return [];
+      const indi = data.individuals[selectedId];
+      if (!indi?.familySpouseIds) return [];
+      const ids: string[] = [];
+      for (const famId of indi.familySpouseIds) {
+          const fam = data.families[famId];
+          if (!fam) continue;
+          const spouseId = fam.husbandId === selectedId ? fam.wifeId : fam.husbandId;
+          if (spouseId) ids.push(spouseId);
+      }
+      return ids;
+  }, [data, selectedId]);
 
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
@@ -463,16 +581,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const height = s.y;
       const depth = s.z;
 
-      // Position at 3/4 along the life path (last quarter toward death)
-      // The path goes diagonally: Y = time, Z = depth (direction depends on gender)
-      const progress = 0.25; // offset from center toward death (0 = center, 0.5 = death end)
+      // Position along the life path for the main label
+      const progress = 0.25;
       const zSign = node.gender === Gender.Female ? 1 : -1;
       const pos = new THREE.Vector3(
           p.x,
           p.y + height * progress,
           p.z + depth * progress * zSign
       );
-      const fs = isHover ? labelFontSize * 1.17 : labelFontSize;
+      const fs = isHover ? labelFontSize * 1.0 : labelFontSize * 0.86;
       const labelOffset = thickness * 0.8;
 
       // Text style based on theme
@@ -480,50 +597,160 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const outlineW = isDarkMode ? 0.15 : 0;
       const outlineC = isDarkMode ? '#000000' : '#000000';
 
-      // Date formatting: birth - death with (CAL) markers
+      // Date formatting with (CAL) markers
       const bYear = indi.birthDate?.year;
       const dYear = indi.deathDate?.year;
       const bCal = indi.birthDate?.isCalculated ? ' (CAL)' : '';
       const dCal = indi.deathDate?.isCalculated ? ' (CAL)' : '';
       const birthStr = bYear ? `${bYear}${bCal}` : '?';
       const deathStr = dYear ? `${dYear}${dCal}` : '?';
-      const dateText = `${birthStr} – ${deathStr}`;
 
       const alwaysOnTop = (m: any) => {
           if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; }
       };
 
+      const bottomY = p.y - (height / 2);
+      const namePos = isTopView
+          ? new THREE.Vector3(p.x, bottomY - (thickness * 1.1), p.z)
+          : pos;
+      const traitPos = (offset: number) => {
+          const t = height > 0 ? offset / height : 0;
+          const traitZLocal = node.gender === Gender.Female
+              ? (-(depth / 2) + (depth * t))
+              : ((depth / 2) - (depth * t));
+          return new THREE.Vector3(
+              p.x + (thickness * (isTopView ? 1.04 : 0.92)), // slight extra X offset in top view
+              bottomY + offset,
+              p.z + traitZLocal,
+          );
+      };
+      const birthPos = traitPos(0);
+      const deathPos = traitPos(height);
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      const fromPositiveZ = camDir.z < 0;
+      const fromNegativeZ = !fromPositiveZ;
+      const birthAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
+      const deathAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
+      const topNameAnchor: 'left' | 'right' = node.gender === Gender.Female ? 'right' : 'left';
+      const topNameShift = node.gender === Gender.Female ? thickness * 0.68 : -thickness * 0.68;
+      const marriageLabels = node.traits
+          .filter((t): t is { type: 'marriage'; offset: number; spouseId?: string } => t.type === 'marriage')
+          .map((t, idx) => {
+              let mYear: number | null = null;
+              let mCal = '';
+              if (t.spouseId) {
+                  for (const fam of Object.values(data.families)) {
+                      const match = (fam.husbandId === node.id && fam.wifeId === t.spouseId)
+                          || (fam.wifeId === node.id && fam.husbandId === t.spouseId);
+                      if (!match) continue;
+                      if (fam.marriageDate?.year) {
+                          mYear = fam.marriageDate.year;
+                          mCal = fam.marriageDate.isCalculated ? ' (CAL)' : '';
+                      }
+                      break;
+                  }
+              }
+              if (mYear === null && bYear) mYear = Math.round(bYear + t.offset);
+              return { key: `m-${node.id}-${idx}`, text: mYear ? `${mYear}${mCal}` : '?', pos: traitPos(t.offset) };
+          });
+
       return (
-        <Billboard position={pos} follow lockX={false} lockY={false} lockZ={false}>
-            {/* Name — offset above */}
-            <Text
-                ref={alwaysOnTop}
-                position={[0, labelOffset, 0]}
-                fontSize={fs}
-                color={textColor}
-                outlineWidth={outlineW}
-                outlineColor={outlineC}
-                anchorX="center"
-                anchorY="middle"
-                renderOrder={999}
-            >
-                {`${indi.givenName} ${indi.surname}`}
-            </Text>
-            {/* Dates — offset below, symmetric */}
-            <Text
-                ref={alwaysOnTop}
-                position={[0, -labelOffset, 0]}
-                fontSize={fs * 0.85}
-                color={textColor}
-                outlineWidth={outlineW}
-                outlineColor={outlineC}
-                anchorX="center"
-                anchorY="middle"
-                renderOrder={999}
-            >
-                {dateText}
-            </Text>
-        </Billboard>
+        <>
+          <Billboard
+              position={namePos}
+              follow
+              lockX={isTopView ? false : true}
+              lockY={false}
+              lockZ={isTopView ? false : true}
+          >
+              {/* Name moved to former date line position */}
+              <Text
+                  ref={alwaysOnTop}
+                  position={[isTopView ? topNameShift : 0, -labelOffset, 0]}
+                  rotation={[0, isTopView ? 0 : (fromNegativeZ ? Math.PI : 0), 0]}
+                  fontSize={fs}
+                  color={textColor}
+                  outlineWidth={outlineW}
+                  outlineColor={outlineC}
+                  anchorX={isTopView ? topNameAnchor : 'center'}
+                  anchorY="middle"
+                  renderOrder={999}
+              >
+                  {`${indi.givenName} ${indi.surname}`}
+              </Text>
+          </Billboard>
+
+          {/* Birth date on birth trait axis, opposite side of ribbon */}
+          <Billboard
+              position={birthPos}
+              follow
+              lockX={false}
+              lockY={true}
+              lockZ={true}
+          >
+              <Text
+                  ref={alwaysOnTop}
+                  rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                  fontSize={labelFontSize * 0.48}
+                  color={textColor}
+                  outlineWidth={outlineW}
+                  outlineColor={outlineC}
+                  anchorX={birthAnchor}
+                  anchorY="middle"
+                  renderOrder={999}
+              >
+                  {birthStr}
+              </Text>
+          </Billboard>
+
+          {/* Death date on death trait axis, opposite side of ribbon */}
+          <Billboard
+              position={deathPos}
+              follow
+              lockX={false}
+              lockY={true}
+              lockZ={true}
+          >
+              <Text
+                  ref={alwaysOnTop}
+                  rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                  fontSize={labelFontSize * 0.48}
+                  color={textColor}
+                  outlineWidth={outlineW}
+                  outlineColor={outlineC}
+                  anchorX={deathAnchor}
+                  anchorY="middle"
+                  renderOrder={999}
+              >
+                  {deathStr}
+              </Text>
+          </Billboard>
+          {marriageLabels.map(m => (
+              <Billboard
+                  key={m.key}
+                  position={m.pos}
+                  follow
+                  lockX={false}
+                  lockY={true}
+                  lockZ={true}
+              >
+                  <Text
+                      ref={alwaysOnTop}
+                      rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                      fontSize={labelFontSize * 0.48}
+                      color={textColor}
+                      outlineWidth={outlineW}
+                      outlineColor={outlineC}
+                      anchorX={deathAnchor}
+                      anchorY="middle"
+                      renderOrder={999}
+                  >
+                      {m.text}
+                  </Text>
+              </Billboard>
+          ))}
+        </>
       );
   };
 
@@ -531,11 +758,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const ChildLabels: React.FC = () => {
       const [visibleLabels, setVisibleLabels] = useState<Array<ChildLabelData & { flip: boolean }>>([]);
       const lastKeyRef = useRef('');
-      const DISTANCE_THRESHOLD = 150;
-      const MAX_LABELS = 30;
+      const DISTANCE_THRESHOLD = isTopView ? 100000 : 220;
+      const MAX_LABELS = isTopView ? 220 : 80;
 
       useFrame(({ camera }) => {
           const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+          const camDir = new THREE.Vector3();
+          camera.getWorldDirection(camDir);
+          const fromPositiveZ = camDir.z < 0;
           const labels = childLabelsDataRef.current;
 
           const nearby: Array<ChildLabelData & { dist: number; flip: boolean }> = [];
@@ -543,8 +773,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               const l = labels[i];
               const dx = cx - l.x, dy = cy - l.y, dz = cz - l.z;
               const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-              if (dist < DISTANCE_THRESHOLD) {
-                  nearby.push({ ...l, dist, flip: cz < l.nodeZ });
+              const ndc = new THREE.Vector3(l.x, l.y, l.z).project(camera);
+              const inView = ndc.z > -1 && ndc.z < 1 && ndc.x > -1.15 && ndc.x < 1.15 && ndc.y > -1.15 && ndc.y < 1.15;
+              if (dist < DISTANCE_THRESHOLD && inView) {
+                  nearby.push({ ...l, dist, flip: !fromPositiveZ });
               }
           }
 
@@ -562,7 +794,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
       const textColor = isDarkMode ? '#ffffff' : '#000000';
       const outlineW = isDarkMode ? 0.1 : 0;
-      const fs = labelFontSize * 0.6;
+      const fs = labelFontSize * 0.48;
       const alwaysVisible = (m: any) => { if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; } };
 
       return (
@@ -574,23 +806,83 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   const yOffset = (label.stackIndex - (label.stackTotal - 1) / 2) * fs * 1.4;
                   const firstName = child.givenName?.split(/\s+/)[0] || child.givenName;
                   return (
-                      <Text
-                          ref={alwaysVisible}
+                      <Billboard
                           key={`${label.childId}-${label.y.toFixed(0)}`}
                           position={[label.x, label.y + yOffset, label.z]}
-                          rotation={[0, label.flip ? Math.PI : 0, 0]}
-                          fontSize={fs}
-                          color={textColor}
-                          outlineWidth={outlineW}
-                          outlineColor="#000000"
-                          anchorX={label.flip ? 'right' : 'left'}
-                          anchorY="middle"
+                          follow
+                          lockX={false}
+                          lockY={true}
+                          lockZ={true}
                       >
-                          {firstName}
-                      </Text>
+                          <Text
+                              ref={alwaysVisible}
+                              scale={label.flip ? [-1, -1, 1] : [1, 1, 1]}
+                              fontSize={fs}
+                              color={textColor}
+                              outlineWidth={outlineW}
+                              outlineColor="#000000"
+                              anchorX={label.flip ? 'right' : 'left'}
+                              anchorY="middle"
+                              renderOrder={999}
+                          >
+                              {firstName}
+                          </Text>
+                      </Billboard>
                   );
               })}
           </group>
+      );
+  };
+
+  const NearbyLabels: React.FC = () => {
+      const [visibleIds, setVisibleIds] = useState<string[]>([]);
+      const lastKeyRef = useRef('');
+      const DIST = isTopView ? 100000 : 260;
+      const MAX = isTopView ? 220 : 40;
+
+      useFrame(({ camera }) => {
+          const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+          const nearby: Array<{ id: string; dist: number }> = [];
+          const tmpP = new THREE.Vector3();
+          const tmpS = new THREE.Vector3();
+          const tmpQ = new THREE.Quaternion();
+
+          for (let i = 0; i < nodes.length; i++) {
+              const n = nodes[i];
+              n.matrix.decompose(tmpP, tmpQ, tmpS);
+              const dx = cx - tmpP.x, dy = cy - tmpP.y, dz = cz - tmpP.z;
+              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              const ndc = tmpP.clone().project(camera);
+              const inView = ndc.z > -1 && ndc.z < 1 && ndc.x > -1.2 && ndc.x < 1.2 && ndc.y > -1.2 && ndc.y < 1.2;
+              if (dist < DIST && inView) nearby.push({ id: n.id, dist });
+          }
+
+          nearby.sort((a, b) => a.dist - b.dist);
+          if (nearby.length > MAX) nearby.length = MAX;
+
+          const forced = new Set<string>([
+              ...(selectedId ? [selectedId] : []),
+              ...(hoveredNode ? [hoveredNode.id] : []),
+              ...selectedSpouseIds,
+          ]);
+          for (const n of nearby) forced.add(n.id);
+
+          const ids = Array.from(forced);
+          const key = ids.join(',');
+          if (key !== lastKeyRef.current) {
+              lastKeyRef.current = key;
+              setVisibleIds(ids);
+          }
+      });
+
+      return (
+          <>
+              {visibleIds.map(id => {
+                  const node = nodesMap.get(id);
+                  if (!node) return null;
+                  return <RenderLabel key={`lbl-${id}`} node={node} isHover={hoveredNode?.id === id} />;
+              })}
+          </>
       );
   };
 
@@ -625,13 +917,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         </lineSegments>
 
         {/* Labels */}
-        {selectedNode && (
-            <RenderLabel node={selectedNode} isHover={false} />
-        )}
-        
-        {hoveredNode && hoveredNode.id !== selectedId && (
-            <RenderLabel node={hoveredNode} isHover={true} />
-        )}
+        <NearbyLabels />
 
         {/* Child name labels (LOD — only visible near camera) */}
         <ChildLabels />

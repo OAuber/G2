@@ -29,9 +29,9 @@ export interface LayoutParams {
 }
 
 export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
-  generationPitch: 40,
-  minGap: 2,
-  leafWidthRatio: 0.6,
+  generationPitch: 100,
+  minGap: 40,
+  leafWidthRatio: 1.6,
 };
 
 export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';

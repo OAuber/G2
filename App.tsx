@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 import Scene3D from './components/Scene3D';
@@ -71,6 +71,10 @@ function App() {
   
   // Info Pages State
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
+  const [emulateRevealShortcut, setEmulateRevealShortcut] = useState(false);
+  const relationshipRevealEnabled = isShortcutModifierPressed || emulateRevealShortcut;
   
   // Track if mouse is over UI to disable 3D controls
   const [isHoveringUI, setIsHoveringUI] = useState(false);
@@ -86,16 +90,36 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'b') {
+      const modifierPressed = e.ctrlKey || e.metaKey;
+      setIsShortcutModifierPressed(modifierPressed);
+
+      if (e.key === 'Escape' && isHelpOpen) {
+        setIsHelpOpen(false);
+        return;
+      }
+
+      if (modifierPressed && e.key.toLowerCase() === 'b' && !e.repeat) {
+        e.preventDefault();
         setShowBoxes(prev => !prev);
       }
     };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      setIsShortcutModifierPressed(e.ctrlKey || e.metaKey);
+    };
+    const handleBlur = () => {
+      setIsShortcutModifierPressed(false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
     return () => {
-        window.removeEventListener('keydown', handleKeyDown);
-        p2pService.destroy();
-    }
-  }, []);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      p2pService.destroy();
+    };
+  }, [isHelpOpen]);
 
   const handleInitP2P = () => {
       setP2pStatus('connecting');
@@ -729,6 +753,70 @@ function App() {
      );
   };
 
+  const renderHelpOverlay = () => {
+    if (!isHelpOpen) return null;
+
+    return (
+      <div className={`fixed inset-0 z-[120] ${isDarkMode ? 'bg-black/90 text-white' : 'bg-sky-50/95 text-black'} backdrop-blur-sm`}>
+        <button
+          onClick={() => setIsHelpOpen(false)}
+          className={`absolute top-6 right-6 p-2 rounded-full hover:bg-opacity-20 transition-colors ${isDarkMode ? 'hover:bg-white text-white' : 'hover:bg-black text-black'}`}
+          title="Close Help"
+        >
+          <X className="w-7 h-7" />
+        </button>
+
+        <div className="h-full overflow-y-auto px-6 py-10 md:px-10">
+          <div className="max-w-3xl mx-auto">
+            <h2 className="text-3xl font-bold tracking-tight uppercase flex items-center gap-2">
+              <HelpCircle className="w-7 h-7" />
+              Help
+            </h2>
+            <p className={`mt-3 text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+              Keyboard shortcuts (English) and mobile emulation.
+            </p>
+
+            <div className={`mt-6 rounded-xl border p-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-300 bg-white'}`}>
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">Shortcuts</h3>
+              <div className="space-y-3 text-sm">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={emulateRevealShortcut}
+                    onChange={(e) => setEmulateRevealShortcut(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span><strong>Ctrl/⌘ + Hover</strong> — reveal relationship links between selected and hovered individuals.</span>
+                </label>
+
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={showBoxes}
+                    onChange={(e) => setShowBoxes(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span><strong>Ctrl/⌘ + B</strong> — toggle individual boxes in 3D view.</span>
+                </label>
+              </div>
+            </div>
+
+            <div className={`mt-4 rounded-xl border p-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-300 bg-white'}`}>
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">Appearance</h3>
+              <button
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200 hover:bg-neutral-900' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
+              >
+                {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                <span className="text-sm font-semibold">{isDarkMode ? 'Dark' : 'Light'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={`${isDarkMode ? 'dark [color-scheme:dark]' : '[color-scheme:light]'} flex h-screen h-dvh w-screen overflow-hidden relative transition-colors duration-500`}>
       <div className="absolute inset-0 bg-sky-50 dark:bg-black transition-colors duration-500 -z-10"></div>
@@ -775,8 +863,9 @@ function App() {
             cameraMode={cameraMode}
             flyTarget={flyTarget}
             onFlyComplete={handleFlyComplete}
-            disableControls={isHoveringUI || !!activeInfoPage}
+            disableControls={isHoveringUI || !!activeInfoPage || isHelpOpen}
             isDarkMode={isDarkMode}
+            relationshipRevealEnabled={relationshipRevealEnabled}
             extraIndividuals={sceneExtras}
             setExtraIndividuals={setSceneExtras}
             autoLayoutMode={autoLayoutMode}
@@ -790,6 +879,7 @@ function App() {
             selectedIds={selectedIdsFor2D}
             onIndividualClick={handleInspectIndividual}
             isDarkMode={isDarkMode}
+            relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}
             activeFilters={activeFilters}
             leftPanelOpen={leftPanelOpen}
@@ -847,6 +937,8 @@ function App() {
 
                         <div className="mt-8 flex gap-4 opacity-70">
                         <button onClick={() => setActiveInfoPage('about')} className="hover:opacity-100 hover:text-blue-500 transition-colors">About</button>
+                        <span>-</span>
+                        <button onClick={() => setIsHelpOpen(true)} className="hover:opacity-100 hover:text-blue-500 transition-colors">Help</button>
                         <span>-</span>
                         <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contribute</button>
                         </div>
@@ -912,7 +1004,7 @@ function App() {
         displayMode={displayMode}
         onSetDisplayMode={handleSetDisplayMode}
         isDarkMode={isDarkMode}
-        onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+        onOpenHelp={() => setIsHelpOpen(true)}
         hasData={!!gedcomData}
         onMouseEnter={handleUIEnter}
         onMouseLeave={handleUILeave}
@@ -922,6 +1014,8 @@ function App() {
         onSetLayoutParams={setLayoutParams}
         isAnimating={flyTarget !== null}
       />
+
+      {renderHelpOverlay()}
 
     </div>
   );

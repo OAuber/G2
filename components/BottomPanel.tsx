@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { Sun, Moon } from 'lucide-react';
+import { HelpCircle } from 'lucide-react';
 import { DisplayMode, LayoutParams, DEFAULT_LAYOUT_PARAMS } from '../types';
 
 const PINK = '#f9a8d4';
@@ -14,9 +14,9 @@ interface SliderDef {
 }
 
 const SLIDER_DEFS: SliderDef[] = [
-  { key: 'generationPitch', label: 'Gen.', min: 20, max: 100, step: 5 },
-  { key: 'minGap',          label: 'Gap',  min: 0,  max: 20,  step: 1 },
-  { key: 'leafWidthRatio',  label: 'Leaf', min: 0.2, max: 1.0, step: 0.05 },
+  { key: 'generationPitch', label: 'Gen.', min: 20, max: 180, step: 5 },
+  { key: 'minGap',          label: 'Gap',  min: 0,  max: 80,  step: 1 },
+  { key: 'leafWidthRatio',  label: 'Leaf', min: 0.2, max: 3.0, step: 0.05 },
 ];
 
 interface BottomPanelProps {
@@ -25,7 +25,7 @@ interface BottomPanelProps {
   displayMode: DisplayMode;
   onSetDisplayMode: (mode: DisplayMode) => void;
   isDarkMode: boolean;
-  onToggleTheme: () => void;
+  onOpenHelp: () => void;
   hasData: boolean;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -104,7 +104,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   displayMode,
   onSetDisplayMode,
   isDarkMode,
-  onToggleTheme,
+  onOpenHelp,
   hasData,
   onMouseEnter,
   onMouseLeave,
@@ -190,7 +190,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
         >
-          {/* Row 1: view buttons + toggles + theme */}
+          {/* Row 1: view buttons + toggles + help */}
           <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-4xl mx-auto">
             {hasData && (
               <>
@@ -225,11 +225,12 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
             )}
 
             <button
-              onClick={onToggleTheme}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
+              onClick={onOpenHelp}
+              title="Help"
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200 hover:bg-neutral-900' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
             >
-              {isDarkMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-              <span className="text-xs font-bold">{isDarkMode ? 'Dark' : 'Light'}</span>
+              <HelpCircle className="w-3.5 h-3.5" />
+              <span className="text-xs font-bold">Help</span>
             </button>
           </div>
 

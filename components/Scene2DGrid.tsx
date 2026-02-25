@@ -5,12 +5,75 @@ import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { matchesFilters, applySortMode } from './Sidebar';
 
+function findRelationshipPath(data: GedcomData, sourceId: string, targetId: string): Set<string> {
+  if (sourceId === targetId) return new Set([sourceId]);
+  if (!data.individuals[sourceId] || !data.individuals[targetId]) return new Set();
+
+  const getNeighbors = (id: string): string[] => {
+    const indi = data.individuals[id];
+    if (!indi) return [];
+    const nb: string[] = [];
+    if (indi.familyChildId) {
+      const fam = data.families[indi.familyChildId];
+      if (fam) {
+        if (fam.husbandId && fam.husbandId !== id) nb.push(fam.husbandId);
+        if (fam.wifeId && fam.wifeId !== id) nb.push(fam.wifeId);
+      }
+    }
+    if (indi.familySpouseIds) {
+      for (const famId of indi.familySpouseIds) {
+        const fam = data.families[famId];
+        if (!fam) continue;
+        const sp = fam.husbandId === id ? fam.wifeId : fam.husbandId;
+        if (sp) nb.push(sp);
+        if (fam.childrenIds) for (const cid of fam.childrenIds) { if (cid !== id) nb.push(cid); }
+      }
+    }
+    return nb;
+  };
+
+  const prev = new Map<string, Set<string>>();
+  prev.set(sourceId, new Set());
+  let queue: string[] = [sourceId];
+  let found = false;
+
+  while (queue.length > 0 && !found) {
+    const next: string[] = [];
+    for (const cur of queue) {
+      for (const nb of getNeighbors(cur)) {
+        if (nb === targetId) {
+          found = true;
+          if (!prev.has(nb)) prev.set(nb, new Set());
+          prev.get(nb)!.add(cur);
+          continue;
+        }
+        if (!prev.has(nb)) { prev.set(nb, new Set([cur])); next.push(nb); }
+      }
+    }
+    if (found) break;
+    queue = next;
+  }
+
+  if (!found) return new Set();
+  const onPath = new Set<string>();
+  const stack: string[] = [targetId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (onPath.has(id)) continue;
+    onPath.add(id);
+    const preds = prev.get(id);
+    if (preds) for (const p of preds) stack.push(p);
+  }
+  return onPath;
+}
+
 interface Scene2DGridProps {
   data: GedcomData | null;
   selectedId?: string | null;
   selectedIds?: Set<string>;
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
+  relationshipRevealEnabled?: boolean;
   sortMode?: SortMode;
   activeFilters?: Set<FilterTag>;
   leftPanelOpen?: boolean;
@@ -56,9 +119,14 @@ const COLORS_SELECT: Record<string, THREE.Color> = {
   [Gender.Unknown]: new THREE.Color('#f59e0b'),
 };
 
+const BG_LIGHT = new THREE.Color('#f0f9ff');
+const BG_DARK  = new THREE.Color('#000000');
+const FADE = 0.93;
+
 function defaultColor(g: Gender)  { return COLORS_DEFAULT[g] ?? COLORS_DEFAULT[Gender.Unknown]; }
 function hoverColor(g: Gender)    { return COLORS_HOVER[g]   ?? COLORS_HOVER[Gender.Unknown]; }
 function selectColor(g: Gender)   { return COLORS_SELECT[g]  ?? COLORS_SELECT[Gender.Unknown]; }
+function dimColor(g: Gender, dark: boolean) { return defaultColor(g).clone().lerp(dark ? BG_DARK : BG_LIGHT, FADE); }
 
 /* ------------------------------------------------------------------ */
 /*  Ribbon data: traits computed from GEDCOM                           */
@@ -215,16 +283,18 @@ interface GridContentProps {
   selectedId?: string | null;
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
+  relationshipRevealEnabled: boolean;
   singleIndividual?: boolean;
 }
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, onIndividualClick, isDarkMode, singleIndividual = false,
+  individuals, data, selectedId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false,
 }) => {
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
   const [hoveredIdx, setHoveredIdx] = useState(-1);
+  const pathSetRef = useRef<Set<string>>(new Set());
   const colsRef = useRef(0);
   const initializedRef = useRef(false);
   const needsCenterRef = useRef(false);
@@ -506,6 +576,34 @@ const GridContent: React.FC<GridContentProps> = ({
 
   /* ---- Interaction handlers ---- */
 
+  const clearPathHighlight = useCallback((mesh: THREE.InstancedMesh) => {
+    if (pathSetRef.current.size === 0) return;
+    for (let i = 0; i < ribbonData.length; i++) {
+      const indi = ribbonData[i].individual;
+      const c = indi.id === selectedId ? selectColor(indi.gender) : defaultColor(indi.gender);
+      mesh.setColorAt(i, c);
+    }
+    pathSetRef.current = new Set();
+  }, [ribbonData, selectedId]);
+
+  const applyPathHighlight = useCallback((mesh: THREE.InstancedMesh, pathIds: Set<string>) => {
+    if (pathIds.size === 0) return;
+    for (let i = 0; i < ribbonData.length; i++) {
+      const indi = ribbonData[i].individual;
+      if (indi.id === selectedId || pathIds.has(indi.id) || i === hoveredRef.current) continue;
+      mesh.setColorAt(i, dimColor(indi.gender, isDarkMode));
+    }
+    pathSetRef.current = pathIds;
+  }, [ribbonData, selectedId, isDarkMode]);
+
+  useEffect(() => {
+    if (relationshipRevealEnabled) return;
+    const mesh = ribbonMeshRef.current;
+    if (!mesh) return;
+    clearPathHighlight(mesh);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [relationshipRevealEnabled, clearPathHighlight]);
+
   const handlePointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
     const mesh = ribbonMeshRef.current;
     if (!mesh) return;
@@ -520,18 +618,30 @@ const GridContent: React.FC<GridContentProps> = ({
       mesh.setColorAt(hoveredRef.current, c);
     }
 
+    // Clear old path highlight
+    clearPathHighlight(mesh);
+
     // Apply hover color
     if (id < ribbonData.length) {
       const indi = ribbonData[id].individual;
       const c = indi.id === selectedId ? selectColor(indi.gender) : hoverColor(indi.gender);
       mesh.setColorAt(id, c);
       document.body.style.cursor = 'pointer';
+
+      // Compute and highlight relationship path
+      if (relationshipRevealEnabled && selectedId && data && indi.id !== selectedId) {
+        try {
+          const pathIds = findRelationshipPath(data, selectedId, indi.id);
+          console.log('[2D Path]', selectedId, '→', indi.id, 'path size:', pathIds.size, [...pathIds]);
+          applyPathHighlight(mesh, pathIds);
+        } catch (e) { console.error('[2D Path] error:', e); }
+      }
     }
 
     hoveredRef.current = id;
     setHoveredIdx(id);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId]);
+  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled]);
 
   const handlePointerLeave = useCallback(() => {
     const mesh = ribbonMeshRef.current;
@@ -541,13 +651,15 @@ const GridContent: React.FC<GridContentProps> = ({
       const prev = ribbonData[hoveredRef.current].individual;
       const c = prev.id === selectedId ? selectColor(prev.gender) : defaultColor(prev.gender);
       mesh.setColorAt(hoveredRef.current, c);
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+
+    clearPathHighlight(mesh);
 
     hoveredRef.current = -1;
     setHoveredIdx(-1);
     document.body.style.cursor = 'default';
-  }, [ribbonData, selectedId]);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [ribbonData, selectedId, clearPathHighlight]);
 
   const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
     const id = e.instanceId;
@@ -648,6 +760,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   selectedIds,
   onIndividualClick,
   isDarkMode,
+  relationshipRevealEnabled = false,
   sortMode = 'birth-asc',
   activeFilters,
   singleIndividual = false,
@@ -695,6 +808,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           selectedId={selectedId}
           onIndividualClick={onIndividualClick}
           isDarkMode={isDarkMode}
+          relationshipRevealEnabled={relationshipRevealEnabled}
           singleIndividual={singleIndividual}
         />
       </Canvas>
