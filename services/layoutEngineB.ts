@@ -38,6 +38,7 @@ interface TreeNodeB {
     children: TreeNodeB[];
     leaves: TreeNodeB[];
     spouses: TreeNodeB[];
+    spouseFamilyId?: string;
     width: number;
     selfWidth: number;
     centerShift: number;
@@ -52,15 +53,52 @@ export class GenealogyLayoutEngineB {
     private nodes: Map<string, LayoutNode> = new Map();
     private visited = new Set<string>();
     private cfg: typeof LAYOUT_CONFIG;
+    private debug: boolean;
+    private debugIds: Set<string> | null;
+    private pairFamiliesIndex: Map<string, string[]>;
 
     constructor(data: GedcomData, params?: Partial<LayoutParams>) {
         this.data = data;
         this.cfg = { ...LAYOUT_CONFIG };
+        this.pairFamiliesIndex = new Map();
+        const g = globalThis as any;
+        this.debug = g.__GENEAVERSE_LAYOUT_DEBUG__ === true;
+        const ids = Array.isArray(g.__GENEAVERSE_LAYOUT_DEBUG_IDS__)
+            ? g.__GENEAVERSE_LAYOUT_DEBUG_IDS__.filter((v: unknown) => typeof v === 'string')
+            : null;
+        this.debugIds = ids && ids.length > 0 ? new Set(ids) : null;
         if (params) {
             if (params.generationPitch !== undefined) this.cfg.GENERATION_PITCH = params.generationPitch;
             if (params.minGap !== undefined) this.cfg.MIN_GAP = params.minGap;
             if (params.leafWidthRatio !== undefined) this.cfg.LEAF_WIDTH_RATIO = params.leafWidthRatio;
         }
+        this.buildPairFamiliesIndex();
+    }
+
+    private pairKey(aId: string, bId: string): string {
+        return aId < bId ? `${aId}|${bId}` : `${bId}|${aId}`;
+    }
+
+    private buildPairFamiliesIndex(): void {
+        this.pairFamiliesIndex.clear();
+        for (const [fid, fam] of Object.entries(this.data.families)) {
+            if (!fam.husbandId || !fam.wifeId) continue;
+            const key = this.pairKey(fam.husbandId, fam.wifeId);
+            const arr = this.pairFamiliesIndex.get(key);
+            if (arr) arr.push(fid);
+            else this.pairFamiliesIndex.set(key, [fid]);
+        }
+    }
+
+    private shouldDebug(ids: string[]): boolean {
+        if (!this.debug) return false;
+        if (!this.debugIds) return true;
+        return ids.some(id => this.debugIds!.has(id));
+    }
+
+    private debugLog(message: string, payload: Record<string, unknown>, ids: string[] = []): void {
+        if (!this.shouldDebug(ids)) return;
+        console.log(`[LayoutB][DEBUG] ${message}`, payload);
     }
 
     public computeLayout(rootId: string): LayoutNode[] {
@@ -125,6 +163,65 @@ export class GenealogyLayoutEngineB {
             : (depth / 2) - depth * progress;
     }
 
+    private isRenderableUnion(selfId: string, spouseId: string, famId: string): boolean {
+        const mYear = this.getMarriageYear(famId, selfId, spouseId);
+        const selfOff = mYear - this.getBirthYear(selfId);
+        const selfLife = this.getLifespan(selfId);
+        if (!(selfOff > 0 && selfOff < selfLife)) return false;
+
+        const spouseOff = mYear - this.getBirthYear(spouseId);
+        const spouseLife = this.getLifespan(spouseId);
+        if (!(spouseOff > 0 && spouseOff < spouseLife)) return false;
+
+        return true;
+    }
+
+    private getPairFamilyIds(selfId: string, spouseId: string): string[] {
+        const ids = [...(this.pairFamiliesIndex.get(this.pairKey(selfId, spouseId)) ?? [])];
+        // Deterministic order: chronological union, then id.
+        ids.sort((a, b) => {
+            const ya = this.getMarriageYear(a, selfId, spouseId);
+            const yb = this.getMarriageYear(b, selfId, spouseId);
+            if (ya !== yb) return ya - yb;
+            return a.localeCompare(b);
+        });
+        return ids;
+    }
+
+    private selectFamilyForSpouse(selfId: string, spouseId: string, preferredFamId?: string): {
+        selectedFamId?: string;
+        candidates: string[];
+        validCandidates: string[];
+        familySource: 'preferredValid' | 'firstValid' | 'preferredFallback' | 'firstFallback' | 'none' | 'pairPreferredValid' | 'pairFirstValid' | 'pairPreferredFallback' | 'pairFirstFallback';
+    } {
+        const selfIndi = this.data.individuals[selfId];
+        const selfCandidates = (selfIndi?.familySpouseIds ?? []).filter(fid => {
+            const f = this.data.families[fid];
+            return f && (f.husbandId === spouseId || f.wifeId === spouseId);
+        });
+        const pairCandidates = this.getPairFamilyIds(selfId, spouseId);
+        const candidates = pairCandidates.length > 0 ? pairCandidates : selfCandidates;
+        const validCandidates = candidates.filter(fid => this.isRenderableUnion(selfId, spouseId, fid));
+
+        const usingPair = pairCandidates.length > 0;
+        const s = (pairLabel: 'pairPreferredValid' | 'pairFirstValid' | 'pairPreferredFallback' | 'pairFirstFallback',
+            selfLabel: 'preferredValid' | 'firstValid' | 'preferredFallback' | 'firstFallback') => usingPair ? pairLabel : selfLabel;
+
+        if (preferredFamId && validCandidates.includes(preferredFamId)) {
+            return { selectedFamId: preferredFamId, candidates, validCandidates, familySource: s('pairPreferredValid', 'preferredValid') };
+        }
+        if (validCandidates.length > 0) {
+            return { selectedFamId: validCandidates[0], candidates, validCandidates, familySource: s('pairFirstValid', 'firstValid') };
+        }
+        if (preferredFamId && candidates.includes(preferredFamId)) {
+            return { selectedFamId: preferredFamId, candidates, validCandidates, familySource: s('pairPreferredFallback', 'preferredFallback') };
+        }
+        if (candidates.length > 0) {
+            return { selectedFamId: candidates[0], candidates, validCandidates, familySource: s('pairFirstFallback', 'firstFallback') };
+        }
+        return { selectedFamId: undefined, candidates, validCandidates, familySource: 'none' };
+    }
+
     private calculateGroupZBounds(centerId: string, spouseNodes: TreeNodeB[]): { min: number; max: number; width: number } {
         const centerIndi = this.data.individuals[centerId];
         if (!centerIndi) return { min: 0, max: 0, width: this.cfg.DEFAULT_LIFESPAN };
@@ -142,10 +239,7 @@ export class GenealogyLayoutEngineB {
             const spLife = this.getLifespan(sp.id);
             const spBirth = this.getBirthYear(sp.id);
 
-            const famId = centerIndi.familySpouseIds?.find(fid => {
-                const f = this.data.families[fid];
-                return f && (f.husbandId === sp.id || f.wifeId === sp.id);
-            });
+            const { selectedFamId: famId } = this.selectFamilyForSpouse(centerId, sp.id, sp.spouseFamilyId);
             const mYear = famId
                 ? this.getMarriageYear(famId, centerId, sp.id)
                 : Math.max(centerBirth, spBirth) + 20;
@@ -161,27 +255,51 @@ export class GenealogyLayoutEngineB {
         return { min: minZ, max: maxZ, width: maxZ - minZ };
     }
 
-    private getSpouseZ(nodeId: string, spouseId: string, selfZ: number, lifespan: number): number {
+    private getSpouseZ(nodeId: string, spouseId: string, selfZ: number, lifespan: number, spouseFamilyId?: string): number {
         const selfIndi = this.data.individuals[nodeId];
         const spIndi = this.data.individuals[spouseId];
         if (!selfIndi || !spIndi) return selfZ;
 
-        const famId = selfIndi.familySpouseIds?.find(fid => {
-            const f = this.data.families[fid];
-            return f && (f.husbandId === spouseId || f.wifeId === spouseId);
-        });
+        const { selectedFamId: famId, candidates: candidateFamIds, validCandidates, familySource } =
+            this.selectFamilyForSpouse(nodeId, spouseId, spouseFamilyId);
         const mYear = famId
             ? this.getMarriageYear(famId, nodeId, spouseId)
             : Math.max(this.getBirthYear(nodeId), this.getBirthYear(spouseId)) + 20;
 
         const selfOff = this.getZOffsetAtTime(selfIndi, this.getBirthYear(nodeId), lifespan, mYear);
-        const spOff = this.getZOffsetAtTime(spIndi, this.getBirthYear(spouseId), this.getLifespan(spouseId), mYear);
-        return selfZ + selfOff - spOff;
+        const spouseLife = this.getLifespan(spouseId);
+        const spOff = this.getZOffsetAtTime(spIndi, this.getBirthYear(spouseId), spouseLife, mYear);
+        const spZ = selfZ + selfOff - spOff;
+
+        this.debugLog(
+            'getSpouseZ',
+            {
+                nodeId,
+                spouseId,
+                selectedFamilyId: famId ?? null,
+                familySource,
+                candidateFamIds,
+                validCandidateFamIds: validCandidates,
+                marriageYear: mYear,
+                selfBirthYear: this.getBirthYear(nodeId),
+                spouseBirthYear: this.getBirthYear(spouseId),
+                selfLifespan: lifespan,
+                spouseLifespan: spouseLife,
+                selfOffsetAtUnion: selfOff,
+                spouseOffsetAtUnion: spOff,
+                selfZ,
+                spouseZ: spZ,
+                deltaZ: spZ - selfZ,
+            },
+            [nodeId, spouseId],
+        );
+
+        return spZ;
     }
 
     private placeSpouses(nodeId: string, selfZ: number, lifespan: number, spouses: TreeNodeB[], x: number, dir: number) {
         for (const sp of spouses) {
-            const spZ = this.getSpouseZ(nodeId, sp.id, selfZ, lifespan);
+            const spZ = this.getSpouseZ(nodeId, sp.id, selfZ, lifespan, sp.spouseFamilyId);
             this.createNodeMatrix(sp.id, x, spZ, dir);
         }
     }
@@ -237,6 +355,7 @@ export class GenealogyLayoutEngineB {
         const lifespan = this.getLifespan(indiId);
 
         const spouseNodes: TreeNodeB[] = [];
+        const spouseIndexById = new Map<string, number>();
         const allChildren: TreeNodeB[] = [];
 
         if (indi.familySpouseIds) {
@@ -245,14 +364,19 @@ export class GenealogyLayoutEngineB {
                 if (!fam) continue;
 
                 const spouseId = fam.husbandId === indiId ? fam.wifeId : fam.husbandId;
-                if (spouseId && !this.visited.has(spouseId)) {
-                    this.visited.add(spouseId);
-                    const sLife = this.getLifespan(spouseId);
-                    const sWidth = sLife * this.cfg.LEAF_WIDTH_RATIO;
-                    spouseNodes.push({
-                        id: spouseId, children: [], leaves: [], spouses: [],
-                        width: sWidth, selfWidth: sWidth, centerShift: 0, lifespan: sLife,
-                    });
+                if (spouseId) {
+                    const existingIdx = spouseIndexById.get(spouseId);
+                    if (existingIdx === undefined) {
+                        spouseIndexById.set(spouseId, spouseNodes.length);
+                        if (!this.visited.has(spouseId)) this.visited.add(spouseId);
+                        const sLife = this.getLifespan(spouseId);
+                        const sWidth = sLife * this.cfg.LEAF_WIDTH_RATIO;
+                        spouseNodes.push({
+                            id: spouseId, children: [], leaves: [], spouses: [],
+                            spouseFamilyId: undefined,
+                            width: sWidth, selfWidth: sWidth, centerShift: 0, lifespan: sLife,
+                        });
+                    }
                 }
                 if (fam.childrenIds) {
                     for (const cid of fam.childrenIds) {
@@ -263,6 +387,24 @@ export class GenealogyLayoutEngineB {
                     }
                 }
             }
+        }
+
+        // Canonical spouse-family selection per pair (independent from familySpouseIds order).
+        for (const sp of spouseNodes) {
+            const sel = this.selectFamilyForSpouse(indiId, sp.id);
+            sp.spouseFamilyId = sel.selectedFamId;
+            this.debugLog(
+                'canonicalSpouseFamily',
+                {
+                    nodeId: indiId,
+                    spouseId: sp.id,
+                    selectedFamilyId: sp.spouseFamilyId ?? null,
+                    candidates: sel.candidates,
+                    validCandidates: sel.validCandidates,
+                    source: sel.familySource,
+                },
+                [indiId, sp.id],
+            );
         }
 
         allChildren.sort((a, b) => this.getBirthYear(a.id) - this.getBirthYear(b.id));
@@ -366,6 +508,8 @@ export class GenealogyLayoutEngineB {
                 }
 
                 if (fatherNode && motherNode) {
+                    fatherNode.spouseFamilyId = indi.familyChildId;
+                    motherNode.spouseFamilyId = indi.familyChildId;
                     fatherNode.spouses.push(motherNode);
                     const cb = this.calculateGroupZBounds(fatherNode.id, [motherNode]);
                     fatherNode.selfWidth = cb.width;
@@ -435,7 +579,7 @@ export class GenealogyLayoutEngineB {
         let cMinZ = selfZ - node.lifespan / 2;
         let cMaxZ = selfZ + node.lifespan / 2;
         for (const sp of node.spouses) {
-            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan);
+            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan, sp.spouseFamilyId);
             const spLife = this.getLifespan(sp.id);
             cMinZ = Math.min(cMinZ, spZ - spLife / 2);
             cMaxZ = Math.max(cMaxZ, spZ + spLife / 2);
@@ -452,7 +596,13 @@ export class GenealogyLayoutEngineB {
         if (ordAll.length === 1) {
             let connectZ = coupleCenter;
             if (node.spouses.length > 0 && nodeIndi?.gender === Gender.Male) {
-                connectZ = this.getSpouseZ(node.id, node.spouses[0].id, selfZ, node.lifespan);
+                connectZ = this.getSpouseZ(
+                    node.id,
+                    node.spouses[0].id,
+                    selfZ,
+                    node.lifespan,
+                    node.spouses[0].spouseFamilyId,
+                );
             }
             const child = ordAll[0];
             if (hasDesc(child)) {
@@ -575,7 +725,7 @@ export class GenealogyLayoutEngineB {
 
         const spouseZList: { node: TreeNodeB; z: number }[] = [];
         for (const sp of node.spouses) {
-            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan);
+            const spZ = this.getSpouseZ(node.id, sp.id, selfZ, node.lifespan, sp.spouseFamilyId);
             this.createNodeMatrix(sp.id, x, spZ, -1);
             const spLife = this.getLifespan(sp.id);
             minZ = Math.min(minZ, spZ - spLife / 2);
@@ -660,7 +810,8 @@ export class GenealogyLayoutEngineB {
         );
 
         if (existing) {
-            existing.matrix = matrix;
+            // Keep first placement to avoid descendant/ancestor overwrite drift.
+            // Overwriting here can break spouse alignment depending on selected root.
             return;
         }
 
@@ -676,8 +827,24 @@ export class GenealogyLayoutEngineB {
                 const spouseId = fam.husbandId === id ? fam.wifeId : fam.husbandId;
                 const mYear = this.getMarriageYear(famId, id, spouseId);
                 const offset = mYear - birthYear;
+                const included = offset > 0 && offset < lifespan;
 
-                if (offset > 0 && offset < lifespan) {
+                this.debugLog(
+                    'marriageTrait',
+                    {
+                        nodeId: id,
+                        spouseId: spouseId ?? null,
+                        familyId: famId,
+                        marriageYear: mYear,
+                        birthYear,
+                        offset,
+                        lifespan,
+                        included,
+                    },
+                    [id, ...(spouseId ? [spouseId] : [])],
+                );
+
+                if (included) {
                     traits.push({ type: 'marriage', offset, spouseId });
                 }
 

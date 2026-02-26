@@ -90,9 +90,9 @@ const MAX_REFERENCE_LIFESPAN = 120;
 
 const YEAR = CELL_H / MAX_REFERENCE_LIFESPAN;
 const RIBBON_W  = 10 * YEAR;
-const TRAIT_W   = 12 * YEAR;
+const TRAIT_W   = 11 * YEAR;
 const TIRET_W   =  4 * YEAR;
-const TRAIT_H   =  1.5 * YEAR;
+const TRAIT_H   =  0.5 * YEAR;
 const STEP_X    = 40 * YEAR;   // ribbon (10) + gap (30)
 const STEP_Y    = CELL_H + 10 * YEAR;
 const MARGIN    = 5 * YEAR;
@@ -136,6 +136,8 @@ interface TraitInfo {
   offset: number;
   childId?: string;
   spouseId?: string;
+  year?: number;
+  isCalculated?: boolean;
 }
 
 interface RibbonInfo {
@@ -155,8 +157,22 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
 
     const traits: TraitInfo[] = [];
 
-    if (indi.birthDate?.year) traits.push({ type: 'birth', offset: 0 });
-    if (indi.deathDate?.year) traits.push({ type: 'death', offset: lifespan });
+    if (indi.birthDate?.year) {
+      traits.push({
+        type: 'birth',
+        offset: 0,
+        year: indi.birthDate.year,
+        isCalculated: !!indi.birthDate.isCalculated,
+      });
+    }
+    if (indi.deathDate?.year) {
+      traits.push({
+        type: 'death',
+        offset: lifespan,
+        year: indi.deathDate.year,
+        isCalculated: !!indi.deathDate.isCalculated,
+      });
+    }
 
     if (data && indi.familySpouseIds) {
       for (const famId of indi.familySpouseIds) {
@@ -169,15 +185,22 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
           : birthYear;
 
         let mYear = fam.marriageDate?.year;
+        let mIsCalculated = !!fam.marriageDate?.isCalculated;
         if (!mYear && fam.childrenIds?.length) {
           const firstChild = data.individuals[fam.childrenIds[0]];
-          if (firstChild?.birthDate?.year) mYear = firstChild.birthDate.year - 1;
+          if (firstChild?.birthDate?.year) {
+            mYear = firstChild.birthDate.year - 1;
+            mIsCalculated = true;
+          }
         }
-        if (!mYear) mYear = Math.max(birthYear, spouseBirthYear) + 20;
+        if (!mYear) {
+          mYear = Math.max(birthYear, spouseBirthYear) + 20;
+          mIsCalculated = true;
+        }
 
         const mOffset = mYear - birthYear;
         if (mOffset > 0 && mOffset < lifespan) {
-          traits.push({ type: 'marriage', offset: mOffset, spouseId });
+          traits.push({ type: 'marriage', offset: mOffset, spouseId, year: mYear, isCalculated: mIsCalculated });
         }
 
         if (fam.childrenIds) {
@@ -533,7 +556,7 @@ const GridContent: React.FC<GridContentProps> = ({
             break;
           default: { // child tiret
             tw = TIRET_W;
-            tx = cx + RIBBON_W / 2 + TIRET_W / 2 + YEAR;
+            tx = cx + RIBBON_W / 2;
             const child = trait.childId && data ? data.individuals[trait.childId] : null;
             if (child?.gender === Gender.Female)     tc.set('#ef4444');
             else if (child?.gender === Gender.Male)  tc.set('#3b82f6');
@@ -683,44 +706,77 @@ const GridContent: React.FC<GridContentProps> = ({
     const cy = -row * STEP_Y;
     const rH = (rd.lifespan / maxLifespan) * CELL_H;
 
-    const progress = Math.min(50, rd.lifespan) / rd.lifespan;
-    const labelY = cy - rH / 2 + progress * rH;
-    const labelX = cx + RIBBON_W / 2 + 2 * YEAR;
-
-    const bYear = indi.birthDate?.year;
-    const dYear = indi.deathDate?.year;
-    const bCal = indi.birthDate?.isCalculated ? ' ~' : '';
-    const dCal = indi.deathDate?.isCalculated ? ' ~' : '';
     const nameText = `${indi.givenName} ${indi.surname}`;
-    const dateText = `${bYear ? bYear + bCal : '?'} – ${dYear ? dYear + dCal : '?'}`;
-
     const textColor = isDarkMode ? '#ffffff' : '#1e293b';
     const outlineW = isDarkMode ? 0.06 : 0;
-    const fs = isHover ? 5.5 * YEAR : 5 * YEAR;
+    const fs = (isHover ? 5.5 * YEAR : 5 * YEAR) * 0.66;
+    const dateFs = fs * 0.62;
+    const childFs = dateFs;
+    const nameY = cy - rH / 2 - (2.2 * YEAR);
+    const dateX = cx + (RIBBON_W / 2) + (TIRET_W / 2) + (0.9 * YEAR);
+    const childX = dateX + (dateFs * 2.6);
+
+    const dateTraits = rd.traits
+      .filter((t) => t.type === 'birth' || t.type === 'death' || t.type === 'marriage')
+      .map((t) => {
+        const progress = rd.lifespan > 0 ? t.offset / rd.lifespan : 0;
+        const y = cy - rH / 2 + progress * rH;
+        const text = t.year ? `${t.year}${t.isCalculated ? '\nCAL' : ''}` : '?';
+        return { key: `${t.type}-${t.offset}-${t.spouseId ?? ''}`, y, text };
+      });
+
+    const childTraits = rd.traits
+      .filter((t) => t.type === 'child' && !!t.childId)
+      .map((t) => {
+        const progress = rd.lifespan > 0 ? t.offset / rd.lifespan : 0;
+        const y = cy - rH / 2 + progress * rH;
+        const child = t.childId && data ? data.individuals[t.childId] : null;
+        const firstName = child?.givenName?.split(/\s+/)[0] || child?.givenName || '?';
+        return { key: `child-${t.childId}-${t.offset}`, y, text: firstName };
+      });
 
     return (
-      <group position={[labelX, labelY, 0.02]}>
+      <group position={[0, 0, 0.02]}>
         <Text
+          position={[cx, nameY, 0]}
           fontSize={fs}
           color={textColor}
           outlineWidth={outlineW}
           outlineColor="#000000"
-          anchorX="left"
-          anchorY="bottom"
+          anchorX="center"
+          anchorY="top"
         >
           {nameText}
         </Text>
-        <Text
-          position={[0, -fs * 0.15, 0]}
-          fontSize={fs * 0.8}
-          color={textColor}
-          outlineWidth={outlineW}
-          outlineColor="#000000"
-          anchorX="left"
-          anchorY="top"
-        >
-          {dateText}
-        </Text>
+        {dateTraits.map((d) => (
+          <Text
+            key={d.key}
+            position={[dateX, d.y, 0]}
+            fontSize={dateFs}
+            color={textColor}
+            outlineWidth={outlineW}
+            outlineColor="#000000"
+            anchorX="left"
+            anchorY="middle"
+            lineHeight={0.95}
+          >
+            {d.text}
+          </Text>
+        ))}
+        {childTraits.map((c) => (
+          <Text
+            key={c.key}
+            position={[childX, c.y, 0]}
+            fontSize={childFs}
+            color={textColor}
+            outlineWidth={outlineW}
+            outlineColor="#000000"
+            anchorX="left"
+            anchorY="middle"
+          >
+            {c.text}
+          </Text>
+        ))}
       </group>
     );
   };
@@ -813,9 +869,6 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
         />
       </Canvas>
 
-      <div className="absolute top-4 left-4 bg-black/70 text-white px-2 py-1 text-xs rounded pointer-events-none z-50">
-        {individuals.length} individus | Molette = zoom&thinsp;/&thinsp;reflow | Glisser = défiler | Clic = sélectionner
-      </div>
     </div>
   );
 };

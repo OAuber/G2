@@ -36,6 +36,12 @@ function topViewPerspDistance(sceneSize: number): number {
     return window.innerHeight / (2 * zoom * Math.tan(FOV_RAD / 2));
 }
 
+function cameraFarForScene(sceneSize: number): number {
+    // Large trees in free view can place geometry very far from camera.
+    // Keep a generous far plane tied to scene extent to avoid clipping.
+    return Math.max(200000, sceneSize * 40);
+}
+
 function computeModePosition(mode: CameraMode, ct: Vector3, sceneSize: number, selectedGender: Gender | null): Vector3 {
     if (mode === 'top') {
         const dist = topViewPerspDistance(sceneSize);
@@ -302,13 +308,6 @@ const Scene3D: React.FC<Scene3DProps> = ({
       allLayoutNodes.forEach(node => visibleIds.add(node.id));
     }
     
-    console.log('[Scene3D] onVisibleIdsChange:', {
-      root: rootIndividual?.id,
-      extras: extraIndividuals.length,
-      autoLayout: allLayoutNodes.length,
-      total: visibleIds.size
-    });
-    
     onVisibleIdsChange(visibleIds);
   }, [rootIndividual, extraIndividuals, allLayoutNodes, autoLayoutMode, onVisibleIdsChange]);
 
@@ -524,9 +523,12 @@ const Scene3D: React.FC<Scene3DProps> = ({
     if (!cam) return;
     const ct = centerTargetRef.current;
     const sz = sceneSizeRef.current;
+    const far = cameraFarForScene(sz);
     cam.position.set(ct.x, ct.y + 10000, ct.z);
     cam.up.set(1, 0, 0);
     cam.lookAt(ct);
+    cam.near = -far;
+    cam.far = far;
     cam.zoom = topViewOrthoZoom(sz);
     cam.updateProjectionMatrix();
   }, [cameraMode]);
@@ -536,9 +538,12 @@ const Scene3D: React.FC<Scene3DProps> = ({
     const ct = centerTargetRef.current;
     const sz = sceneSizeRef.current;
     const dist = topViewPerspDistance(sz);
+    const far = cameraFarForScene(sz);
     cam.position.set(ct.x, ct.y + dist, ct.z);
     cam.up.set(1, 0, 0);
     cam.lookAt(ct);
+    cam.near = 0.1;
+    cam.far = far;
     cam.updateProjectionMatrix();
   }, []);
 
@@ -559,6 +564,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
     <Canvas
       shadows={true}
       className="bg-transparent"
+      dpr={[1, 1.5]}
+      gl={{ antialias: false, powerPreference: 'high-performance' }}
     >
         {/* IMPORTANT: Restore background color to make sure the scene reacts to theme changes (fixes Light Mode) */}
         <color attach="background" args={[isDarkMode ? '#000000' : '#f0f9ff']} />
@@ -568,8 +575,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
                 key={`ortho-${cameraMode}`}
                 ref={setupOrthoCamera}
                 makeDefault 
-                near={-100000} 
-                far={200000} 
+                near={-cameraFarForScene(sceneSize)} 
+                far={cameraFarForScene(sceneSize)} 
             />
         ) : (
             <PerspectiveCamera 
@@ -578,7 +585,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
                 makeDefault 
                 fov={FOV_DEG}
                 near={0.1} 
-                far={200000} 
+                far={cameraFarForScene(sceneSize)} 
             />
         )}
 

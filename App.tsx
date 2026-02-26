@@ -403,15 +403,11 @@ function App() {
 
   // Callback to sync 3D view visibility with 2D selection
   const handleVisibleIdsChange = (visibleIds: Set<string>) => {
-    console.log('[App] handleVisibleIdsChange called with', visibleIds.size, 'individuals');
-    
     setSelectedIdsFor2D(prev => {
        // Optimization: only update if size or content differs to avoid needless renders
        if (prev.size === visibleIds.size && [...prev].every(x => visibleIds.has(x))) {
-           console.log('[App] selectedIdsFor2D unchanged');
            return prev;
        }
-       console.log('[App] Updating selectedIdsFor2D:', prev.size, '→', visibleIds.size);
        return new Set(visibleIds);
     });
   };

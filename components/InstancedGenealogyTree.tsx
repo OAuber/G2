@@ -42,6 +42,10 @@ const COLORS = {
   hover:   { [Gender.Female]: '#ec4899', [Gender.Male]: '#38bdf8', [Gender.Unknown]: '#94a3b8' },
   select:  { [Gender.Female]: '#dc2626', [Gender.Male]: '#2563eb', [Gender.Unknown]: '#f59e0b' },
 };
+const DEFAULT_RIBBON_OPACITY = 0.9;
+const TOP_VIEW_RIBBON_OPACITY = 0.68;
+const DATE_X_FACTOR_TOP = 0.75;
+const DATE_X_FACTOR_SIDE = 0.67;
 
 const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
   nodes, 
@@ -120,7 +124,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           roughness: 0.4,
           metalness: 0.1,
           transparent: true,
-          opacity: 0.9,
+          opacity: DEFAULT_RIBBON_OPACITY,
           depthWrite: true,
           side: THREE.DoubleSide
       });
@@ -176,6 +180,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       };
       return mat;
   }, []);
+
+  useLayoutEffect(() => {
+      if (!pathMaterial) return;
+      pathMaterial.opacity = isTopView ? TOP_VIEW_RIBBON_OPACITY : DEFAULT_RIBBON_OPACITY;
+      pathMaterial.needsUpdate = true;
+  }, [isTopView, pathMaterial]);
 
   const traitMaterial = useMemo(() => new THREE.MeshBasicMaterial({ color: 0xffffff }), []);
   
@@ -313,9 +323,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               // Collect data for child name label
               if (trait.childId) {
                   const dashLen = thickness / 3;
-                  const childLabelOffset = dashLen * (isTopView ? 1.55 : 1.15);
+                  const traitEndX = (thickness / 2) + (dashLen / 2);
+                  const dateStartX = thickness * (isTopView ? DATE_X_FACTOR_TOP : DATE_X_FACTOR_SIDE);
+                  const uniformGapX = Math.max(thickness * 0.025, (dateStartX - traitEndX) * 0.82);
+                  // Approximate width of YYYY / YYYY (CAL) to align first-name start after date end.
+                  const estimatedDateWidthX = (labelFontSize * 0.48) * (isTopView ? 2.6 : 2.3);
+                  const childStartX = dateStartX + estimatedDateWidthX + uniformGapX;
                   childLabelsDataRef.current.push({
-                      x: tempPos.x + (thickness / 2) + childLabelOffset,
+                      x: tempPos.x + childStartX,
                       y: traitY,
                       z: traitZ,
                       childId: trait.childId,
@@ -327,13 +342,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           }
           else if (trait.type === 'marriage') {
               traitColor.set('#cbd5e1');
-              if (trait.spouseId) {
-                  const spouse = nodesMap.get(trait.spouseId);
-                  if (spouse) {
-                      if (node.id < spouse.id) scaleZ = TRAIT_SIZE_Z; 
-                      else renderTrait = false;
-                  }
-              }
+              // Keep marriage markers on both spouses.
+              // This avoids side-dependent visibility tied to id ordering.
+              scaleZ = TRAIT_SIZE_Z;
           }
           else traitColor.set('#cbd5e1'); 
           
@@ -616,10 +627,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       // Date formatting with (CAL) markers
       const bYear = indi.birthDate?.year;
       const dYear = indi.deathDate?.year;
-      const bCal = indi.birthDate?.isCalculated ? ' (CAL)' : '';
-      const dCal = indi.deathDate?.isCalculated ? ' (CAL)' : '';
-      const birthStr = bYear ? `${bYear}${bCal}` : '?';
-      const deathStr = dYear ? `${dYear}${dCal}` : '?';
+      const bCal = indi.birthDate?.isCalculated;
+      const dCal = indi.deathDate?.isCalculated;
+      const birthStr = bYear ? `${bYear}${bCal ? '\n(CAL)' : ''}` : '?';
+      const deathStr = dYear ? `${dYear}${dCal ? '\n(CAL)' : ''}` : '?';
 
       const alwaysOnTop = (m: any) => {
           if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; }
@@ -634,8 +645,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           const traitZLocal = node.gender === Gender.Female
               ? (-(depth / 2) + (depth * t))
               : ((depth / 2) - (depth * t));
+          // Keep date labels closer to trait ends/ribbon for easier reading.
+          const dateXOffset = thickness * (isTopView ? DATE_X_FACTOR_TOP : DATE_X_FACTOR_SIDE);
           return new THREE.Vector3(
-              p.x + (thickness * (isTopView ? 1.04 : 0.92)), // slight extra X offset in top view
+              p.x + dateXOffset,
               bottomY + offset,
               p.z + traitZLocal,
           );
@@ -646,8 +659,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       camera.getWorldDirection(camDir);
       const fromPositiveZ = camDir.z < 0;
       const fromNegativeZ = !fromPositiveZ;
-      const birthAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
-      const deathAnchor: 'left' | 'right' = fromNegativeZ ? 'right' : 'left';
+      // Top view inherits the same readable orientation as Z+ (no extra flip/rotation).
+      const effectiveFromNegativeZ = isTopView ? false : fromNegativeZ;
+      const birthAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
+      const deathAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
       const topNameAnchor: 'left' | 'right' = node.gender === Gender.Female ? 'left' : 'right';
       const topNameShift = node.gender === Gender.Female ? thickness * 1.06 : -thickness * 1.06;
       const fullName = `${indi.givenName} ${indi.surname}`.trim();
@@ -676,7 +691,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           .filter((t): t is { type: 'marriage'; offset: number; spouseId?: string } => t.type === 'marriage')
           .map((t, idx) => {
               let mYear: number | null = null;
-              let mCal = '';
+              let mCal = false;
               if (t.spouseId) {
                   for (const fam of Object.values(data.families)) {
                       const match = (fam.husbandId === node.id && fam.wifeId === t.spouseId)
@@ -684,13 +699,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       if (!match) continue;
                       if (fam.marriageDate?.year) {
                           mYear = fam.marriageDate.year;
-                          mCal = fam.marriageDate.isCalculated ? ' (CAL)' : '';
+                          mCal = !!fam.marriageDate.isCalculated;
                       }
                       break;
                   }
               }
               if (mYear === null && bYear) mYear = Math.round(bYear + t.offset);
-              return { key: `m-${node.id}-${idx}`, text: mYear ? `${mYear}${mCal}` : '?', pos: traitPos(t.offset) };
+              return { key: `m-${node.id}-${idx}`, text: mYear ? `${mYear}${mCal ? '\n(CAL)' : ''}` : '?', pos: traitPos(t.offset) };
           });
 
       return (
@@ -723,7 +738,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           >
               <Text
                   ref={alwaysOnTop}
-                  rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                  rotation={[0, 0, effectiveFromNegativeZ ? Math.PI : 0]}
                   fontSize={labelFontSize * 0.48}
                   color={textColor}
                   outlineWidth={outlineW}
@@ -746,7 +761,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           >
               <Text
                   ref={alwaysOnTop}
-                  rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                  rotation={[0, 0, effectiveFromNegativeZ ? Math.PI : 0]}
                   fontSize={labelFontSize * 0.48}
                   color={textColor}
                   outlineWidth={outlineW}
@@ -769,7 +784,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               >
                   <Text
                       ref={alwaysOnTop}
-                      rotation={[0, 0, fromNegativeZ ? Math.PI : 0]}
+                      rotation={[0, 0, effectiveFromNegativeZ ? Math.PI : 0]}
                       fontSize={labelFontSize * 0.48}
                       color={textColor}
                       outlineWidth={outlineW}
@@ -816,7 +831,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               const ndc = new THREE.Vector3(l.x, l.y, l.z).project(camera);
               const inView = ndc.z > -1 && ndc.z < 1 && ndc.x > -1.15 && ndc.x < 1.15 && ndc.y > -1.15 && ndc.y < 1.15;
               if (dist < DISTANCE_THRESHOLD && inView) {
-                  nearby.push({ ...l, dist, flip: !fromPositiveZ });
+                  nearby.push({ ...l, dist, flip: isTopView ? false : !fromPositiveZ });
               }
           }
 
