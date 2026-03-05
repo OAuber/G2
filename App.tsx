@@ -462,10 +462,15 @@ function App() {
   };
 
   const handleConnectP2P = (hostId: string) => {
+      const targetHostId = hostId.trim();
+      if (!targetHostId) {
+        alert('Please enter a valid Peer ID.');
+        return;
+      }
       setP2pMode('client');
       p2pModeRef.current = 'client';
-      p2pService.connect(hostId);
-      logP2PActivity('peer.connect.requested', 'session', hostId);
+      p2pService.connect(targetHostId);
+      logP2PActivity('peer.connect.requested', 'session', targetHostId);
   };
 
   // Called by CameraController when animation finishes
