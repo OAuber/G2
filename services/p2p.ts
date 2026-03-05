@@ -20,6 +20,9 @@ export class P2PService {
     private onStatusChange: ((status: string, id?: string) => void) | null = null;
     private replayGuard = new NonceReplayGuard();
     private connectTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    private lastHostId: string | null = null;
+    private connectRetryCount = 0;
+    private readonly maxConnectRetries = 1;
 
     constructor() {}
 
@@ -37,7 +40,10 @@ export class P2PService {
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
                     { urls: 'stun:global.stun.twilio.com:3478' },
+                    { urls: 'stun:stun.cloudflare.com:3478' },
                 ],
             },
         });
@@ -66,14 +72,14 @@ export class P2PService {
             this.onStatusChange?.('error');
             return;
         }
+        this.lastHostId = sanitizedHostId;
+        this.connectRetryCount = 0;
         if (this.conn) {
             this.conn.close();
             this.conn = null;
         }
         this.onStatusChange?.('connecting');
-        const conn = this.peer.connect(sanitizedHostId);
-        this.startConnectTimeout();
-        this.handleConnection(conn);
+        this.openConnection(sanitizedHostId);
     }
 
     public sendData(type: 'SYNC_GEDCOM', payload: GedcomData) {
@@ -92,8 +98,10 @@ export class P2PService {
         this.conn = conn;
 
         this.conn.on('open', () => {
+            if (this.conn !== conn) return;
             console.log('Connected to peer!');
             this.clearConnectTimeout();
+            this.connectRetryCount = 0;
             this.onStatusChange?.('connected');
         });
 
@@ -105,6 +113,7 @@ export class P2PService {
         });
 
         this.conn.on('close', () => {
+            if (this.conn !== conn) return;
             console.log('Connection closed');
             this.clearConnectTimeout();
             this.onStatusChange?.('ready', this.peer?.id || '');
@@ -112,6 +121,7 @@ export class P2PService {
         });
 
         this.conn.on('error', (err) => {
+             if (this.conn !== conn) return;
              console.error("Connection Error", err);
              this.clearConnectTimeout();
              this.onStatusChange?.('error');
@@ -131,8 +141,17 @@ export class P2PService {
         this.connectTimeoutHandle = setTimeout(() => {
             if (this.conn && !this.conn.open) {
                 console.warn('P2P connect timeout reached');
-                this.conn.close();
+                const previousConn = this.conn;
                 this.conn = null;
+                previousConn.close();
+
+                if (this.lastHostId && this.peer && this.connectRetryCount < this.maxConnectRetries) {
+                    this.connectRetryCount += 1;
+                    this.onStatusChange?.('connecting');
+                    this.openConnection(this.lastHostId);
+                    return;
+                }
+
                 this.onStatusChange?.('error');
             }
         }, timeoutMs);
@@ -143,6 +162,13 @@ export class P2PService {
             clearTimeout(this.connectTimeoutHandle);
             this.connectTimeoutHandle = null;
         }
+    }
+
+    private openConnection(hostId: string) {
+        if (!this.peer) return;
+        const conn = this.peer.connect(hostId, { reliable: true });
+        this.startConnectTimeout();
+        this.handleConnection(conn);
     }
 
     private decodeIncomingData(data: any): { type: string; payload: unknown } | null {

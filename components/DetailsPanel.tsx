@@ -43,6 +43,7 @@ interface DetailsPanelProps {
     authorPeerId: string;
     proposedAt: string;
     operation: 'update_individual' | 'create_individual' | 'delete_individual';
+    proposedIndividual?: Individual;
     changeSet: Partial<Individual>;
     status: 'pending' | 'accepted' | 'rejected';
     decidedAt?: string;
@@ -387,15 +388,25 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     return String(value);
   };
 
-  const reviewFields = useMemo(() => {
-    if (!reviewProposal || !individual || reviewProposal.individualId !== individual.id) return [];
-    return Object.keys(reviewProposal.changeSet) as Array<keyof Individual>;
+  const reviewBaseIndividual = useMemo(() => {
+    if (!reviewProposal) return null;
+    if (individual && reviewProposal.individualId === individual.id) return individual;
+    if (reviewProposal.operation === 'create_individual' && reviewProposal.proposedIndividual) {
+      return reviewProposal.proposedIndividual;
+    }
+    return null;
   }, [reviewProposal, individual]);
 
+  const reviewFields = useMemo(() => {
+    if (!reviewProposal || !reviewBaseIndividual) return [];
+    return Object.keys(reviewProposal.changeSet) as Array<keyof Individual>;
+  }, [reviewProposal, reviewBaseIndividual]);
+
   const proposedIndividual = useMemo(() => {
-    if (!reviewProposal || !individual || reviewProposal.individualId !== individual.id) return null;
-    return { ...individual, ...reviewProposal.changeSet } as Individual;
-  }, [reviewProposal, individual]);
+    if (!reviewProposal || !reviewBaseIndividual) return null;
+    if (reviewProposal.proposedIndividual) return reviewProposal.proposedIndividual;
+    return { ...reviewBaseIndividual, ...reviewProposal.changeSet } as Individual;
+  }, [reviewProposal, reviewBaseIndividual]);
 
   useEffect(() => {
     setSelectedReviewFields(reviewFields.map((field) => String(field)));
@@ -746,9 +757,9 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             )}
 
             {reviewProposal &&
-              reviewProposal.individualId === individual?.id &&
               reviewProposal.status === 'pending' &&
               reviewProposal.operation !== 'delete_individual' &&
+              reviewBaseIndividual &&
               proposedIndividual && (
               <div className={`${cardBg} rounded-lg p-3 space-y-3 border border-blue-500/40`}>
                 <div className="flex items-center justify-between">
@@ -767,7 +778,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     {reviewFields.map((field) => (
                       <div key={`orig-${String(field)}`} className="flex justify-between gap-2">
                         <span className={subTextClass}>{String(field)}</span>
-                        <span className={textClass}>{formatFieldValue((individual as unknown as Record<string, unknown>)[field as string])}</span>
+                        <span className={textClass}>{formatFieldValue((reviewBaseIndividual as unknown as Record<string, unknown>)[field as string])}</span>
                       </div>
                     ))}
                   </div>
