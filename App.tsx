@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
@@ -10,8 +10,133 @@ import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMo
 import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
+import { ActivityLogEvent } from './services/p2pDomain';
+import { createLifeThreadBundle, parseLifeThreadBundle } from './services/bundleService';
 
 function App() {
+  type P2PVisibilitySettings = {
+    exposeIdentity: boolean;
+    exposeDates: boolean;
+    exposePlaces: boolean;
+    exposeNotes: boolean;
+    allowDownload: boolean;
+    allowProposal: boolean;
+    allowDirectEdit: boolean;
+  };
+
+  type P2PInviteItem = {
+    inviteId: string;
+    individualId: string;
+    individualName: string;
+    role: 'viewer' | 'contributor' | 'editor';
+    expiresAt?: string;
+    status: 'active' | 'revoked';
+    personalizedDefault: boolean;
+    createdAt: string;
+  };
+
+  type P2PProposalItem = {
+    proposalId: string;
+    individualId: string;
+    individualLabel: string;
+    authorPeerId: string;
+    proposedAt: string;
+    operation: 'update_individual' | 'create_individual' | 'delete_individual';
+    proposedIndividual?: Individual;
+    proposedFamilies?: Record<string, Family>;
+    relatedIndividuals?: Record<string, Individual>;
+    changeSet: Partial<Individual>;
+    status: 'pending' | 'accepted' | 'rejected';
+    decidedAt?: string;
+  };
+
+  type IndividualDocument = {
+    id: string;
+    title: string;
+    url: string;
+    source: 'local' | 'online';
+    kind: 'photo' | 'document';
+    date?: string;
+    isPrimaryPhoto?: boolean;
+  };
+
+  const isImageLikeUrl = (url: string): boolean => {
+    if (!url) return false;
+    if (url.startsWith('data:image/')) return true;
+    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
+  };
+
+  const normalizeDocumentsByIndividual = (
+    input: Record<string, unknown> | null | undefined
+  ): Record<string, IndividualDocument[]> => {
+    if (!input || typeof input !== 'object') return {};
+    const normalized: Record<string, IndividualDocument[]> = {};
+
+    for (const [individualId, rawDocs] of Object.entries(input)) {
+      if (!Array.isArray(rawDocs)) continue;
+      const docs = rawDocs
+        .map((raw) => {
+          if (!raw || typeof raw !== 'object') return null;
+          const doc = raw as Record<string, unknown>;
+          const url = typeof doc.url === 'string' ? doc.url : '';
+          if (!url) return null;
+          const kind: 'photo' | 'document' =
+            doc.kind === 'photo' || isImageLikeUrl(url) ? 'photo' : 'document';
+          const source: 'local' | 'online' =
+            doc.source === 'local' || doc.source === 'online' ? doc.source : 'online';
+          const isPrimaryPhoto =
+            (doc.isPrimaryPhoto === true || (doc as { isPrimary?: boolean }).isPrimary === true) && kind === 'photo';
+          return {
+            id: typeof doc.id === 'string' ? doc.id : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            title: typeof doc.title === 'string' ? doc.title : 'Untitled',
+            url,
+            source,
+            kind,
+            date: typeof doc.date === 'string' ? doc.date : undefined,
+            isPrimaryPhoto,
+          } as IndividualDocument;
+        })
+        .filter((d): d is IndividualDocument => !!d);
+
+      if (docs.length > 0 && !docs.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+        const firstPhoto = docs.find((d) => d.kind === 'photo');
+        if (firstPhoto) firstPhoto.isPrimaryPhoto = true;
+      }
+
+      normalized[individualId] = docs;
+    }
+    return normalized;
+  };
+
+  const sendP2PSnapshot = (
+    gedcom: GedcomData,
+    documents: Record<string, IndividualDocument[]>,
+    source: 'sync.sent' | 'sync.refresh'
+  ) => {
+    if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
+    p2pService.sendMessage('SYNC_GEDCOM', {
+      gedcom,
+      databaseName: databaseNameRef.current,
+      documentsByIndividualId: documents,
+      sentAt: new Date().toISOString(),
+    });
+    logP2PActivity(source, 'session', peerId || 'host');
+  };
+
+  const sendDocumentsToPeer = (
+    documents: Record<string, IndividualDocument[]>,
+    target: string = selectedIndividual?.id || 'documents'
+  ) => {
+    if (p2pStatus !== 'connected') return;
+    p2pService.sendMessage('DOCUMENTS_SYNC', {
+      documentsByIndividualId: documents,
+      databaseName: databaseNameRef.current,
+      authorPeerId: peerId || 'peer',
+      updatedAt: new Date().toISOString(),
+    });
+    logP2PActivity('documents.sync.sent', 'individual', target, peerId || 'peer');
+  };
+
   const [originalGedcomData, setOriginalGedcomData] = useState<GedcomData | null>(null);
   const [normalizedGedcomData, setNormalizedGedcomData] = useState<GedcomData | null>(null);
   const [isNormalized, setIsNormalized] = useState(false);
@@ -85,10 +210,95 @@ function App() {
   const [p2pStatus, setP2pStatus] = useState<P2PStatus>('disconnected');
   const [peerId, setPeerId] = useState<string | null>(null);
   const [p2pMode, setP2pMode] = useState<P2PMode>(null);
+  const [p2pActivityEvents, setP2PActivityEvents] = useState<ActivityLogEvent[]>([]);
+  const [p2pInvites, setP2PInvites] = useState<P2PInviteItem[]>([]);
+  const [p2pProposals, setP2PProposals] = useState<P2PProposalItem[]>([]);
+  const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
+  const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
+  const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
+    exposeIdentity: true,
+    exposeDates: true,
+    exposePlaces: false,
+    exposeNotes: false,
+    allowDownload: true,
+    allowProposal: true,
+    allowDirectEdit: false,
+  });
+  const [remoteAccessPolicy, setRemoteAccessPolicy] = useState<P2PVisibilitySettings | null>(null);
 
   // Keep ref to data for P2P sync (closure issue)
   const gedcomDataRef = useRef<GedcomData | null>(null);
+  const p2pModeRef = useRef<P2PMode>(null);
+  const visibilitySettingsRef = useRef<P2PVisibilitySettings>(p2pVisibilitySettings);
+  const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
+  const databaseNameRef = useRef<string>(databaseName);
+  const bundleToastTimeoutRef = useRef<number | null>(null);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
+  useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
+  useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
+  useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
+  useEffect(() => {
+    return () => {
+      if (bundleToastTimeoutRef.current !== null) {
+        window.clearTimeout(bundleToastTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const livingCandidates = useMemo(() => {
+    if (!gedcomData) return [];
+    return Object.values(gedcomData.individuals)
+      .filter((indi) => !indi.deathDate?.year)
+      .map((indi) => ({
+        id: indi.id,
+        label: `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [gedcomData]);
+
+  const pendingProposalsCount = useMemo(
+    () => p2pProposals.filter((proposal) => proposal.status === 'pending').length,
+    [p2pProposals]
+  );
+  const activeReviewProposal = useMemo(
+    () => p2pProposals.find((proposal) => proposal.proposalId === activeReviewProposalId) || null,
+    [p2pProposals, activeReviewProposalId]
+  );
+  const selectedIndividualDocuments = useMemo(
+    () => (selectedIndividual ? (documentsByIndividualId[selectedIndividual.id] || []) : []),
+    [documentsByIndividualId, selectedIndividual]
+  );
+
+  useEffect(() => {
+    if (!livingCandidates.length) return;
+    setP2PInvites((prev) => {
+      const existingByIndividualId = new Set(prev.map((i) => i.individualId));
+      const defaultsToAdd = livingCandidates
+        .filter((candidate) => !existingByIndividualId.has(candidate.id))
+        .map((candidate) => ({
+          inviteId: `inv-${candidate.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          individualId: candidate.id,
+          individualName: candidate.label,
+          role: 'viewer' as const,
+          status: 'active' as const,
+          personalizedDefault: true,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        }));
+      if (!defaultsToAdd.length) return prev;
+      return [...prev, ...defaultsToAdd];
+    });
+  }, [livingCandidates]);
+
+  useEffect(() => {
+    if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
+    p2pService.sendMessage('ACCESS_PROFILE_SET', {
+      profile: p2pVisibilitySettings,
+      fromPeerId: peerId || 'host',
+    });
+    logP2PActivity('policy.sent', 'session', peerId || 'host');
+  }, [p2pVisibilitySettings, p2pStatus, peerId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -124,30 +334,138 @@ function App() {
   }, [isHelpOpen]);
 
   const handleInitP2P = () => {
+      setP2pMode('host');
+      p2pModeRef.current = 'host';
       setP2pStatus('connecting');
       p2pService.init(
           (status, id) => {
               setP2pStatus(status as P2PStatus);
               if (id) setPeerId(id);
+              logP2PActivity(`session.${status}`, 'session', id || 'local');
               if (status === 'connected') {
-                  // If we are hosting, send data immediately upon connection (simple strategy)
-                  if (gedcomDataRef.current) {
-                      p2pService.sendData('SYNC_GEDCOM', gedcomDataRef.current);
+                  // Host pushes current tree and access policy when a client connects.
+                  if (p2pModeRef.current === 'host' && gedcomDataRef.current) {
+                      p2pService.sendMessage('SYNC_GEDCOM', {
+                        gedcom: gedcomDataRef.current,
+                        databaseName: databaseNameRef.current,
+                        documentsByIndividualId: documentsRef.current,
+                        sentAt: new Date().toISOString(),
+                      });
+                      logP2PActivity('sync.sent', 'session', id || 'local');
+                      p2pService.sendMessage('ACCESS_PROFILE_SET', {
+                        profile: visibilitySettingsRef.current,
+                        fromPeerId: id || peerId || 'host',
+                      });
                   }
               }
           },
           (data) => {
               if (data.type === 'SYNC_GEDCOM' && data.payload) {
-                  // Received sync data
-                  handleDataLoaded(data.payload, "Remote P2P Database");
+                  const payload = data.payload as {
+                    gedcom?: GedcomData;
+                    databaseName?: string;
+                    documentsByIndividualId?: Record<string, unknown>;
+                  };
+                  const incomingGedcom = payload.gedcom || (data.payload as GedcomData);
+                  if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
+                  handleDataLoaded(incomingGedcom, payload.databaseName || "Remote P2P Database");
+                  if (payload.documentsByIndividualId) {
+                    setDocumentsByIndividualId(normalizeDocumentsByIndividual(payload.documentsByIndividualId));
+                  }
+                  logP2PActivity('sync.received', 'session', 'remote');
                   alert("Synchronized with Peer!");
+              }
+              if (data.type === 'DOCUMENTS_SYNC' && data.payload) {
+                  const payload = data.payload as {
+                    documentsByIndividualId?: Record<string, unknown>;
+                    authorPeerId?: string;
+                  };
+                  if (payload.documentsByIndividualId) {
+                    setDocumentsByIndividualId(normalizeDocumentsByIndividual(payload.documentsByIndividualId));
+                    logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'ACCESS_PROFILE_SET' && data.payload) {
+                  const payload = data.payload as { profile?: P2PVisibilitySettings; fromPeerId?: string };
+                  if (payload.profile) {
+                    setRemoteAccessPolicy(payload.profile);
+                    logP2PActivity('policy.received', 'session', payload.fromPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'PROPOSAL_SUBMIT' && data.payload) {
+                  const payload = data.payload as {
+                    proposalId?: string;
+                    individualId?: string;
+                    authorPeerId?: string;
+                    proposedAt?: string;
+                    operation?: 'update_individual' | 'create_individual' | 'delete_individual';
+                    proposedIndividual?: Individual;
+                    proposedFamilies?: Record<string, Family>;
+                    relatedIndividuals?: Record<string, Individual>;
+                    changeSet?: Partial<Individual>;
+                  };
+                  const individual = payload.individualId ? gedcomDataRef.current?.individuals[payload.individualId] : undefined;
+                  const individualLabel = individual
+                    ? (`${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id)
+                    : (
+                        payload.proposedIndividual
+                          ? (`${payload.proposedIndividual.givenName || ''} ${payload.proposedIndividual.surname || ''}`.trim() || payload.proposedIndividual.name || payload.proposedIndividual.id)
+                          : (payload.individualId || 'unknown')
+                      );
+                  setP2PProposals((prev) => [
+                    {
+                      proposalId: payload.proposalId || `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                      individualId: payload.individualId || 'unknown',
+                      individualLabel,
+                      authorPeerId: payload.authorPeerId || 'remote',
+                      proposedAt: payload.proposedAt || new Date().toISOString(),
+                      operation: payload.operation || 'update_individual',
+                      proposedIndividual: payload.proposedIndividual,
+                      proposedFamilies: payload.proposedFamilies,
+                      relatedIndividuals: payload.relatedIndividuals,
+                      changeSet: payload.changeSet || {},
+                      status: 'pending' as const,
+                    },
+                    ...prev,
+                  ].slice(0, 300));
+                  logP2PActivity('proposal.received', 'individual', payload.individualId || 'unknown', payload.authorPeerId || 'remote');
+                  alert('New proposal received from peer.');
+              }
+              if (data.type === 'PROPOSAL_DECIDE' && data.payload) {
+                  const payload = data.payload as {
+                    proposalId?: string;
+                    status?: 'accepted' | 'rejected';
+                    decidedAt?: string;
+                    hostPeerId?: string;
+                  };
+                  if (payload.proposalId && payload.status) {
+                    const decidedStatus: 'accepted' | 'rejected' = payload.status;
+                    setP2PProposals((prev) =>
+                      prev.map((proposal) =>
+                        proposal.proposalId === payload.proposalId
+                          ? { ...proposal, status: decidedStatus, decidedAt: payload.decidedAt || new Date().toISOString() }
+                          : proposal
+                      )
+                    );
+                    logP2PActivity(`proposal.${decidedStatus}`, 'proposal', payload.proposalId, payload.hostPeerId || 'host');
+                    alert(`Proposal ${decidedStatus} by host.`);
+                  }
+              }
+              if (data.type === 'ACTIVITY_EVENT' && data.payload) {
+                  const payload = data.payload as { eventType?: string; targetType?: ActivityLogEvent['targetType']; targetId?: string; actorPeerId?: string };
+                  if (payload.eventType && payload.targetType && payload.targetId) {
+                    logP2PActivity(payload.eventType, payload.targetType, payload.targetId, payload.actorPeerId || 'remote');
+                  }
               }
           }
       );
   };
 
   const handleConnectP2P = (hostId: string) => {
+      setP2pMode('client');
+      p2pModeRef.current = 'client';
       p2pService.connect(hostId);
+      logP2PActivity('peer.connect.requested', 'session', hostId);
   };
 
   // Called by CameraController when animation finishes
@@ -200,6 +518,7 @@ function App() {
     }, 50);
 
     setDatabaseName(name);
+    setDocumentsByIndividualId({});
     setActiveInfoPage(null); // Close info pages on data load
     
     // UI RESET: Ensure Panels are CLOSED so user sees the scene immediately
@@ -235,6 +554,8 @@ function App() {
     if (bestCandidate) {
       setRootIndividual(bestCandidate);
       setSelectedIndividual(bestCandidate);
+      setDisplayMode('2d-individual');
+      setRightPanelOpen(true);
       
       // Clear 2D selection to show ALL individuals on load
       setSelectedIdsFor2D(new Set());
@@ -244,8 +565,12 @@ function App() {
     }
 
     // P2P Sync if connected
-    if (p2pStatus === 'connected') {
-        p2pService.sendData('SYNC_GEDCOM', data);
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+        sendP2PSnapshot(data, documentsByIndividualId, 'sync.refresh');
+        p2pService.sendMessage('ACCESS_PROFILE_SET', {
+          profile: visibilitySettingsRef.current,
+          fromPeerId: peerId || 'host',
+        });
     }
   };
 
@@ -418,6 +743,7 @@ function App() {
 
   const handleUpdateIndividual = (updatedIndi: Individual, formData?: NewPersonData) => {
     if (!originalGedcomData) return;
+    const previousIndi = originalGedcomData.individuals[updatedIndi.id];
 
     let newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
     newData.individuals[updatedIndi.id] = {
@@ -498,6 +824,29 @@ function App() {
     setTimeout(() => {
          setNormalizedGedcomData(normalizeGedcom(newData));
     }, 10);
+
+    if (p2pStatus === 'connected') {
+      const allowProposal =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowProposal ?? true)
+          : true;
+      if (!allowProposal) {
+        alert('Proposals are disabled by host policy.');
+        return;
+      }
+      const changeSet = buildIndividualChangeSet(previousIndi, newData.individuals[updatedIndi.id]);
+      const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      p2pService.sendMessage('PROPOSAL_SUBMIT', {
+        proposalId,
+        individualId: updatedIndi.id,
+        authorPeerId: peerId || 'client',
+        proposedAt: new Date().toISOString(),
+        operation: 'update_individual' as const,
+        proposedIndividual: newData.individuals[updatedIndi.id],
+        changeSet,
+      });
+      logP2PActivity('proposal.sent', 'individual', updatedIndi.id, peerId || 'client');
+    }
   };
 
   const handleUpdateFamily = (updatedFam: Family) => {
@@ -514,6 +863,14 @@ function App() {
 
   const handleDownloadGedcom = () => {
     if (!gedcomData) return;
+    const effectiveAllowDownload =
+      p2pModeRef.current === 'client'
+        ? (remoteAccessPolicy?.allowDownload ?? true)
+        : p2pVisibilitySettings.allowDownload;
+    if (!effectiveAllowDownload) {
+      alert('Download disabled by current P2P access policy.');
+      return;
+    }
     const gedcomString = generateGedcom(gedcomData);
     const blob = new Blob([gedcomString], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -525,6 +882,346 @@ function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    logP2PActivity('tree.download', 'session', peerId || 'local');
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
+      p2pService.sendMessage('ACTIVITY_EVENT', {
+        eventType: 'tree.download.remote',
+        targetType: 'session',
+        targetId: peerId || 'client',
+        actorPeerId: peerId || 'client',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
+  const triggerDownloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadBundle = async () => {
+    if (!gedcomData) return;
+    const effectiveAllowDownload =
+      p2pModeRef.current === 'client'
+        ? (remoteAccessPolicy?.allowDownload ?? true)
+        : p2pVisibilitySettings.allowDownload;
+    if (!effectiveAllowDownload) {
+      alert('Download disabled by current P2P access policy.');
+      return;
+    }
+    try {
+      const gedcomString = generateGedcom(gedcomData);
+      const safeName = databaseName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const bundleBlob = await createLifeThreadBundle(gedcomString, {
+        version: '1.0',
+        databaseName,
+        exportedAt: new Date().toISOString(),
+        documentsByIndividualId,
+      });
+      triggerDownloadBlob(bundleBlob, `${safeName}_${new Date().toISOString().slice(0, 10)}.lifethread.zip`);
+      logP2PActivity('tree.bundle.download', 'session', peerId || 'local');
+      setBundleToast({ kind: 'success', message: 'Bundle exporte avec succes.' });
+      if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
+      bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 2500);
+    } catch (error) {
+      console.error('Bundle export failed', error);
+      setBundleToast({ kind: 'error', message: "Echec de l'export bundle." });
+      if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
+      bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 3000);
+    }
+  };
+
+  const handleImportBundle = async (file: File) => {
+    try {
+      const { gedcomContent, metadata } = await parseLifeThreadBundle(file);
+      const parsedData = parseGedcom(gedcomContent);
+      const normalizedDocs = normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>);
+      handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.lifethread\.zip$/i, ''));
+      setDocumentsByIndividualId(normalizedDocs);
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+        sendP2PSnapshot(parsedData, normalizedDocs, 'sync.refresh');
+      }
+      logP2PActivity('tree.bundle.import', 'session', peerId || 'local');
+      setBundleToast({ kind: 'success', message: 'Bundle importe avec succes.' });
+      if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
+      bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 2500);
+    } catch (error) {
+      console.error('Bundle import failed', error);
+      setBundleToast({ kind: 'error', message: 'Import bundle impossible. Verifiez le format du fichier.' });
+      if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
+      bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 3500);
+    }
+  };
+
+  const logP2PActivity = (
+    eventType: string,
+    targetType: ActivityLogEvent['targetType'],
+    targetId: string,
+    actorPeerId?: string
+  ) => {
+    const event: ActivityLogEvent = {
+      eventId: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      sessionId: peerId || 'local-session',
+      actorPeerId: actorPeerId || peerId || 'local',
+      eventType,
+      targetType,
+      targetId,
+      timestamp: new Date().toISOString(),
+    };
+    setP2PActivityEvents((prev) => [...prev, event].slice(-500));
+  };
+
+  const buildIndividualChangeSet = (before: Individual | undefined, after: Individual): Partial<Individual> => {
+    if (!before) return after;
+    const changed: Partial<Individual> = {};
+    const keys: Array<keyof Individual> = ['givenName', 'surname', 'name', 'gender', 'birthDate', 'deathDate', 'familyChildId', 'familySpouseIds'];
+    for (const key of keys) {
+      if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+        changed[key] = after[key] as never;
+      }
+    }
+    return changed;
+  };
+
+  const handleCreateInvite = (
+    individualId: string,
+    role: 'viewer' | 'contributor' | 'editor',
+    expiresAt?: string
+  ) => {
+    const candidate = livingCandidates.find((c) => c.id === individualId);
+    if (!candidate) return;
+    const invite: P2PInviteItem = {
+      inviteId: `inv-${individualId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      individualId,
+      individualName: candidate.label,
+      role,
+      expiresAt,
+      status: 'active',
+      personalizedDefault: false,
+      createdAt: new Date().toISOString(),
+    };
+    setP2PInvites((prev) => [invite, ...prev]);
+    logP2PActivity('invite.created', 'invite', invite.inviteId);
+  };
+
+  const handleRevokeInvite = (inviteId: string) => {
+    setP2PInvites((prev) =>
+      prev.map((invite) =>
+        invite.inviteId === inviteId ? { ...invite, status: 'revoked' as const } : invite
+      )
+    );
+    logP2PActivity('invite.revoked', 'invite', inviteId);
+  };
+
+  const handleDecideProposal = (proposalId: string, decision: 'accepted' | 'rejected') => {
+    setP2PProposals((prev) => {
+      const proposal = prev.find((p) => p.proposalId === proposalId);
+      if (!proposal) return prev;
+
+      if (decision === 'accepted') {
+        const mergedData = JSON.parse(
+          JSON.stringify(originalGedcomData || { individuals: {}, families: {} })
+        ) as GedcomData;
+        if (proposal.operation === 'create_individual' && proposal.proposedIndividual) {
+          mergedData.individuals[proposal.proposedIndividual.id] = proposal.proposedIndividual;
+          if (proposal.proposedFamilies) {
+            mergedData.families = { ...mergedData.families, ...proposal.proposedFamilies };
+          }
+          if (proposal.relatedIndividuals) {
+            mergedData.individuals = { ...mergedData.individuals, ...proposal.relatedIndividuals };
+          }
+        } else if (proposal.operation === 'delete_individual') {
+          delete mergedData.individuals[proposal.individualId];
+          Object.values(mergedData.families).forEach((fam) => {
+            if (fam.husbandId === proposal.individualId) fam.husbandId = undefined;
+            if (fam.wifeId === proposal.individualId) fam.wifeId = undefined;
+            fam.childrenIds = fam.childrenIds.filter((id) => id !== proposal.individualId);
+          });
+          Object.values(mergedData.individuals).forEach((indi) => {
+            if (indi.familyChildId && mergedData.families[indi.familyChildId]) {
+              const fam = mergedData.families[indi.familyChildId];
+              if (!fam.husbandId && !fam.wifeId && fam.childrenIds.length === 0) {
+                delete mergedData.families[indi.familyChildId];
+                indi.familyChildId = undefined;
+              }
+            }
+            if (indi.familySpouseIds) {
+              indi.familySpouseIds = indi.familySpouseIds.filter((famId) => {
+                const fam = mergedData.families[famId];
+                return !!fam;
+              });
+            }
+          });
+        } else if (proposal.individualId in mergedData.individuals) {
+          mergedData.individuals[proposal.individualId] = {
+            ...mergedData.individuals[proposal.individualId],
+            ...proposal.changeSet,
+          };
+        }
+        setOriginalGedcomData(mergedData);
+        setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+      }
+
+      logP2PActivity(`proposal.${decision}`, 'proposal', proposalId, peerId || 'host');
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+        p2pService.sendMessage('PROPOSAL_DECIDE', {
+          proposalId,
+          status: decision,
+          decidedAt: new Date().toISOString(),
+          hostPeerId: peerId || 'host',
+        });
+      }
+
+      return prev.map((p) =>
+        p.proposalId === proposalId ? { ...p, status: decision, decidedAt: new Date().toISOString() } : p
+      );
+    });
+  };
+
+  const handleReviewProposal = (proposalId: string) => {
+    const proposal = p2pProposals.find((p) => p.proposalId === proposalId);
+    if (!proposal) return;
+    const individual = gedcomData?.individuals?.[proposal.individualId];
+    if (individual) {
+      setRootIndividual(individual);
+      setSelectedIndividual(individual);
+      setDisplayMode('2d-individual');
+    } else if (proposal.operation === 'create_individual' && proposal.proposedIndividual) {
+      setRootIndividual(proposal.proposedIndividual);
+      setSelectedIndividual(proposal.proposedIndividual);
+      setDisplayMode('2d-individual');
+    } else {
+      alert('Cannot review this proposal: base individual is not available yet.');
+      return;
+    }
+    setRightPanelOpen(true);
+    setTopPanelOpen(false);
+    setActiveReviewProposalId(proposalId);
+    logP2PActivity('proposal.review.opened', 'proposal', proposalId, peerId || 'host');
+  };
+
+  const handleReviewBulkDecision = (
+    proposalId: string,
+    fields: Array<keyof Individual>,
+    decision: 'accept' | 'reject'
+  ) => {
+    const proposal = p2pProposals.find((p) => p.proposalId === proposalId);
+    if (!proposal) return;
+    if (!fields.length) return;
+    if (decision === 'accept' && originalGedcomData && proposal.individualId in originalGedcomData.individuals) {
+      const mergedData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
+      const target = mergedData.individuals[proposal.individualId] as unknown as Record<string, unknown>;
+      const source = proposal.changeSet as unknown as Record<string, unknown>;
+      for (const field of fields) {
+        target[field as string] = source[field as string];
+      }
+      setOriginalGedcomData(mergedData);
+      setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+    }
+
+    let resolvedNow = false;
+    let finalStatus: 'accepted' | 'rejected' | null = null;
+    setP2PProposals((prev) =>
+      prev.map((p) => {
+        if (p.proposalId !== proposalId) return p;
+        const nextChangeSet = { ...p.changeSet };
+        for (const field of fields) {
+          delete (nextChangeSet as Record<string, unknown>)[field as string];
+        }
+        const isEmpty = Object.keys(nextChangeSet).length === 0;
+        if (isEmpty) {
+          resolvedNow = true;
+          finalStatus = decision === 'accept' ? 'accepted' : 'rejected';
+        }
+        return {
+          ...p,
+          changeSet: nextChangeSet,
+          status: isEmpty ? (decision === 'accept' ? 'accepted' : 'rejected') : p.status,
+          decidedAt: isEmpty ? new Date().toISOString() : p.decidedAt,
+        };
+      })
+    );
+    if (resolvedNow && finalStatus && p2pStatus === 'connected') {
+      p2pService.sendMessage('PROPOSAL_DECIDE', {
+        proposalId,
+        status: finalStatus,
+        decidedAt: new Date().toISOString(),
+        hostPeerId: peerId || 'peer',
+      });
+    }
+    logP2PActivity(`proposal.fields.${decision}`, 'proposal', `${proposalId}:${fields.join(',')}`, peerId || 'host');
+  };
+
+  const handleReviewGlobalDecision = (proposalId: string, decision: 'fuse' | 'reject') => {
+    if (decision === 'fuse') {
+      handleDecideProposal(proposalId, 'accepted');
+    } else {
+      handleDecideProposal(proposalId, 'rejected');
+    }
+    setActiveReviewProposalId(null);
+  };
+
+  const handleAddDocument = (
+    individualId: string,
+    doc: {
+      title: string;
+      url: string;
+      source: 'local' | 'online';
+      kind: 'photo' | 'document';
+      date?: string;
+    }
+  ) => {
+    const inferredKind: 'photo' | 'document' =
+      doc.kind === 'photo' || isImageLikeUrl(doc.url) ? 'photo' : 'document';
+    const newDoc: IndividualDocument = {
+      id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ...doc,
+      kind: inferredKind,
+      isPrimaryPhoto: false,
+    };
+    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    setDocumentsByIndividualId((prev) => {
+      const current = prev[individualId] || [];
+      const shouldBecomePrimary = newDoc.kind === 'photo' && !current.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
+      const withPrimary = shouldBecomePrimary ? { ...newDoc, isPrimaryPhoto: true } : newDoc;
+      nextSnapshot = { ...prev, [individualId]: [...current, withPrimary] };
+      return nextSnapshot;
+    });
+    sendDocumentsToPeer(nextSnapshot, individualId);
+  };
+
+  const handleRemoveDocument = (individualId: string, docId: string) => {
+    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    setDocumentsByIndividualId((prev) => {
+      const current = prev[individualId] || [];
+      const next = current.filter((doc) => doc.id !== docId);
+      nextSnapshot = { ...prev, [individualId]: next };
+      return nextSnapshot;
+    });
+    sendDocumentsToPeer(nextSnapshot, individualId);
+  };
+
+  const handleSetPrimaryPhoto = (individualId: string, docId: string) => {
+    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    setDocumentsByIndividualId((prev) => {
+      const current = prev[individualId] || [];
+      nextSnapshot = {
+        ...prev,
+        [individualId]: current.map((doc) =>
+          (doc.kind === 'photo' || isImageLikeUrl(doc.url))
+            ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === docId }
+            : doc
+        ),
+      };
+      return nextSnapshot;
+    });
+    sendDocumentsToPeer(nextSnapshot, individualId);
   };
 
   // --- Creation, Linking & Deletion Logic ---
@@ -534,6 +1231,7 @@ function App() {
       setOriginalGedcomData({ individuals: {}, families: {} });
     }
     setIsCreating(true);
+    setSelectedIndividual(null);
     setRightPanelOpen(true); // Must open panel to show form
   };
 
@@ -674,17 +1372,71 @@ function App() {
     setSceneExtras([]);
     setAutoLayoutMode('all');
     setDisplayMode('2d-individual');
+
+    if (p2pStatus === 'connected') {
+      const createdIndi = newData.individuals[newId];
+      const currentSnapshot = currentData;
+      const proposedFamilies = Object.fromEntries(
+        Object.entries(newData.families).filter(([id, fam]) => {
+          const before = currentSnapshot.families[id];
+          return !before || JSON.stringify(before) !== JSON.stringify(fam);
+        })
+      ) as Record<string, Family>;
+      const relatedIndividuals = Object.fromEntries(
+        Object.entries(newData.individuals).filter(([id, indi]) => {
+          if (id === newId) return false;
+          const before = currentSnapshot.individuals[id];
+          return !!before && JSON.stringify(before) !== JSON.stringify(indi);
+        })
+      ) as Record<string, Individual>;
+      const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      p2pService.sendMessage('PROPOSAL_SUBMIT', {
+        proposalId,
+        operation: 'create_individual' as const,
+        individualId: createdIndi.id,
+        authorPeerId: peerId || 'peer',
+        proposedAt: new Date().toISOString(),
+        proposedIndividual: createdIndi,
+        proposedFamilies,
+        relatedIndividuals,
+        changeSet: createdIndi,
+      });
+      logP2PActivity('proposal.create.sent', 'individual', createdIndi.id, peerId || 'peer');
+    }
   };
 
   const handleDeleteIndividual = (id: string) => {
     if (!originalGedcomData) return;
-    const newData = { ...originalGedcomData };
+    const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
     delete newData.individuals[id]; 
+    Object.values(newData.families).forEach((fam) => {
+      if (fam.husbandId === id) fam.husbandId = undefined;
+      if (fam.wifeId === id) fam.wifeId = undefined;
+      fam.childrenIds = fam.childrenIds.filter((childId) => childId !== id);
+    });
     setOriginalGedcomData(newData);
     setTimeout(() => {
         setNormalizedGedcomData(normalizeGedcom(newData));
     }, 10);
     setSelectedIndividual(null);
+    setDocumentsByIndividualId((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    if (p2pStatus === 'connected') {
+      const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      p2pService.sendMessage('PROPOSAL_SUBMIT', {
+        proposalId,
+        operation: 'delete_individual' as const,
+        individualId: id,
+        authorPeerId: peerId || 'peer',
+        proposedAt: new Date().toISOString(),
+        changeSet: {},
+      });
+      logP2PActivity('proposal.delete.sent', 'individual', id, peerId || 'peer');
+    }
   };
   const handleLinkSpouse = () => {};
   const handleLinkChildToFamily = () => {};
@@ -857,6 +1609,7 @@ function App() {
       <Sidebar 
         data={gedcomData} 
         onDataLoaded={handleDataLoaded} 
+        onImportBundle={handleImportBundle}
         onSelectIndividual={handleNavigateToIndividual}
         selectedId={selectedIndividual?.id || null}
         selectedIdsFor2D={selectedIdsFor2D}
@@ -1005,6 +1758,15 @@ function App() {
         onMouseEnter={handleUIEnter}
         onMouseLeave={handleUILeave}
         isDarkMode={isDarkMode}
+        reviewProposal={activeReviewProposal}
+        reviewProposals={p2pProposals}
+        documents={selectedIndividualDocuments}
+        onOpenReviewProposal={handleReviewProposal}
+        onAddDocument={handleAddDocument}
+        onRemoveDocument={handleRemoveDocument}
+        onSetPrimaryPhoto={handleSetPrimaryPhoto}
+        onReviewBulkDecision={handleReviewBulkDecision}
+        onReviewGlobalDecision={handleReviewGlobalDecision}
       />
 
       {/* --- Top Panel (Share) --- */}
@@ -1016,6 +1778,7 @@ function App() {
         }}
         databaseName={databaseName}
         onDownload={handleDownloadGedcom}
+        onDownloadBundle={handleDownloadBundle}
         hasData={!!gedcomData}
         isDarkMode={isDarkMode}
         onMouseEnter={handleUIEnter}
@@ -1026,6 +1789,16 @@ function App() {
         peerId={peerId}
         onInitP2P={handleInitP2P}
         onConnectP2P={handleConnectP2P}
+        activityEvents={p2pActivityEvents}
+        proposals={p2pProposals}
+        visibilitySettings={p2pVisibilitySettings}
+        livingCandidates={livingCandidates}
+        invites={p2pInvites}
+        pendingProposalsCount={pendingProposalsCount}
+        onChangeVisibilitySettings={setP2PVisibilitySettings}
+        onCreateInvite={handleCreateInvite}
+        onRevokeInvite={handleRevokeInvite}
+        onReviewProposal={handleReviewProposal}
       />
 
       {/* --- Bottom Panel (Display) --- */}
@@ -1048,6 +1821,20 @@ function App() {
         onSetLayoutParams={setLayoutParams}
         isAnimating={flyTarget !== null}
       />
+
+      {bundleToast && (
+        <div className="fixed bottom-4 right-4 z-[220] pointer-events-none">
+          <div
+            className={`px-3 py-2 rounded-lg border shadow-lg text-xs font-semibold ${
+              bundleToast.kind === 'success'
+                ? 'bg-emerald-600/95 border-emerald-500 text-white'
+                : 'bg-rose-600/95 border-rose-500 text-white'
+            }`}
+          >
+            {bundleToast.message}
+          </div>
+        </div>
+      )}
 
       {renderHelpOverlay()}
 

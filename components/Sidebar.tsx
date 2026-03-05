@@ -73,6 +73,7 @@ export function applySortMode(list: Individual[], mode: SortMode): Individual[] 
 /* ------------------------------------------------------------------ */
 interface SidebarProps {
   onDataLoaded: (data: GedcomData, name?: string) => void;
+  onImportBundle: (file: File) => Promise<void> | void;
   onSelectIndividual: (indi: Individual) => void;
   data: GedcomData | null;
   selectedId: string | null;
@@ -99,6 +100,7 @@ interface SidebarProps {
 /* ------------------------------------------------------------------ */
 const Sidebar: React.FC<SidebarProps> = ({ 
   onDataLoaded, 
+  onImportBundle,
   onSelectIndividual, 
   data, 
   selectedId, 
@@ -196,6 +198,21 @@ const Sidebar: React.FC<SidebarProps> = ({
       }, 500);
   };
 
+  const handleBundleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    onLoading(true);
+    try {
+      await onImportBundle(file);
+    } catch (err) {
+      console.error(err);
+      alert('Error importing bundle.');
+    } finally {
+      onLoading(false);
+      event.target.value = '';
+    }
+  };
+
   const filteredList = useMemo(() => {
     if (!data) return [];
     let list = Object.values(data.individuals) as Individual[];
@@ -276,13 +293,28 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Header (Import & Normalization) */}
       <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} space-y-3`}>
-        <label className={`w-full flex items-center justify-center px-4 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-          {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-          <span className={`text-sm font-medium ${textClass}`}>
-            {isLoading ? 'Importing...' : 'Import GEDCOM'}
-          </span>
-          <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
-        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            <span className={`text-xs font-medium ${textClass}`}>
+              {isLoading ? 'Importing...' : 'Import GEDCOM'}
+            </span>
+            <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
+          </label>
+          <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            <span className={`text-xs font-medium ${textClass}`}>
+              {isLoading ? 'Importing...' : 'Import Bundle'}
+            </span>
+            <input
+              type="file"
+              accept=".lifethread.zip,.zip,application/zip"
+              onChange={handleBundleUpload}
+              className="hidden"
+              disabled={isLoading}
+            />
+          </label>
+        </div>
         
         {data && (
             <button 

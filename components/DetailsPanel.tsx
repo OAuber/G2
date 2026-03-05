@@ -36,13 +36,54 @@ interface DetailsPanelProps {
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
   isDarkMode: boolean;
+  reviewProposal?: {
+    proposalId: string;
+    individualId: string;
+    individualLabel: string;
+    authorPeerId: string;
+    proposedAt: string;
+    operation: 'update_individual' | 'create_individual' | 'delete_individual';
+    changeSet: Partial<Individual>;
+    status: 'pending' | 'accepted' | 'rejected';
+    decidedAt?: string;
+  } | null;
+  reviewProposals?: Array<{
+    proposalId: string;
+    individualId: string;
+    individualLabel: string;
+    authorPeerId: string;
+    proposedAt: string;
+    operation: 'update_individual' | 'create_individual' | 'delete_individual';
+    status: 'pending' | 'accepted' | 'rejected';
+  }>;
+  documents?: Array<{
+    id: string;
+    title: string;
+    url: string;
+    source: 'local' | 'online';
+    kind: 'photo' | 'document';
+    date?: string;
+    isPrimaryPhoto?: boolean;
+  }>;
+  onOpenReviewProposal?: (proposalId: string) => void;
+  onAddDocument?: (individualId: string, doc: {
+    title: string;
+    url: string;
+    source: 'local' | 'online';
+    kind: 'photo' | 'document';
+    date?: string;
+  }) => void;
+  onRemoveDocument?: (individualId: string, docId: string) => void;
+  onSetPrimaryPhoto?: (individualId: string, docId: string) => void;
+  onReviewBulkDecision?: (proposalId: string, fields: Array<keyof Individual>, decision: 'accept' | 'reject') => void;
+  onReviewGlobalDecision?: (proposalId: string, decision: 'fuse' | 'reject') => void;
 }
 
 /* ------------------------------------------------------------------ */
 /*  SearchSelect: searchable dropdown replacing native <select>        */
 /*  Only renders up to MAX_RESULTS items → scales to any dataset size  */
 /* ------------------------------------------------------------------ */
-const MAX_RESULTS = 30;
+const MAX_RESULTS = 200;
 
 interface SearchSelectProps {
   value: string;
@@ -205,7 +246,16 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onCreateFamilyWithChild,
   onMouseEnter,
   onMouseLeave,
-  isDarkMode
+  isDarkMode,
+  reviewProposal,
+  reviewProposals = [],
+  documents = [],
+  onOpenReviewProposal,
+  onAddDocument,
+  onRemoveDocument,
+  onSetPrimaryPhoto,
+  onReviewBulkDecision,
+  onReviewGlobalDecision,
 }) => {
   const [formData, setFormData] = useState<NewPersonData>({
     givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
@@ -213,6 +263,21 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedReviewFields, setSelectedReviewFields] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<'records' | 'documents' | 'review'>('records');
+  const [docForm, setDocForm] = useState<{
+    title: string;
+    url: string;
+    source: 'local' | 'online';
+    kind: 'photo' | 'document';
+    date: string;
+  }>({
+    title: '',
+    url: '',
+    source: 'online',
+    kind: 'document',
+    date: '',
+  });
 
   useEffect(() => {
     if (isCreating) {
@@ -259,6 +324,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     }
     setShowDeleteConfirm(false);
   }, [isCreating, individual?.id, data]);
+
+  useEffect(() => {
+    if (isCreating || isEditing) setActiveTab('records');
+  }, [isCreating, isEditing]);
 
   const allIndividuals = useMemo(() =>
     data ? (Object.values(data.individuals) as Individual[]).sort((a, b) =>
@@ -312,6 +381,37 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       </div>
   );
 
+  const formatFieldValue = (value: unknown): string => {
+    if (value === undefined || value === null || value === '') return '-';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
+
+  const reviewFields = useMemo(() => {
+    if (!reviewProposal || !individual || reviewProposal.individualId !== individual.id) return [];
+    return Object.keys(reviewProposal.changeSet) as Array<keyof Individual>;
+  }, [reviewProposal, individual]);
+
+  const proposedIndividual = useMemo(() => {
+    if (!reviewProposal || !individual || reviewProposal.individualId !== individual.id) return null;
+    return { ...individual, ...reviewProposal.changeSet } as Individual;
+  }, [reviewProposal, individual]);
+
+  useEffect(() => {
+    setSelectedReviewFields(reviewFields.map((field) => String(field)));
+  }, [reviewProposal?.proposalId, reviewFields]);
+
+  useEffect(() => {
+    if (reviewProposal?.proposalId) {
+      setActiveTab('review');
+    }
+  }, [reviewProposal?.proposalId]);
+
+  const primaryPhoto = useMemo(
+    () => documents.find((d) => (d.kind === 'photo' || d.url.startsWith('data:image/')) && d.isPrimaryPhoto),
+    [documents]
+  );
+
   return (
     <div 
       className={`absolute right-0 top-0 bottom-0 w-80 ${bgClass} border-l flex flex-col shadow-xl z-[120] transition-all duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
@@ -347,7 +447,26 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {isCreating || isEditing ? (
+        <div className={`${cardBg} rounded-lg p-3 border ${isDarkMode ? 'border-slate-700' : 'border-slate-200'}`}>
+          <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+            Selected individual
+          </div>
+          <div className={`text-sm font-semibold mt-1 ${textClass}`}>
+            {isCreating
+              ? 'New individual'
+              : individual
+              ? `${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id
+              : 'No individual selected'}
+          </div>
+        </div>
+
+        <div className={`rounded border p-1 grid grid-cols-3 gap-1 ${inputBg}`}>
+          <button type="button" onClick={() => setActiveTab('records')} className={`py-1 text-xs font-bold rounded ${activeTab === 'records' ? 'bg-blue-600 text-white' : ''}`}>Records</button>
+          <button type="button" onClick={() => setActiveTab('documents')} className={`py-1 text-xs font-bold rounded ${activeTab === 'documents' ? 'bg-blue-600 text-white' : ''}`}>Documents</button>
+          <button type="button" onClick={() => setActiveTab('review')} className={`py-1 text-xs font-bold rounded ${activeTab === 'review' ? 'bg-blue-600 text-white' : ''}`}>Review</button>
+        </div>
+
+        {(isCreating || isEditing || activeTab === 'records') ? (
           <form onSubmit={(e) => {e.preventDefault(); isCreating ? onCreateIndividual(formData) : handleSaveEdit()}} className="space-y-4">
              <div className="flex justify-between items-center">
                  <h3 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{isCreating ? 'New Individual' : 'Edit Individual'}</h3>
@@ -437,6 +556,308 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 {isCreating && <button type="button" onClick={onCancelCreate} className={`flex-1 py-2 rounded text-sm font-bold ${inputBg}`}>Cancel</button>}
              </div>
           </form>
+        ) : activeTab === 'documents' ? (
+          !individual ? (
+            <div className={`h-full flex flex-col items-center justify-center ${subTextClass} space-y-3 opacity-60`}>
+              <p className="text-sm">Select an individual first</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {primaryPhoto && (
+                <div className={`${cardBg} rounded-lg p-3`}>
+                  <div className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Primary photo</div>
+                  <img src={primaryPhoto.url} alt={primaryPhoto.title} className="w-full h-40 object-cover rounded border border-slate-600/30" />
+                </div>
+              )}
+
+              <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Add document</div>
+                <input
+                  placeholder="Title"
+                  className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                  value={docForm.title}
+                  onChange={(e) => setDocForm((prev) => ({ ...prev, title: e.target.value }))}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                    value={docForm.source}
+                    onChange={(e) => setDocForm((prev) => ({ ...prev, source: e.target.value as 'local' | 'online', url: '' }))}
+                  >
+                    <option value="online">Online</option>
+                    <option value="local">Local</option>
+                  </select>
+                  <select
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                    value={docForm.kind}
+                    onChange={(e) => setDocForm((prev) => ({ ...prev, kind: e.target.value as 'photo' | 'document' }))}
+                  >
+                    <option value="document">Document</option>
+                    <option value="photo">Photo</option>
+                  </select>
+                </div>
+                {docForm.source === 'online' ? (
+                  <input
+                    placeholder="https://..."
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                    value={docForm.url}
+                    onChange={(e) => setDocForm((prev) => ({ ...prev, url: e.target.value }))}
+                  />
+                ) : (
+                  <input
+                    type="file"
+                    accept={docForm.kind === 'photo' ? 'image/*' : '*'}
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const dataUrl = await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(String(reader.result || ''));
+                        reader.onerror = () => reject(reader.error);
+                        reader.readAsDataURL(file);
+                      });
+                      setDocForm((prev) => ({ ...prev, url: dataUrl, title: prev.title || file.name }));
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                )}
+                <input
+                  type="date"
+                  className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                  value={docForm.date}
+                  onChange={(e) => setDocForm((prev) => ({ ...prev, date: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  disabled={!docForm.title || !docForm.url}
+                  className={`w-full py-2 rounded text-sm font-bold ${actionBtnClass} disabled:opacity-50`}
+                  onClick={() => {
+                    if (!individual || !onAddDocument) return;
+                    const inferredKind: 'photo' | 'document' =
+                      docForm.kind === 'photo' ||
+                      docForm.url.startsWith('data:image/') ||
+                      /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(docForm.url)
+                        ? 'photo'
+                        : 'document';
+                    onAddDocument(individual.id, {
+                      title: docForm.title,
+                      url: docForm.url,
+                      source: docForm.source,
+                      kind: inferredKind,
+                      date: docForm.date || undefined,
+                    });
+                    setDocForm({ title: '', url: '', source: 'online', kind: 'document', date: '' });
+                  }}
+                >
+                  Add document
+                </button>
+              </div>
+
+              <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Document list</div>
+                {documents.length === 0 ? (
+                  <p className={`text-xs ${subTextClass}`}>No documents yet.</p>
+                ) : documents.map((doc) => (
+                  <div key={doc.id} className={`rounded border p-2 ${inputBg}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className={`text-sm font-semibold truncate ${textClass}`}>{doc.title}</div>
+                        <div className={`text-[11px] ${subTextClass}`}>
+                          {doc.kind} | {doc.source}{doc.date ? ` | ${doc.date}` : ''}
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        {(doc.kind === 'photo' || doc.url.startsWith('data:image/')) && (
+                          <button
+                            type="button"
+                            onClick={() => individual && onSetPrimaryPhoto?.(individual.id, doc.id)}
+                            className={`px-2 py-1 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
+                          >
+                            {doc.isPrimaryPhoto ? 'Primary' : 'Set primary'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => individual && onRemoveDocument?.(individual.id, doc.id)}
+                          className="px-2 py-1 rounded text-[10px] font-bold bg-rose-600 text-white"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        ) : activeTab === 'review' ? (
+          <div className="space-y-4">
+            <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
+              <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Pending proposals</div>
+              {reviewProposals.filter((p) => p.status === 'pending').length === 0 ? (
+                <p className={`text-xs ${subTextClass}`}>No pending proposals.</p>
+              ) : (
+                reviewProposals.filter((p) => p.status === 'pending').map((p) => (
+                  <button
+                    key={p.proposalId}
+                    type="button"
+                    onClick={() => onOpenReviewProposal?.(p.proposalId)}
+                    className={`w-full text-left rounded border p-2 ${inputBg} hover:border-blue-500/60`}
+                  >
+                    <div className="text-xs font-semibold">{p.operation} - {p.individualLabel}</div>
+                    <div className={`text-[11px] ${subTextClass}`}>{p.authorPeerId} | {new Date(p.proposedAt).toLocaleString()}</div>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {reviewProposal && reviewProposal.individualId === individual?.id && reviewProposal.status === 'pending' && reviewProposal.operation === 'delete_individual' && (
+              <div className={`${cardBg} rounded-lg p-3 space-y-3 border border-rose-500/40`}>
+                <div className="flex items-center justify-between">
+                  <h4 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                    Review P2P Deletion
+                  </h4>
+                  <span className="text-[10px] text-rose-500 font-mono">{reviewProposal.proposalId}</span>
+                </div>
+                <div className={`text-[11px] ${subTextClass}`}>
+                  From: {reviewProposal.authorPeerId} | {new Date(reviewProposal.proposedAt).toLocaleString()}
+                </div>
+                <p className="text-xs text-rose-400">
+                  This proposal requests deletion of this individual and related family links.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'fuse')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500"
+                  >
+                    Accept deletion
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'reject')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-slate-600 text-white hover:bg-slate-500"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {reviewProposal &&
+              reviewProposal.individualId === individual?.id &&
+              reviewProposal.status === 'pending' &&
+              reviewProposal.operation !== 'delete_individual' &&
+              proposedIndividual && (
+              <div className={`${cardBg} rounded-lg p-3 space-y-3 border border-blue-500/40`}>
+                <div className="flex items-center justify-between">
+                  <h4 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                    Review P2P Proposal
+                  </h4>
+                  <span className="text-[10px] text-blue-500 font-mono">{reviewProposal.proposalId}</span>
+                </div>
+                <div className={`text-[11px] ${subTextClass}`}>
+                  From: {reviewProposal.authorPeerId} | {new Date(reviewProposal.proposedAt).toLocaleString()}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className={`rounded border p-2 ${inputBg}`}>
+                    <div className={`font-bold mb-1 ${subTextClass}`}>Original</div>
+                    {reviewFields.map((field) => (
+                      <div key={`orig-${String(field)}`} className="flex justify-between gap-2">
+                        <span className={subTextClass}>{String(field)}</span>
+                        <span className={textClass}>{formatFieldValue((individual as unknown as Record<string, unknown>)[field as string])}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className={`rounded border p-2 ${inputBg}`}>
+                    <div className={`font-bold mb-1 ${subTextClass}`}>Proposal</div>
+                    {reviewFields.map((field) => (
+                      <div key={`new-${String(field)}`} className="flex justify-between gap-2">
+                        <span className={subTextClass}>{String(field)}</span>
+                        <span className={textClass}>{formatFieldValue((proposedIndividual as unknown as Record<string, unknown>)[field as string])}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={`rounded border p-2 ${inputBg}`}>
+                  <div className="text-xs font-semibold mb-2">Modified fields only (select with checkboxes)</div>
+                  <div className="space-y-1">
+                    {reviewFields.map((field) => {
+                      const fieldKey = String(field);
+                      const checked = selectedReviewFields.includes(fieldKey);
+                      return (
+                        <label key={`pick-${fieldKey}`} className="flex items-center gap-2 text-xs cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setSelectedReviewFields((prev) =>
+                                e.target.checked
+                                  ? [...prev, fieldKey]
+                                  : prev.filter((k) => k !== fieldKey)
+                              )
+                            }
+                          />
+                          <span>{fieldKey}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={selectedReviewFields.length === 0}
+                    onClick={() =>
+                      onReviewBulkDecision?.(
+                        reviewProposal.proposalId,
+                        selectedReviewFields as Array<keyof Individual>,
+                        'accept'
+                      )
+                    }
+                    className="flex-1 py-2 rounded text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    Apply checked
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedReviewFields.length === 0}
+                    onClick={() =>
+                      onReviewBulkDecision?.(
+                        reviewProposal.proposalId,
+                        selectedReviewFields as Array<keyof Individual>,
+                        'reject'
+                      )
+                    }
+                    className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-50"
+                  >
+                    Reject checked
+                  </button>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'fuse')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-blue-600 text-white hover:bg-blue-500"
+                  >
+                    Fuse global
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'reject')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500"
+                  >
+                    Reject global
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         ) : (!individual) ? (
            <div className={`h-full flex flex-col items-center justify-center ${subTextClass} space-y-3 opacity-60`}>
              <p className="text-sm">No individual created nor selected</p>
