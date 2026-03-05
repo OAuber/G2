@@ -35,7 +35,7 @@ function filterIndividualFields(individual: Individual, profile: AccessProfile):
   const result: VisibleIndividual = { id: individual.id };
   for (const key of profile.allowFields) {
     if (key in individual) {
-      (result as Record<string, unknown>)[key] = (individual as Record<string, unknown>)[key];
+      (result as unknown as Record<string, unknown>)[key] = (individual as unknown as Record<string, unknown>)[key];
     }
   }
   if (!result.name && (result.givenName || result.surname)) {
