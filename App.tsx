@@ -108,7 +108,8 @@ function App() {
     return normalized;
   };
 
-  const SYNC_CHUNK_SIZE = 48_000;
+  // Conservative chunk size for mobile/browser DataChannel compatibility.
+  const SYNC_CHUNK_SIZE = 12_000;
 
   const sendP2PSnapshot = (
     gedcom: GedcomData,
@@ -117,29 +118,21 @@ function App() {
   ) => {
     if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
     const gedcomText = generateGedcom(gedcom);
-    if (gedcomText.length <= SYNC_CHUNK_SIZE) {
-      p2pService.sendMessage('SYNC_GEDCOM', {
-        gedcomText,
+    const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const totalChunks = Math.ceil(gedcomText.length / SYNC_CHUNK_SIZE);
+    for (let index = 0; index < totalChunks; index += 1) {
+      const start = index * SYNC_CHUNK_SIZE;
+      const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
+      p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
+        transferId,
+        index,
+        totalChunks,
+        chunk,
         databaseName: databaseNameRef.current,
         sentAt: new Date().toISOString(),
       });
-    } else {
-      const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const totalChunks = Math.ceil(gedcomText.length / SYNC_CHUNK_SIZE);
-      for (let index = 0; index < totalChunks; index += 1) {
-        const start = index * SYNC_CHUNK_SIZE;
-        const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
-        p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
-          transferId,
-          index,
-          totalChunks,
-          chunk,
-          databaseName: databaseNameRef.current,
-          sentAt: new Date().toISOString(),
-        });
-      }
     }
     if (Object.keys(documents).length > 0) {
       sendDocumentsToPeer(documents, 'documents');
@@ -458,14 +451,20 @@ function App() {
                     const fullGedcomText = acc.parts.join('');
                     delete incomingSyncChunksRef.current[key];
                     syncReceivingInProgressRef.current = false;
-                    const incomingGedcom = parseGedcom(fullGedcomText);
-                    handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
-                    if (pendingIncomingDocumentsRef.current) {
-                      setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
-                      pendingIncomingDocumentsRef.current = null;
+                    try {
+                      const incomingGedcom = parseGedcom(fullGedcomText);
+                      handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
+                      if (pendingIncomingDocumentsRef.current) {
+                        setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                        pendingIncomingDocumentsRef.current = null;
+                      }
+                      logP2PActivity('sync.received', 'session', 'remote');
+                      alert("Synchronized with Peer!");
+                    } catch (error) {
+                      console.error('Failed to parse chunked GEDCOM sync', error);
+                      logP2PActivity('sync.parse.error', 'session', 'remote');
+                      alert('Failed to synchronize large GEDCOM payload.');
                     }
-                    logP2PActivity('sync.received', 'session', 'remote');
-                    alert("Synchronized with Peer!");
                   }
               }
               if (data.type === 'DOCUMENTS_SYNC' && data.payload) {
