@@ -110,6 +110,8 @@ function App() {
 
   // Conservative chunk size for mobile/browser DataChannel compatibility.
   const SYNC_CHUNK_SIZE = 12_000;
+  const SYNC_CHUNK_SEND_DELAY_MS = 4;
+  const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 12000;
 
   const sendP2PSnapshot = (
     gedcom: GedcomData,
@@ -122,17 +124,25 @@ function App() {
       ? crypto.randomUUID()
       : `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const totalChunks = Math.ceil(gedcomText.length / SYNC_CHUNK_SIZE);
+    setP2PSyncStatusText(`sending 0/${totalChunks}`);
     for (let index = 0; index < totalChunks; index += 1) {
       const start = index * SYNC_CHUNK_SIZE;
       const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
-      p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
-        transferId,
-        index,
-        totalChunks,
-        chunk,
-        databaseName: databaseNameRef.current,
-        sentAt: new Date().toISOString(),
-      });
+      window.setTimeout(() => {
+        if (p2pStatus !== 'connected') return;
+        p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
+          transferId,
+          index,
+          totalChunks,
+          chunk,
+          databaseName: databaseNameRef.current,
+          sentAt: new Date().toISOString(),
+        });
+        setP2PSyncStatusText(`sending ${index + 1}/${totalChunks}`);
+        if (index + 1 === totalChunks) {
+          window.setTimeout(() => setP2PSyncStatusText('waiting apply'), 250);
+        }
+      }, index * SYNC_CHUNK_SEND_DELAY_MS);
     }
     if (Object.keys(documents).length > 0) {
       sendDocumentsToPeer(documents, 'documents');
@@ -233,6 +243,7 @@ function App() {
   const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
   const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
     exposeDates: true,
@@ -251,6 +262,7 @@ function App() {
   const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
   const databaseNameRef = useRef<string>(databaseName);
   const bundleToastTimeoutRef = useRef<number | null>(null);
+  const syncChunkReceiveTimeoutRef = useRef<number | null>(null);
   const incomingSyncChunksRef = useRef<Record<string, {
     totalChunks: number;
     databaseName?: string;
@@ -268,8 +280,31 @@ function App() {
       if (bundleToastTimeoutRef.current !== null) {
         window.clearTimeout(bundleToastTimeoutRef.current);
       }
+      if (syncChunkReceiveTimeoutRef.current !== null) {
+        window.clearTimeout(syncChunkReceiveTimeoutRef.current);
+      }
     };
   }, []);
+
+  const resetIncomingSyncTimeout = () => {
+    if (syncChunkReceiveTimeoutRef.current !== null) {
+      window.clearTimeout(syncChunkReceiveTimeoutRef.current);
+    }
+    syncChunkReceiveTimeoutRef.current = window.setTimeout(() => {
+      incomingSyncChunksRef.current = {};
+      syncReceivingInProgressRef.current = false;
+      pendingIncomingDocumentsRef.current = null;
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
+        setP2PSyncStatusText('retry requested');
+        p2pService.sendMessage('SYNC_GEDCOM_REQUEST', {
+          reason: 'chunk_timeout',
+          requesterPeerId: peerId || 'client',
+          requestedAt: new Date().toISOString(),
+        });
+      }
+      logP2PActivity('sync.chunk.timeout', 'session', peerId || 'client');
+    }, SYNC_CHUNK_RECEIVE_TIMEOUT_MS);
+  };
 
   const applyIncomingDocuments = (documentsRaw: Record<string, unknown>) => {
     const docs = normalizeDocumentsByIndividual(documentsRaw);
@@ -401,6 +436,11 @@ function App() {
                       : (payload.gedcom || (data.payload as GedcomData));
                   if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
                   syncReceivingInProgressRef.current = false;
+                  setP2PSyncStatusText('applying');
+                  if (syncChunkReceiveTimeoutRef.current !== null) {
+                    window.clearTimeout(syncChunkReceiveTimeoutRef.current);
+                    syncChunkReceiveTimeoutRef.current = null;
+                  }
                   handleDataLoaded(incomingGedcom, payload.databaseName || "Remote P2P Database");
                   if (payload.documentsByIndividualId) {
                     applyIncomingDocuments(payload.documentsByIndividualId);
@@ -409,6 +449,8 @@ function App() {
                     setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
                     pendingIncomingDocumentsRef.current = null;
                   }
+                  setP2PSyncStatusText('done');
+                  window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                   logP2PActivity('sync.received', 'session', 'remote');
                   alert("Synchronized with Peer!");
               }
@@ -430,6 +472,7 @@ function App() {
                   ) return;
 
                   syncReceivingInProgressRef.current = true;
+                  resetIncomingSyncTimeout();
                   const key = payload.transferId;
                   const existing = incomingSyncChunksRef.current[key];
                   if (!existing) {
@@ -445,27 +488,41 @@ function App() {
                   if (!acc.parts[payload.index]) {
                     acc.parts[payload.index] = payload.chunk;
                     acc.received += 1;
+                    setP2PSyncStatusText(`receiving ${acc.received}/${acc.totalChunks}`);
                   }
 
                   if (acc.received >= acc.totalChunks) {
                     const fullGedcomText = acc.parts.join('');
                     delete incomingSyncChunksRef.current[key];
                     syncReceivingInProgressRef.current = false;
+                    if (syncChunkReceiveTimeoutRef.current !== null) {
+                      window.clearTimeout(syncChunkReceiveTimeoutRef.current);
+                      syncChunkReceiveTimeoutRef.current = null;
+                    }
                     try {
+                      setP2PSyncStatusText('applying');
                       const incomingGedcom = parseGedcom(fullGedcomText);
                       handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
                       if (pendingIncomingDocumentsRef.current) {
                         setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
                         pendingIncomingDocumentsRef.current = null;
                       }
+                      setP2PSyncStatusText('done');
+                      window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                       logP2PActivity('sync.received', 'session', 'remote');
                       alert("Synchronized with Peer!");
                     } catch (error) {
                       console.error('Failed to parse chunked GEDCOM sync', error);
                       logP2PActivity('sync.parse.error', 'session', 'remote');
+                      setP2PSyncStatusText('parse error');
                       alert('Failed to synchronize large GEDCOM payload.');
                     }
                   }
+              }
+              if (data.type === 'SYNC_GEDCOM_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
+                  setP2PSyncStatusText('peer requested retry');
+                  sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
+                  logP2PActivity('sync.request.received', 'session', peerId || 'host');
               }
               if (data.type === 'DOCUMENTS_SYNC' && data.payload) {
                   const payload = data.payload as {
@@ -1892,6 +1949,7 @@ function App() {
         livingCandidates={livingCandidates}
         invites={p2pInvites}
         pendingProposalsCount={pendingProposalsCount}
+        syncStatusText={p2pSyncStatusText}
         onChangeVisibilitySettings={setP2PVisibilitySettings}
         onCreateInvite={handleCreateInvite}
         onRevokeInvite={handleRevokeInvite}

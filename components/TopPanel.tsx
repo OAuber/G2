@@ -53,6 +53,7 @@ interface TopPanelProps {
     personalizedDefault: boolean;
   }>;
   pendingProposalsCount: number;
+  syncStatusText?: string | null;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
   onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
   onRevokeInvite: (inviteId: string) => void;
@@ -80,6 +81,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   livingCandidates,
   invites,
   pendingProposalsCount,
+  syncStatusText,
   onChangeVisibilitySettings,
   onCreateInvite,
   onRevokeInvite,
@@ -247,6 +249,15 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
           {!isOnline && (
             <span className={`text-[9px] ${subTextClass} italic`}>Local mode</span>
+          )}
+          {isOnline && syncStatusText && (
+            <span
+              className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                isDarkMode ? 'border-slate-700 bg-slate-900/60 text-cyan-300' : 'border-slate-300 bg-white text-cyan-700'
+              }`}
+            >
+              Sync: {syncStatusText}
+            </span>
           )}
 
         </div>
