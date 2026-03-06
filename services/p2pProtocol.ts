@@ -4,6 +4,7 @@ export const P2P_PROTOCOL_VERSION = '1.0.0';
 
 export type P2PMessageType =
   | 'SYNC_GEDCOM'
+  | 'SYNC_GEDCOM_CHUNK'
   | 'DOCUMENTS_SYNC'
   | 'INVITE_CREATE'
   | 'INVITE_REVOKE'

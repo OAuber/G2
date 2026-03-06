@@ -108,18 +108,42 @@ function App() {
     return normalized;
   };
 
+  const SYNC_CHUNK_SIZE = 48_000;
+
   const sendP2PSnapshot = (
     gedcom: GedcomData,
     documents: Record<string, IndividualDocument[]>,
     source: 'sync.sent' | 'sync.refresh'
   ) => {
     if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
-    p2pService.sendMessage('SYNC_GEDCOM', {
-      gedcom,
-      databaseName: databaseNameRef.current,
-      documentsByIndividualId: documents,
-      sentAt: new Date().toISOString(),
-    });
+    const gedcomText = generateGedcom(gedcom);
+    if (gedcomText.length <= SYNC_CHUNK_SIZE) {
+      p2pService.sendMessage('SYNC_GEDCOM', {
+        gedcomText,
+        databaseName: databaseNameRef.current,
+        sentAt: new Date().toISOString(),
+      });
+    } else {
+      const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const totalChunks = Math.ceil(gedcomText.length / SYNC_CHUNK_SIZE);
+      for (let index = 0; index < totalChunks; index += 1) {
+        const start = index * SYNC_CHUNK_SIZE;
+        const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
+        p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
+          transferId,
+          index,
+          totalChunks,
+          chunk,
+          databaseName: databaseNameRef.current,
+          sentAt: new Date().toISOString(),
+        });
+      }
+    }
+    if (Object.keys(documents).length > 0) {
+      sendDocumentsToPeer(documents, 'documents');
+    }
     logP2PActivity(source, 'session', peerId || 'host');
   };
 
@@ -234,6 +258,14 @@ function App() {
   const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
   const databaseNameRef = useRef<string>(databaseName);
   const bundleToastTimeoutRef = useRef<number | null>(null);
+  const incomingSyncChunksRef = useRef<Record<string, {
+    totalChunks: number;
+    databaseName?: string;
+    parts: string[];
+    received: number;
+  }>>({});
+  const syncReceivingInProgressRef = useRef(false);
+  const pendingIncomingDocumentsRef = useRef<Record<string, IndividualDocument[]> | null>(null);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
@@ -245,6 +277,15 @@ function App() {
       }
     };
   }, []);
+
+  const applyIncomingDocuments = (documentsRaw: Record<string, unknown>) => {
+    const docs = normalizeDocumentsByIndividual(documentsRaw);
+    if (syncReceivingInProgressRef.current) {
+      pendingIncomingDocumentsRef.current = docs;
+      return;
+    }
+    setDocumentsByIndividualId(docs);
+  };
 
   const livingCandidates = useMemo(() => {
     if (!gedcomData) return [];
@@ -345,13 +386,7 @@ function App() {
               if (status === 'connected') {
                   // Host pushes current tree and access policy when a client connects.
                   if (p2pModeRef.current === 'host' && gedcomDataRef.current) {
-                      p2pService.sendMessage('SYNC_GEDCOM', {
-                        gedcom: gedcomDataRef.current,
-                        databaseName: databaseNameRef.current,
-                        documentsByIndividualId: documentsRef.current,
-                        sentAt: new Date().toISOString(),
-                      });
-                      logP2PActivity('sync.sent', 'session', id || 'local');
+                      sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.sent');
                       p2pService.sendMessage('ACCESS_PROFILE_SET', {
                         profile: visibilitySettingsRef.current,
                         fromPeerId: id || peerId || 'host',
@@ -363,17 +398,75 @@ function App() {
               if (data.type === 'SYNC_GEDCOM' && data.payload) {
                   const payload = data.payload as {
                     gedcom?: GedcomData;
+                    gedcomText?: string;
                     databaseName?: string;
                     documentsByIndividualId?: Record<string, unknown>;
                   };
-                  const incomingGedcom = payload.gedcom || (data.payload as GedcomData);
+                  const incomingGedcom =
+                    payload.gedcomText
+                      ? parseGedcom(payload.gedcomText)
+                      : (payload.gedcom || (data.payload as GedcomData));
                   if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
+                  syncReceivingInProgressRef.current = false;
                   handleDataLoaded(incomingGedcom, payload.databaseName || "Remote P2P Database");
                   if (payload.documentsByIndividualId) {
-                    setDocumentsByIndividualId(normalizeDocumentsByIndividual(payload.documentsByIndividualId));
+                    applyIncomingDocuments(payload.documentsByIndividualId);
+                  }
+                  if (pendingIncomingDocumentsRef.current) {
+                    setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                    pendingIncomingDocumentsRef.current = null;
                   }
                   logP2PActivity('sync.received', 'session', 'remote');
                   alert("Synchronized with Peer!");
+              }
+              if (data.type === 'SYNC_GEDCOM_CHUNK' && data.payload) {
+                  const payload = data.payload as {
+                    transferId?: string;
+                    index?: number;
+                    totalChunks?: number;
+                    chunk?: string;
+                    databaseName?: string;
+                  };
+                  if (
+                    !payload.transferId ||
+                    typeof payload.index !== 'number' ||
+                    typeof payload.totalChunks !== 'number' ||
+                    typeof payload.chunk !== 'string' ||
+                    payload.totalChunks <= 0 ||
+                    payload.index < 0
+                  ) return;
+
+                  syncReceivingInProgressRef.current = true;
+                  const key = payload.transferId;
+                  const existing = incomingSyncChunksRef.current[key];
+                  if (!existing) {
+                    incomingSyncChunksRef.current[key] = {
+                      totalChunks: payload.totalChunks,
+                      databaseName: payload.databaseName,
+                      parts: new Array(payload.totalChunks).fill(''),
+                      received: 0,
+                    };
+                  }
+                  const acc = incomingSyncChunksRef.current[key];
+                  if (payload.index >= acc.totalChunks) return;
+                  if (!acc.parts[payload.index]) {
+                    acc.parts[payload.index] = payload.chunk;
+                    acc.received += 1;
+                  }
+
+                  if (acc.received >= acc.totalChunks) {
+                    const fullGedcomText = acc.parts.join('');
+                    delete incomingSyncChunksRef.current[key];
+                    syncReceivingInProgressRef.current = false;
+                    const incomingGedcom = parseGedcom(fullGedcomText);
+                    handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
+                    if (pendingIncomingDocumentsRef.current) {
+                      setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                      pendingIncomingDocumentsRef.current = null;
+                    }
+                    logP2PActivity('sync.received', 'session', 'remote');
+                    alert("Synchronized with Peer!");
+                  }
               }
               if (data.type === 'DOCUMENTS_SYNC' && data.payload) {
                   const payload = data.payload as {
@@ -381,7 +474,7 @@ function App() {
                     authorPeerId?: string;
                   };
                   if (payload.documentsByIndividualId) {
-                    setDocumentsByIndividualId(normalizeDocumentsByIndividual(payload.documentsByIndividualId));
+                    applyIncomingDocuments(payload.documentsByIndividualId);
                     logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
                   }
               }
