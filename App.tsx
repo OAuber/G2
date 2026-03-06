@@ -118,7 +118,7 @@ function App() {
     documents: Record<string, IndividualDocument[]>,
     source: 'sync.sent' | 'sync.refresh'
   ) => {
-    if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
+    if (p2pModeRef.current !== 'host') return;
     const gedcomText = generateGedcom(gedcom);
     const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -129,7 +129,6 @@ function App() {
       const start = index * SYNC_CHUNK_SIZE;
       const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
       window.setTimeout(() => {
-        if (p2pStatus !== 'connected') return;
         p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
           transferId,
           index,
@@ -154,7 +153,6 @@ function App() {
     documents: Record<string, IndividualDocument[]>,
     target: string = selectedIndividual?.id || 'documents'
   ) => {
-    if (p2pStatus !== 'connected') return;
     p2pService.sendMessage('DOCUMENTS_SYNC', {
       documentsByIndividualId: documents,
       databaseName: databaseNameRef.current,
@@ -294,7 +292,7 @@ function App() {
       incomingSyncChunksRef.current = {};
       syncReceivingInProgressRef.current = false;
       pendingIncomingDocumentsRef.current = null;
-      if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
+      if (p2pModeRef.current === 'client') {
         setP2PSyncStatusText('retry requested');
         p2pService.sendMessage('SYNC_GEDCOM_REQUEST', {
           reason: 'chunk_timeout',
