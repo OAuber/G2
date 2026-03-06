@@ -12,6 +12,7 @@ import {
 } from './p2pProtocol';
 
 export type P2PCallback = (data: any) => void;
+type IceServerLike = { urls: string | string[]; username?: string; credential?: string };
 
 export class P2PService {
     private peer: Peer | null = null;
@@ -26,6 +27,39 @@ export class P2PService {
 
     constructor() {}
 
+    private buildIceServers(): IceServerLike[] {
+        // Keep STUN list short for faster ICE gathering.
+        const servers: IceServerLike[] = [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+        ];
+
+        // Optional TURN (recommended for cross-network reliability).
+        // Example:
+        // VITE_TURN_URLS=turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349
+        // VITE_TURN_USERNAME=user
+        // VITE_TURN_CREDENTIAL=pass
+        const env = import.meta.env as Record<string, string | undefined>;
+        const turnUrlsRaw = env.VITE_TURN_URLS?.trim();
+        const turnUsername = env.VITE_TURN_USERNAME?.trim();
+        const turnCredential = env.VITE_TURN_CREDENTIAL?.trim();
+        if (turnUrlsRaw && turnUsername && turnCredential) {
+            const turnUrls = turnUrlsRaw
+                .split(',')
+                .map((u) => u.trim())
+                .filter(Boolean);
+            if (turnUrls.length > 0) {
+                servers.push({
+                    urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
+                    username: turnUsername,
+                    credential: turnCredential,
+                });
+            }
+        }
+
+        return servers;
+    }
+
     public init(onStatus: (status: string, id?: string) => void, onData: P2PCallback) {
         this.onStatusChange = onStatus;
         this.onDataReceived = onData;
@@ -38,13 +72,7 @@ export class P2PService {
             host: '0.peerjs.com',
             port: 443,
             config: {
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' },
-                    { urls: 'stun:stun.cloudflare.com:3478' },
-                ],
+                iceServers: this.buildIceServers(),
             },
         });
 
