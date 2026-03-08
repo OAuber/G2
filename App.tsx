@@ -12,13 +12,21 @@ import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
 import { ActivityLogEvent } from './services/p2pDomain';
 import { createLifeThreadBundle, parseLifeThreadBundle } from './services/bundleService';
+import {
+  IndividualDiffIndexEntry,
+  IndividualDiffPotentialMatch,
+  IndividualDiffRequestPayload,
+  IndividualDiffResponsePayload,
+} from './services/p2pProtocol';
 
 function App() {
+  type P2PSessionUseCase = 'share' | 'compare' | null;
   type P2PVisibilitySettings = {
     exposeIdentity: boolean;
     exposeDates: boolean;
     exposePlaces: boolean;
     exposeNotes: boolean;
+    allowDocuments: boolean;
     allowDownload: boolean;
     allowProposal: boolean;
     allowDirectEdit: boolean;
@@ -48,6 +56,13 @@ function App() {
     changeSet: Partial<Individual>;
     status: 'pending' | 'accepted' | 'rejected';
     decidedAt?: string;
+    source?: 'live' | 'initial_compare';
+    initialSyncBatchId?: string;
+    matchConfidence?: 'high' | 'medium' | 'low';
+    matchScore?: number;
+    remoteIndividualId?: string;
+    remoteFingerprint?: string;
+    retryAfterReject?: boolean;
   };
 
   type IndividualDocument = {
@@ -112,6 +127,18 @@ function App() {
   const SYNC_CHUNK_SIZE = 12_000;
   const SYNC_CHUNK_SEND_DELAY_MS = 4;
   const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 12000;
+  const INITIAL_DIFF_BATCH_LIMIT = 300;
+  const INITIAL_DIFF_MAX_RETRY = 1;
+  const INITIAL_DIFF_REQUEST_TIMEOUT_MS = 12000;
+  type InitialDiffContext = {
+    requestToken: string;
+    batchId: string;
+    retryCount: number;
+    pendingRequestIds: string[];
+    potentialMatchesBySenderId: Record<string, IndividualDiffPotentialMatch>;
+    startedAt: number;
+  };
+  type RejectedInitialMatchMap = Record<string, Set<string>>;
 
   const sendP2PSnapshot = (
     gedcom: GedcomData,
@@ -153,6 +180,11 @@ function App() {
     documents: Record<string, IndividualDocument[]>,
     target: string = selectedIndividual?.id || 'documents'
   ) => {
+    const allowDocuments =
+      p2pModeRef.current === 'client'
+        ? (remoteAccessPolicy?.allowDocuments ?? true)
+        : visibilitySettingsRef.current.allowDocuments;
+    if (!allowDocuments) return;
     p2pService.sendMessage('DOCUMENTS_SYNC', {
       documentsByIndividualId: documents,
       databaseName: databaseNameRef.current,
@@ -222,6 +254,7 @@ function App() {
   // Info Pages State
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const buildLabel = `${import.meta.env.MODE}:${window.location.host}`;
   const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
   const [emulateRevealShortcut, setEmulateRevealShortcut] = useState(false);
   const [topViewLabelMaxZSpan, setTopViewLabelMaxZSpan] = useState(500);
@@ -239,14 +272,19 @@ function App() {
   const [p2pInvites, setP2PInvites] = useState<P2PInviteItem[]>([]);
   const [p2pProposals, setP2PProposals] = useState<P2PProposalItem[]>([]);
   const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
+  const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
   const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
+  const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
+  const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
+  const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
     exposeDates: true,
     exposePlaces: false,
     exposeNotes: false,
+    allowDocuments: true,
     allowDownload: true,
     allowProposal: true,
     allowDirectEdit: false,
@@ -256,6 +294,7 @@ function App() {
   // Keep ref to data for P2P sync (closure issue)
   const gedcomDataRef = useRef<GedcomData | null>(null);
   const p2pModeRef = useRef<P2PMode>(null);
+  const p2pSessionUseCaseRef = useRef<P2PSessionUseCase>(null);
   const visibilitySettingsRef = useRef<P2PVisibilitySettings>(p2pVisibilitySettings);
   const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
   const databaseNameRef = useRef<string>(databaseName);
@@ -269,10 +308,15 @@ function App() {
   }>>({});
   const syncReceivingInProgressRef = useRef(false);
   const pendingIncomingDocumentsRef = useRef<Record<string, IndividualDocument[]> | null>(null);
+  const initialDiffContextsRef = useRef<Record<string, InitialDiffContext>>({});
+  const initialDiffTimeoutHandlesRef = useRef<Record<string, number>>({});
+  const initialDiffSeenProposalKeysRef = useRef<Set<string>>(new Set());
+  const rejectedInitialMatchesRef = useRef<RejectedInitialMatchMap>({});
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
+  useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
   useEffect(() => {
     return () => {
       if (bundleToastTimeoutRef.current !== null) {
@@ -281,6 +325,9 @@ function App() {
       if (syncChunkReceiveTimeoutRef.current !== null) {
         window.clearTimeout(syncChunkReceiveTimeoutRef.current);
       }
+      Object.values(initialDiffTimeoutHandlesRef.current).forEach((handle) => {
+        window.clearTimeout(handle);
+      });
     };
   }, []);
 
@@ -311,6 +358,428 @@ function App() {
       return;
     }
     setDocumentsByIndividualId(docs);
+  };
+
+  const showTransientToast = (
+    kind: 'success' | 'error',
+    message: string,
+    durationMs: number = 2500
+  ) => {
+    setBundleToast({ kind, message });
+    if (bundleToastTimeoutRef.current !== null) {
+      window.clearTimeout(bundleToastTimeoutRef.current);
+    }
+    bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), durationMs);
+  };
+
+  const sendSessionState = (requestEcho: boolean = false) => {
+    p2pService.sendMessage('SESSION_STATE', {
+      hasGedcom: !!gedcomDataRef.current,
+      individualCount: gedcomDataRef.current ? Object.keys(gedcomDataRef.current.individuals).length : 0,
+      sentAt: new Date().toISOString(),
+      mode: p2pModeRef.current,
+      requestEcho,
+    });
+  };
+
+  const createRequestToken = () =>
+    (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `diff-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  const allocateUniqueIndividualId = (candidateId: string, data: GedcomData): string => {
+    if (!(candidateId in data.individuals)) return candidateId;
+    const used = new Set(Object.keys(data.individuals));
+    let next = 1;
+    while (used.has(`@I${next}@`)) next += 1;
+    return `@I${next}@`;
+  };
+
+  const normalizeWord = (value: string | undefined): string =>
+    (value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+      .trim();
+
+  const toInitials = (givenName: string, surname: string): string => {
+    const g = normalizeWord(givenName);
+    const s = normalizeWord(surname);
+    return `${g.slice(0, 1)}${s.slice(0, 1)}`.toUpperCase();
+  };
+
+  const getEffectiveSharePolicy = (): P2PVisibilitySettings => {
+    if (p2pModeRef.current === 'client' && remoteAccessPolicy) {
+      return remoteAccessPolicy;
+    }
+    return visibilitySettingsRef.current;
+  };
+
+  const hashString = (value: string): string => {
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i += 1) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `${hash >>> 0}`;
+  };
+
+  const buildDiffFingerprint = (individual: Individual, policy: P2PVisibilitySettings): string => {
+    const base = {
+      g: policy.exposeIdentity ? normalizeWord(individual.givenName) : '',
+      s: policy.exposeIdentity ? normalizeWord(individual.surname) : '',
+      x: policy.exposeIdentity ? individual.gender : '',
+      b: policy.exposeDates ? individual.birthDate?.year ?? null : null,
+      d: policy.exposeDates ? individual.deathDate?.year ?? null : null,
+      bp: policy.exposePlaces ? normalizeWord(individual.birthPlace) : '',
+      dp: policy.exposePlaces ? normalizeWord(individual.deathPlace) : '',
+      n: policy.exposeNotes ? normalizeWord(individual.notes) : '',
+    };
+    return hashString(JSON.stringify(base));
+  };
+
+  const filterIndividualForSharing = (individual: Individual, policy: P2PVisibilitySettings): Individual => {
+    return {
+      ...individual,
+      givenName: policy.exposeIdentity ? individual.givenName : '',
+      surname: policy.exposeIdentity ? individual.surname : '',
+      name: policy.exposeIdentity ? individual.name : individual.id,
+      gender: policy.exposeIdentity ? individual.gender : individual.gender,
+      birthDate: policy.exposeDates ? individual.birthDate : undefined,
+      deathDate: policy.exposeDates ? individual.deathDate : undefined,
+      birthPlace: policy.exposePlaces ? individual.birthPlace : undefined,
+      deathPlace: policy.exposePlaces ? individual.deathPlace : undefined,
+      notes: policy.exposeNotes ? individual.notes : undefined,
+    };
+  };
+
+  const buildDiffIndex = (data: GedcomData, policy: P2PVisibilitySettings): IndividualDiffIndexEntry[] => {
+    return Object.values(data.individuals).map((individual) => {
+      const spouseCount = individual.familySpouseIds?.length || 0;
+      const childCount = (individual.familySpouseIds || []).reduce((acc, famId) => {
+        const fam = data.families[famId];
+        return acc + (fam?.childrenIds?.length || 0);
+      }, 0);
+      const parentCount = individual.familyChildId ? 1 : 0;
+      return {
+        localId: individual.id,
+        fingerprint: buildDiffFingerprint(individual, policy),
+        lightweightSignature: {
+          initials: policy.exposeIdentity ? toInitials(individual.givenName, individual.surname) : undefined,
+          gender: policy.exposeIdentity ? individual.gender : undefined,
+          birthYear: policy.exposeDates ? individual.birthDate?.year ?? null : null,
+          deathYear: policy.exposeDates ? individual.deathDate?.year ?? null : null,
+          parentCount,
+          spouseCount,
+          childCount,
+        },
+        givenName: policy.exposeIdentity ? individual.givenName : undefined,
+        surname: policy.exposeIdentity ? individual.surname : undefined,
+        birthYear: policy.exposeDates ? individual.birthDate?.year ?? null : null,
+        deathYear: policy.exposeDates ? individual.deathDate?.year ?? null : null,
+        gender: policy.exposeIdentity ? individual.gender : undefined,
+      };
+    });
+  };
+
+  const scoreIndexCandidate = (local: Individual, remote: IndividualDiffIndexEntry): number => {
+    let score = 0;
+    const localGiven = normalizeWord(local.givenName);
+    const localSurname = normalizeWord(local.surname);
+    const remoteGiven = normalizeWord(remote.givenName);
+    const remoteSurname = normalizeWord(remote.surname);
+    const localBirthYear = local.birthDate?.year ?? null;
+    const remoteBirthYear = remote.birthYear ?? null;
+    const localDeathYear = local.deathDate?.year ?? null;
+    const remoteDeathYear = remote.deathYear ?? null;
+
+    if (localGiven && remoteGiven && localGiven === remoteGiven) score += 0.35;
+    if (localSurname && remoteSurname && localSurname === remoteSurname) score += 0.35;
+    if (localBirthYear && remoteBirthYear && localBirthYear === remoteBirthYear) score += 0.2;
+    if (localDeathYear && remoteDeathYear && localDeathYear === remoteDeathYear) score += 0.05;
+    if (remote.gender && local.gender === remote.gender) score += 0.05;
+
+    const localInitials = toInitials(local.givenName, local.surname);
+    if (remote.lightweightSignature.initials && remote.lightweightSignature.initials === localInitials) {
+      score += 0.05;
+    }
+
+    return Math.min(score, 1);
+  };
+
+  const isNameCoherentForUpdate = (local: Individual, remote: IndividualDiffIndexEntry): boolean => {
+    const localGiven = normalizeWord(local.givenName);
+    const localSurname = normalizeWord(local.surname);
+    const remoteGiven = normalizeWord(remote.givenName);
+    const remoteSurname = normalizeWord(remote.surname);
+
+    if (!localSurname || !remoteSurname) return false;
+    if (localSurname !== remoteSurname) return false;
+
+    // Strict V1 rule: same surname AND same normalized given name.
+    // This prevents unrelated individuals from being matched as updates.
+    return !!localGiven && !!remoteGiven && localGiven === remoteGiven;
+  };
+
+  const isIdentityCoherentForUpdate = (local: Individual, remote: Individual): boolean => {
+    const localGiven = normalizeWord(local.givenName);
+    const localSurname = normalizeWord(local.surname);
+    const remoteGiven = normalizeWord(remote.givenName);
+    const remoteSurname = normalizeWord(remote.surname);
+
+    if (!localSurname || !remoteSurname || localSurname !== remoteSurname) return false;
+    if (!localGiven || !remoteGiven || localGiven !== remoteGiven) return false;
+
+    if (local.gender && remote.gender && local.gender !== remote.gender) return false;
+
+    const localBirthYear = local.birthDate?.year ?? null;
+    const remoteBirthYear = remote.birthDate?.year ?? null;
+    if (localBirthYear && remoteBirthYear && Math.abs(localBirthYear - remoteBirthYear) > 2) return false;
+
+    return true;
+  };
+
+  const confidenceFromScore = (score: number): 'high' | 'medium' | 'low' => {
+    if (score >= 0.9) return 'high';
+    if (score >= 0.7) return 'medium';
+    return 'low';
+  };
+
+  const getRejectedMatchKey = (
+    authorPeerId: string,
+    remoteFingerprint?: string,
+    remoteIndividualId?: string
+  ): string | null => {
+    const identity = remoteIndividualId
+      ? `${remoteIndividualId}::${remoteFingerprint || 'no-fingerprint'}`
+      : remoteFingerprint;
+    if (!authorPeerId || !identity) return null;
+    return `${authorPeerId}::${identity}`;
+  };
+
+  const registerRejectedInitialMatch = (proposal: P2PProposalItem) => {
+    if (
+      proposal.source !== 'initial_compare' ||
+      proposal.operation !== 'update_individual'
+    ) {
+      return;
+    }
+    const key = getRejectedMatchKey(
+      proposal.authorPeerId,
+      proposal.remoteFingerprint,
+      proposal.remoteIndividualId
+    );
+    if (!key) return;
+    const existing = rejectedInitialMatchesRef.current[key] || new Set<string>();
+    existing.add(proposal.individualId);
+    rejectedInitialMatchesRef.current[key] = existing;
+  };
+
+  const classifyRemoteIndexAgainstLocal = (
+    remoteIndex: IndividualDiffIndexEntry[],
+    senderPeerId: string
+  ) => {
+    if (!gedcomDataRef.current) {
+      return { onlyOnSender: [] as string[], potentialMatches: [] as IndividualDiffPotentialMatch[], requestIdsForSenderDetails: [] as string[] };
+    }
+    const data = gedcomDataRef.current;
+    const potentialMatches: IndividualDiffPotentialMatch[] = [];
+    const onlyOnSender: string[] = [];
+
+    for (const remote of remoteIndex) {
+      const rejectedKey = getRejectedMatchKey(senderPeerId, remote.fingerprint, remote.localId);
+      const rejectedReceiverIds = rejectedKey
+        ? (rejectedInitialMatchesRef.current[rejectedKey] || new Set<string>())
+        : new Set<string>();
+      const exactById = data.individuals[remote.localId];
+      if (exactById && !rejectedReceiverIds.has(exactById.id)) {
+        const localPolicy = getEffectiveSharePolicy();
+        const localFingerprint = buildDiffFingerprint(exactById, localPolicy);
+        if (localFingerprint === remote.fingerprint) {
+          continue;
+        }
+        // Same GEDCOM ID is not enough to assume same person across databases.
+        // We only trust same-ID match when identity evidence is strong.
+        const exactIdScore = scoreIndexCandidate(exactById, remote);
+        if (exactIdScore >= 0.9 && isNameCoherentForUpdate(exactById, remote)) {
+          potentialMatches.push({ senderId: remote.localId, receiverId: remote.localId, score: exactIdScore });
+          continue;
+        }
+      }
+
+      let bestScore = 0;
+      let bestId: string | null = null;
+      for (const localIndividual of Object.values(data.individuals)) {
+        if (rejectedReceiverIds.has(localIndividual.id)) continue;
+        const s = scoreIndexCandidate(localIndividual, remote);
+        if (s > bestScore) {
+          bestScore = s;
+          bestId = localIndividual.id;
+        }
+      }
+
+      const bestLocal = bestId ? data.individuals[bestId] : null;
+      const allowAsUpdate = !!(bestLocal && isNameCoherentForUpdate(bestLocal, remote));
+      // Keep update matching conservative to avoid unrelated merges.
+      if (bestId && bestScore >= 0.95 && allowAsUpdate) {
+        potentialMatches.push({ senderId: remote.localId, receiverId: bestId, score: bestScore });
+      } else {
+        onlyOnSender.push(remote.localId);
+      }
+    }
+
+    const sortedMatches = potentialMatches
+      .sort((a, b) => b.score - a.score)
+      .slice(0, INITIAL_DIFF_BATCH_LIMIT);
+    const cappedOnlyOnSender = onlyOnSender.slice(0, Math.max(0, INITIAL_DIFF_BATCH_LIMIT - sortedMatches.length));
+    const requestIdsForSenderDetails = [...new Set([...cappedOnlyOnSender, ...sortedMatches.map((m) => m.senderId)])];
+
+    return {
+      onlyOnSender: cappedOnlyOnSender,
+      potentialMatches: sortedMatches,
+      requestIdsForSenderDetails,
+    };
+  };
+
+  const collectRelatedPayload = (individualId: string, data: GedcomData) => {
+    const individual = data.individuals[individualId];
+    if (!individual) return null;
+    const relatedFamilies: Record<string, Family> = {};
+    const relatedIndividuals: Record<string, Individual> = {};
+
+    if (individual.familyChildId && data.families[individual.familyChildId]) {
+      const fam = data.families[individual.familyChildId];
+      relatedFamilies[fam.id] = fam;
+      if (fam.husbandId && data.individuals[fam.husbandId]) relatedIndividuals[fam.husbandId] = data.individuals[fam.husbandId];
+      if (fam.wifeId && data.individuals[fam.wifeId]) relatedIndividuals[fam.wifeId] = data.individuals[fam.wifeId];
+    }
+
+    for (const famId of individual.familySpouseIds || []) {
+      const fam = data.families[famId];
+      if (!fam) continue;
+      relatedFamilies[fam.id] = fam;
+      if (fam.husbandId && data.individuals[fam.husbandId]) relatedIndividuals[fam.husbandId] = data.individuals[fam.husbandId];
+      if (fam.wifeId && data.individuals[fam.wifeId]) relatedIndividuals[fam.wifeId] = data.individuals[fam.wifeId];
+      for (const childId of fam.childrenIds || []) {
+        if (data.individuals[childId]) relatedIndividuals[childId] = data.individuals[childId];
+      }
+    }
+
+    return { individual, relatedFamilies, relatedIndividuals };
+  };
+
+  const upsertIncomingProposal = (nextProposal: P2PProposalItem) => {
+    setP2PProposals((prev) => {
+      if (prev.some((p) => p.proposalId === nextProposal.proposalId)) return prev;
+      return [nextProposal, ...prev].slice(0, INITIAL_DIFF_BATCH_LIMIT);
+    });
+  };
+
+  const clearInitialDiffTimeout = (requestToken: string) => {
+    const handle = initialDiffTimeoutHandlesRef.current[requestToken];
+    if (handle !== undefined) {
+      window.clearTimeout(handle);
+      delete initialDiffTimeoutHandlesRef.current[requestToken];
+    }
+  };
+
+  const scheduleInitialDiffDetailsRetry = (requestToken: string) => {
+    clearInitialDiffTimeout(requestToken);
+    const ctx = initialDiffContextsRef.current[requestToken];
+    if (!ctx || !ctx.pendingRequestIds.length) return;
+    initialDiffTimeoutHandlesRef.current[requestToken] = window.setTimeout(() => {
+      const latest = initialDiffContextsRef.current[requestToken];
+      if (!latest || !latest.pendingRequestIds.length) return;
+      if (latest.retryCount >= INITIAL_DIFF_MAX_RETRY) {
+        setInitialCompareStatusText(`initial compare timed out (${latest.pendingRequestIds.length} missing)`);
+        logP2PActivity('initial_compare.timeout', 'session', requestToken, peerId || 'peer');
+        return;
+      }
+      const retryCount = latest.retryCount + 1;
+      initialDiffContextsRef.current[requestToken] = {
+        ...latest,
+        retryCount,
+      };
+      p2pService.sendMessage('INDIVIDUAL_DIFF_REQUEST', {
+        phase: 'details',
+        requestToken,
+        batchId: latest.batchId,
+        requestIds: latest.pendingRequestIds,
+        retryCount,
+      } as IndividualDiffRequestPayload);
+      setInitialCompareStatusText(`retrying details ${latest.pendingRequestIds.length}`);
+      logP2PActivity('initial_compare.retry', 'session', requestToken, peerId || 'peer');
+      scheduleInitialDiffDetailsRetry(requestToken);
+    }, INITIAL_DIFF_REQUEST_TIMEOUT_MS);
+  };
+
+  const startInitialCompareExchange = () => {
+    if (!gedcomDataRef.current) return false;
+    setP2PProposals((prev) =>
+      prev.filter((p) => !(p.source === 'initial_compare' && p.status === 'pending'))
+    );
+    const policy = getEffectiveSharePolicy();
+    const index = buildDiffIndex(gedcomDataRef.current, policy).slice(0, INITIAL_DIFF_BATCH_LIMIT);
+    const requestToken = createRequestToken();
+    const batchId = `batch-${Date.now()}`;
+    initialDiffContextsRef.current[requestToken] = {
+      requestToken,
+      batchId,
+      retryCount: 0,
+      pendingRequestIds: [],
+      potentialMatchesBySenderId: {},
+      startedAt: Date.now(),
+    };
+    p2pService.sendMessage('INDIVIDUAL_DIFF_REQUEST', {
+      phase: 'index',
+      requestToken,
+      batchId,
+      index,
+      retryCount: 0,
+    } as IndividualDiffRequestPayload);
+    setInitialCompareStatusText(`index sent ${index.length}`);
+    logP2PActivity('initial_compare.started', 'session', batchId, peerId || 'peer');
+    return true;
+  };
+
+  const handleStartCompare = () => {
+    if (p2pStatus !== 'connected') {
+      alert('Connect to a peer before running initial compare.');
+      return;
+    }
+    if (!gedcomDataRef.current || remotePeerHasData === false) {
+      alert('Compare requires GEDCOM loaded on both peers.');
+      return;
+    }
+    setP2PSessionUseCase('compare');
+    p2pSessionUseCaseRef.current = 'compare';
+    if (!startInitialCompareExchange()) {
+      alert('Load a GEDCOM file before running initial compare.');
+    }
+  };
+
+  const handleStartShare = () => {
+    if (p2pStatus !== 'connected') {
+      alert('Connect to a peer before sharing.');
+      return;
+    }
+    if (p2pModeRef.current !== 'host') {
+      alert('Share action is available on host side.');
+      return;
+    }
+    if (!gedcomDataRef.current) {
+      alert('Load a GEDCOM file before sharing.');
+      return;
+    }
+    if (remotePeerHasData === true) {
+      alert('Share is available only when remote peer has no loaded GEDCOM.');
+      return;
+    }
+    setP2PSessionUseCase('share');
+    p2pSessionUseCaseRef.current = 'share';
+    sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.sent');
+    setP2PSyncStatusText('share started');
   };
 
   const livingCandidates = useMemo(() => {
@@ -368,6 +837,25 @@ function App() {
   }, [p2pVisibilitySettings, p2pStatus, peerId]);
 
   useEffect(() => {
+    if (p2pStatus !== 'connected') return;
+    sendSessionState();
+  }, [p2pStatus, gedcomData]);
+
+  useEffect(() => {
+    if (p2pStatus !== 'connected' || remotePeerHasData !== null) return;
+    let attempts = 0;
+    const maxAttempts = 6;
+    const handle = window.setInterval(() => {
+      attempts += 1;
+      sendSessionState(true);
+      if (attempts >= maxAttempts || remotePeerHasData !== null) {
+        window.clearInterval(handle);
+      }
+    }, 1000);
+    return () => window.clearInterval(handle);
+  }, [p2pStatus, remotePeerHasData]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const modifierPressed = e.ctrlKey || e.metaKey;
       setIsShortcutModifierPressed(modifierPressed);
@@ -408,20 +896,31 @@ function App() {
           (status, id) => {
               setP2pStatus(status as P2PStatus);
               if (id) setPeerId(id);
+              if (status !== 'connected') {
+                setRemotePeerHasData(null);
+                setP2PSessionUseCase(null);
+                p2pSessionUseCaseRef.current = null;
+              }
               logP2PActivity(`session.${status}`, 'session', id || 'local');
               if (status === 'connected') {
-                  // Host pushes current tree and access policy when a client connects.
-                  if (p2pModeRef.current === 'host' && gedcomDataRef.current) {
-                      sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.sent');
-                      p2pService.sendMessage('ACCESS_PROFILE_SET', {
-                        profile: visibilitySettingsRef.current,
-                        fromPeerId: id || peerId || 'host',
-                      });
+                  setP2PSessionUseCase(null);
+                  setRemotePeerHasData(null);
+                  if (p2pModeRef.current === 'host') {
+                    p2pService.sendMessage('ACCESS_PROFILE_SET', {
+                      profile: visibilitySettingsRef.current,
+                      fromPeerId: id || peerId || 'host',
+                    });
                   }
+                  sendSessionState(true);
+                  window.setTimeout(() => sendSessionState(true), 600);
               }
           },
           (data) => {
               if (data.type === 'SYNC_GEDCOM' && data.payload) {
+                  if (p2pSessionUseCaseRef.current === 'compare') {
+                    logP2PActivity('sync.ignored.compare_mode', 'session', 'remote');
+                    return;
+                  }
                   const payload = data.payload as {
                     gedcom?: GedcomData;
                     gedcomText?: string;
@@ -440,11 +939,21 @@ function App() {
                     syncChunkReceiveTimeoutRef.current = null;
                   }
                   handleDataLoaded(incomingGedcom, payload.databaseName || "Remote P2P Database");
-                  if (payload.documentsByIndividualId) {
+                  const allowDocumentsInbound =
+                    p2pModeRef.current === 'client'
+                      ? (remoteAccessPolicy?.allowDocuments ?? true)
+                      : visibilitySettingsRef.current.allowDocuments;
+                  if (payload.documentsByIndividualId && allowDocumentsInbound) {
                     applyIncomingDocuments(payload.documentsByIndividualId);
                   }
                   if (pendingIncomingDocumentsRef.current) {
-                    setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                    const allowDocumentsInbound =
+                      p2pModeRef.current === 'client'
+                        ? (remoteAccessPolicy?.allowDocuments ?? true)
+                        : visibilitySettingsRef.current.allowDocuments;
+                    if (allowDocumentsInbound) {
+                      setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                    }
                     pendingIncomingDocumentsRef.current = null;
                   }
                   setP2PSyncStatusText('done');
@@ -453,6 +962,9 @@ function App() {
                   alert("Synchronized with Peer!");
               }
               if (data.type === 'SYNC_GEDCOM_CHUNK' && data.payload) {
+                  if (p2pSessionUseCaseRef.current === 'compare') {
+                    return;
+                  }
                   const payload = data.payload as {
                     transferId?: string;
                     index?: number;
@@ -502,7 +1014,13 @@ function App() {
                       const incomingGedcom = parseGedcom(fullGedcomText);
                       handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
                       if (pendingIncomingDocumentsRef.current) {
-                        setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                        const allowDocumentsInbound =
+                          p2pModeRef.current === 'client'
+                            ? (remoteAccessPolicy?.allowDocuments ?? true)
+                            : visibilitySettingsRef.current.allowDocuments;
+                        if (allowDocumentsInbound) {
+                          setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                        }
                         pendingIncomingDocumentsRef.current = null;
                       }
                       setP2PSyncStatusText('done');
@@ -518,6 +1036,7 @@ function App() {
                   }
               }
               if (data.type === 'SYNC_GEDCOM_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
+                  if (p2pSessionUseCaseRef.current !== 'share') return;
                   setP2PSyncStatusText('peer requested retry');
                   sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
                   logP2PActivity('sync.request.received', 'session', peerId || 'host');
@@ -527,16 +1046,287 @@ function App() {
                     documentsByIndividualId?: Record<string, unknown>;
                     authorPeerId?: string;
                   };
-                  if (payload.documentsByIndividualId) {
+                  const allowDocumentsInbound =
+                    p2pModeRef.current === 'client'
+                      ? (remoteAccessPolicy?.allowDocuments ?? true)
+                      : visibilitySettingsRef.current.allowDocuments;
+                  if (payload.documentsByIndividualId && allowDocumentsInbound) {
                     applyIncomingDocuments(payload.documentsByIndividualId);
                     logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'SESSION_STATE' && data.payload) {
+                  const payload = data.payload as {
+                    hasGedcom?: boolean;
+                    individualCount?: number;
+                    sentAt?: string;
+                    mode?: P2PMode;
+                    requestEcho?: boolean;
+                  };
+                  setRemotePeerHasData(typeof payload.hasGedcom === 'boolean' ? payload.hasGedcom : null);
+                  logP2PActivity(
+                    'session.state.received',
+                    'session',
+                    `remote:${payload.hasGedcom ? 'loaded' : 'empty'}:${payload.individualCount ?? 0}`,
+                    data.senderPeerId || 'remote'
+                  );
+                  if (payload.requestEcho) {
+                    sendSessionState(false);
                   }
               }
               if (data.type === 'ACCESS_PROFILE_SET' && data.payload) {
                   const payload = data.payload as { profile?: P2PVisibilitySettings; fromPeerId?: string };
                   if (payload.profile) {
-                    setRemoteAccessPolicy(payload.profile);
+                    setRemoteAccessPolicy({
+                      ...payload.profile,
+                      allowDocuments: payload.profile.allowDocuments ?? true,
+                    });
                     logP2PActivity('policy.received', 'session', payload.fromPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'INDIVIDUAL_DIFF_REQUEST' && data.payload) {
+                  const payload = data.payload as IndividualDiffRequestPayload;
+                  const currentData = gedcomDataRef.current;
+                  if (!currentData || !payload.requestToken) return;
+                  if (payload.phase === 'index' && Array.isArray(payload.index)) {
+                    const classification = classifyRemoteIndexAgainstLocal(
+                      payload.index,
+                      data.senderPeerId || 'remote'
+                    );
+                    p2pService.sendMessage('INDIVIDUAL_DIFF_RESPONSE', {
+                      phase: 'index',
+                      requestToken: payload.requestToken,
+                      batchId: payload.batchId,
+                      indexResult: {
+                        onlyOnSender: classification.onlyOnSender,
+                        potentialMatches: classification.potentialMatches,
+                      },
+                      requestIds: classification.requestIdsForSenderDetails,
+                    } as IndividualDiffResponsePayload);
+                    logP2PActivity('initial_compare.index.received', 'session', payload.requestToken, peerId || 'peer');
+
+                    if (classification.requestIdsForSenderDetails.length > 0) {
+                      const potentialMatchesBySenderId = classification.potentialMatches.reduce<Record<string, IndividualDiffPotentialMatch>>((acc, match) => {
+                        acc[match.senderId] = match;
+                        return acc;
+                      }, {});
+                      initialDiffContextsRef.current[payload.requestToken] = {
+                        requestToken: payload.requestToken,
+                        batchId: payload.batchId || `batch-${Date.now()}`,
+                        retryCount: 0,
+                        pendingRequestIds: [...classification.requestIdsForSenderDetails],
+                        potentialMatchesBySenderId,
+                        startedAt: Date.now(),
+                      };
+                      p2pService.sendMessage('INDIVIDUAL_DIFF_REQUEST', {
+                        phase: 'details',
+                        requestToken: payload.requestToken,
+                        batchId: payload.batchId,
+                        requestIds: classification.requestIdsForSenderDetails,
+                        retryCount: 0,
+                      } as IndividualDiffRequestPayload);
+                      setInitialCompareStatusText(`requesting details ${classification.requestIdsForSenderDetails.length}`);
+                      scheduleInitialDiffDetailsRetry(payload.requestToken);
+                    }
+                  }
+                  if (payload.phase === 'details' && Array.isArray(payload.requestIds)) {
+                    const policy = getEffectiveSharePolicy();
+                    const details = payload.requestIds
+                      .slice(0, INITIAL_DIFF_BATCH_LIMIT)
+                      .map((senderId) => {
+                        const bundle = collectRelatedPayload(senderId, currentData);
+                        if (!bundle) return null;
+                        const sharedIndividual = filterIndividualForSharing(bundle.individual, policy);
+                        const sharedRelatedIndividuals = Object.fromEntries(
+                          Object.entries(bundle.relatedIndividuals).map(([id, indi]) => [id, filterIndividualForSharing(indi, policy)])
+                        );
+                        return {
+                          senderId,
+                          fingerprint: buildDiffFingerprint(sharedIndividual, policy),
+                          individual: sharedIndividual,
+                          relatedFamilies: bundle.relatedFamilies,
+                          relatedIndividuals: sharedRelatedIndividuals,
+                        };
+                      })
+                      .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+                    p2pService.sendMessage('INDIVIDUAL_DIFF_RESPONSE', {
+                      phase: 'details',
+                      requestToken: payload.requestToken,
+                      batchId: payload.batchId,
+                      details,
+                    } as IndividualDiffResponsePayload);
+                    logP2PActivity('initial_compare.details.sent', 'session', payload.requestToken, peerId || 'peer');
+                  }
+              }
+              if (data.type === 'INDIVIDUAL_DIFF_RESPONSE' && data.payload) {
+                  const payload = data.payload as IndividualDiffResponsePayload;
+                  if (!payload.requestToken) return;
+                  if (payload.phase === 'index' && payload.indexResult) {
+                    const requestIds = Array.from(new Set(
+                      (payload.requestIds && payload.requestIds.length > 0)
+                        ? payload.requestIds
+                        : [
+                            ...payload.indexResult.onlyOnSender,
+                            ...payload.indexResult.potentialMatches.map((m) => m.senderId),
+                          ]
+                    )).slice(0, INITIAL_DIFF_BATCH_LIMIT);
+                    const potentialMatchesBySenderId = payload.indexResult.potentialMatches.reduce<Record<string, IndividualDiffPotentialMatch>>((acc, match) => {
+                      acc[match.senderId] = match;
+                      return acc;
+                    }, {});
+                    initialDiffContextsRef.current[payload.requestToken] = {
+                      requestToken: payload.requestToken,
+                      batchId: payload.batchId || `batch-${Date.now()}`,
+                      retryCount: 0,
+                      pendingRequestIds: requestIds,
+                      potentialMatchesBySenderId,
+                      startedAt: Date.now(),
+                    };
+                    if (requestIds.length > 0) {
+                      p2pService.sendMessage('INDIVIDUAL_DIFF_REQUEST', {
+                        phase: 'details',
+                        requestToken: payload.requestToken,
+                        batchId: payload.batchId,
+                        requestIds,
+                        retryCount: 0,
+                      } as IndividualDiffRequestPayload);
+                      setInitialCompareStatusText(`requesting details ${requestIds.length}`);
+                      logP2PActivity('initial_compare.index.processed', 'session', payload.requestToken, peerId || 'peer');
+                      scheduleInitialDiffDetailsRetry(payload.requestToken);
+                    } else {
+                      setInitialCompareStatusText('initial compare: no differences');
+                    }
+                  }
+                  if (payload.phase === 'details' && Array.isArray(payload.details)) {
+                    clearInitialDiffTimeout(payload.requestToken);
+                    const currentData = gedcomDataRef.current;
+                    if (!currentData) return;
+                    const context = initialDiffContextsRef.current[payload.requestToken];
+                    const unresolved = new Set(context?.pendingRequestIds || []);
+                    let created = 0;
+                    let updated = 0;
+                    for (const detail of payload.details) {
+                      if (!detail || typeof detail !== 'object') continue;
+                      unresolved.delete(detail.senderId);
+                      const remoteIndividual = detail.individual as Individual | undefined;
+                      if (!remoteIndividual || !remoteIndividual.id) continue;
+                      const match = context?.potentialMatchesBySenderId?.[detail.senderId];
+                      const proposalKey = `${data.senderPeerId || 'remote'}:${detail.senderId}:${detail.fingerprint}:${context?.batchId || payload.batchId || 'batch'}`;
+                      if (initialDiffSeenProposalKeysRef.current.has(proposalKey)) continue;
+                      initialDiffSeenProposalKeysRef.current.add(proposalKey);
+                      const confidence = confidenceFromScore(match?.score ?? 0);
+
+                      const rejectedKey = getRejectedMatchKey(
+                        data.senderPeerId || 'remote',
+                        detail.fingerprint,
+                        detail.senderId
+                      );
+                      const rejectedReceiverIds = rejectedKey
+                        ? (rejectedInitialMatchesRef.current[rejectedKey] || new Set<string>())
+                        : new Set<string>();
+                      const retryAfterReject = rejectedReceiverIds.size > 0;
+
+                      if (
+                        match &&
+                        match.score >= 0.95 &&
+                        currentData.individuals[match.receiverId] &&
+                        !rejectedReceiverIds.has(match.receiverId)
+                      ) {
+                        const before = currentData.individuals[match.receiverId];
+                        const confidence = confidenceFromScore(match.score);
+                        if (!isIdentityCoherentForUpdate(before, remoteIndividual) || confidence !== 'high') {
+                          const newId = allocateUniqueIndividualId(remoteIndividual.id, currentData);
+                          const proposedIndividual = { ...remoteIndividual, id: newId };
+                          const proposalId = `proposal-initial-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                          upsertIncomingProposal({
+                            proposalId,
+                            individualId: newId,
+                            individualLabel: `${proposedIndividual.givenName || ''} ${proposedIndividual.surname || ''}`.trim() || proposedIndividual.name || proposedIndividual.id,
+                            authorPeerId: data.senderPeerId || 'remote',
+                            proposedAt: new Date().toISOString(),
+                            operation: 'create_individual',
+                            proposedIndividual,
+                            proposedFamilies: (detail.relatedFamilies as Record<string, Family>) || {},
+                            relatedIndividuals: (detail.relatedIndividuals as Record<string, Individual>) || {},
+                            changeSet: proposedIndividual,
+                            status: 'pending',
+                            source: 'initial_compare',
+                            initialSyncBatchId: context?.batchId || payload.batchId,
+                            matchConfidence: 'low',
+                            matchScore: match.score,
+                            remoteIndividualId: detail.senderId,
+                            remoteFingerprint: detail.fingerprint,
+                            retryAfterReject,
+                          });
+                          created += 1;
+                          continue;
+                        }
+                        const changeSet = buildInitialCompareChangeSet(before, {
+                          ...before,
+                          ...remoteIndividual,
+                          id: before.id,
+                        });
+                        if (Object.keys(changeSet).length === 0) continue;
+                        const proposalId = `proposal-initial-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                        upsertIncomingProposal({
+                          proposalId,
+                          individualId: before.id,
+                          individualLabel: `${before.givenName || ''} ${before.surname || ''}`.trim() || before.name || before.id,
+                          authorPeerId: data.senderPeerId || 'remote',
+                          proposedAt: new Date().toISOString(),
+                          operation: 'update_individual',
+                          proposedIndividual: { ...before, ...changeSet },
+                          changeSet,
+                          status: 'pending',
+                          source: 'initial_compare',
+                          initialSyncBatchId: context?.batchId || payload.batchId,
+                          matchConfidence: confidence,
+                          matchScore: match.score,
+                          remoteIndividualId: detail.senderId,
+                          remoteFingerprint: detail.fingerprint,
+                          retryAfterReject,
+                        });
+                        updated += 1;
+                      } else {
+                        const newId = allocateUniqueIndividualId(remoteIndividual.id, currentData);
+                        const proposedIndividual = { ...remoteIndividual, id: newId };
+                        const proposalId = `proposal-initial-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                        upsertIncomingProposal({
+                          proposalId,
+                          individualId: newId,
+                          individualLabel: `${proposedIndividual.givenName || ''} ${proposedIndividual.surname || ''}`.trim() || proposedIndividual.name || proposedIndividual.id,
+                          authorPeerId: data.senderPeerId || 'remote',
+                          proposedAt: new Date().toISOString(),
+                          operation: 'create_individual',
+                          proposedIndividual,
+                          proposedFamilies: (detail.relatedFamilies as Record<string, Family>) || {},
+                          relatedIndividuals: (detail.relatedIndividuals as Record<string, Individual>) || {},
+                          changeSet: proposedIndividual,
+                          status: 'pending',
+                          source: 'initial_compare',
+                          initialSyncBatchId: context?.batchId || payload.batchId,
+                          matchConfidence: confidence,
+                          matchScore: match?.score,
+                          remoteIndividualId: detail.senderId,
+                          remoteFingerprint: detail.fingerprint,
+                          retryAfterReject,
+                        });
+                        created += 1;
+                      }
+                    }
+                    if (context) {
+                      initialDiffContextsRef.current[payload.requestToken] = {
+                        ...context,
+                        pendingRequestIds: [...unresolved],
+                      };
+                    }
+                    if (unresolved.size === 0) {
+                      delete initialDiffContextsRef.current[payload.requestToken];
+                    } else {
+                      scheduleInitialDiffDetailsRetry(payload.requestToken);
+                    }
+                    setInitialCompareStatusText(`initial compare done: +${created} new / ${updated} updates`);
+                    logP2PActivity('initial_compare.details.received', 'session', payload.requestToken, data.senderPeerId || 'remote');
                   }
               }
               if (data.type === 'PROPOSAL_SUBMIT' && data.payload) {
@@ -550,6 +1340,13 @@ function App() {
                     proposedFamilies?: Record<string, Family>;
                     relatedIndividuals?: Record<string, Individual>;
                     changeSet?: Partial<Individual>;
+                    source?: 'live' | 'initial_compare';
+                    initialSyncBatchId?: string;
+                    matchConfidence?: 'high' | 'medium' | 'low';
+                    matchScore?: number;
+                    remoteIndividualId?: string;
+                    remoteFingerprint?: string;
+                    retryAfterReject?: boolean;
                   };
                   const individual = payload.individualId ? gedcomDataRef.current?.individuals[payload.individualId] : undefined;
                   const individualLabel = individual
@@ -572,11 +1369,18 @@ function App() {
                       relatedIndividuals: payload.relatedIndividuals,
                       changeSet: payload.changeSet || {},
                       status: 'pending' as const,
+                      source: payload.source || 'live',
+                      initialSyncBatchId: payload.initialSyncBatchId,
+                      matchConfidence: payload.matchConfidence,
+                      matchScore: payload.matchScore,
+                      remoteIndividualId: payload.remoteIndividualId,
+                      remoteFingerprint: payload.remoteFingerprint,
+                      retryAfterReject: payload.retryAfterReject,
                     },
                     ...prev,
                   ].slice(0, 300));
                   logP2PActivity('proposal.received', 'individual', payload.individualId || 'unknown', payload.authorPeerId || 'remote');
-                  alert('New proposal received from peer.');
+                  showTransientToast('success', 'Nouvelle proposition recue.', 1800);
               }
               if (data.type === 'PROPOSAL_DECIDE' && data.payload) {
                   const payload = data.payload as {
@@ -595,7 +1399,13 @@ function App() {
                       )
                     );
                     logP2PActivity(`proposal.${decidedStatus}`, 'proposal', payload.proposalId, payload.hostPeerId || 'host');
-                    alert(`Proposal ${decidedStatus} by host.`);
+                    showTransientToast(
+                      decidedStatus === 'accepted' ? 'success' : 'error',
+                      decidedStatus === 'accepted'
+                        ? 'Votre proposition a ete validee.'
+                        : 'Votre proposition a ete rejetee.',
+                      1800
+                    );
                   }
               }
               if (data.type === 'ACTIVITY_EVENT' && data.payload) {
@@ -716,13 +1526,15 @@ function App() {
       setSceneExtras([]);
     }
 
-    // P2P Sync if connected
-    if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
-        sendP2PSnapshot(data, documentsByIndividualId, 'sync.refresh');
+    // Notify peer about local GEDCOM availability/state.
+    if (p2pStatus === 'connected') {
+      sendSessionState();
+      if (p2pModeRef.current === 'host') {
         p2pService.sendMessage('ACCESS_PROFILE_SET', {
           profile: visibilitySettingsRef.current,
           fromPeerId: peerId || 'host',
         });
+      }
     }
   };
 
@@ -905,7 +1717,10 @@ function App() {
         name: `${updatedIndi.givenName} /${updatedIndi.surname}/`,
         gender: updatedIndi.gender,
         birthDate: updatedIndi.birthDate,
-        deathDate: updatedIndi.deathDate
+        deathDate: updatedIndi.deathDate,
+        birthPlace: updatedIndi.birthPlace,
+        deathPlace: updatedIndi.deathPlace,
+        notes: updatedIndi.notes,
     };
 
     if (formData) {
@@ -1096,9 +1911,7 @@ function App() {
       const normalizedDocs = normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>);
       handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.lifethread\.zip$/i, ''));
       setDocumentsByIndividualId(normalizedDocs);
-      if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
-        sendP2PSnapshot(parsedData, normalizedDocs, 'sync.refresh');
-      }
+      if (p2pStatus === 'connected') sendSessionState();
       logP2PActivity('tree.bundle.import', 'session', peerId || 'local');
       setBundleToast({ kind: 'success', message: 'Bundle importe avec succes.' });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
@@ -1132,7 +1945,41 @@ function App() {
   const buildIndividualChangeSet = (before: Individual | undefined, after: Individual): Partial<Individual> => {
     if (!before) return after;
     const changed: Partial<Individual> = {};
-    const keys: Array<keyof Individual> = ['givenName', 'surname', 'name', 'gender', 'birthDate', 'deathDate', 'familyChildId', 'familySpouseIds'];
+    const keys: Array<keyof Individual> = [
+      'givenName',
+      'surname',
+      'name',
+      'gender',
+      'birthDate',
+      'deathDate',
+      'birthPlace',
+      'deathPlace',
+      'notes',
+      'familyChildId',
+      'familySpouseIds',
+    ];
+    for (const key of keys) {
+      if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+        changed[key] = after[key] as never;
+      }
+    }
+    return changed;
+  };
+
+  const buildInitialCompareChangeSet = (before: Individual | undefined, after: Individual): Partial<Individual> => {
+    if (!before) return after;
+    const changed: Partial<Individual> = {};
+    const keys: Array<keyof Individual> = [
+      'givenName',
+      'surname',
+      'name',
+      'gender',
+      'birthDate',
+      'deathDate',
+      'birthPlace',
+      'deathPlace',
+      'notes',
+    ];
     for (const key of keys) {
       if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
         changed[key] = after[key] as never;
@@ -1171,10 +2018,24 @@ function App() {
     logP2PActivity('invite.revoked', 'invite', inviteId);
   };
 
+  const refreshFocusedIndividualsFromData = (data: GedcomData) => {
+    if (selectedIndividual) {
+      const nextSelected = data.individuals[selectedIndividual.id];
+      if (nextSelected) setSelectedIndividual(nextSelected);
+    }
+    if (rootIndividual) {
+      const nextRoot = data.individuals[rootIndividual.id];
+      if (nextRoot) setRootIndividual(nextRoot);
+    }
+  };
+
   const handleDecideProposal = (proposalId: string, decision: 'accepted' | 'rejected') => {
     setP2PProposals((prev) => {
       const proposal = prev.find((p) => p.proposalId === proposalId);
       if (!proposal) return prev;
+      if (decision === 'rejected') {
+        registerRejectedInitialMatch(proposal);
+      }
 
       if (decision === 'accepted') {
         const mergedData = JSON.parse(
@@ -1217,7 +2078,11 @@ function App() {
           };
         }
         setOriginalGedcomData(mergedData);
+        refreshFocusedIndividualsFromData(mergedData);
         setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+        showTransientToast('success', 'Fusion appliquee et fiche Records mise a jour.');
+      } else {
+        showTransientToast('error', 'Proposition rejetee.', 1800);
       }
 
       logP2PActivity(`proposal.${decision}`, 'proposal', proposalId, peerId || 'host');
@@ -1255,6 +2120,7 @@ function App() {
     setRightPanelOpen(true);
     setTopPanelOpen(false);
     setActiveReviewProposalId(proposalId);
+    setReviewFocusSignal((prev) => prev + 1);
     logP2PActivity('proposal.review.opened', 'proposal', proposalId, peerId || 'host');
   };
 
@@ -1274,7 +2140,9 @@ function App() {
         target[field as string] = source[field as string];
       }
       setOriginalGedcomData(mergedData);
+      refreshFocusedIndividualsFromData(mergedData);
       setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+      showTransientToast('success', `${fields.length} champ(s) applique(s) dans Records.`);
     }
 
     let resolvedNow = false;
@@ -1299,6 +2167,9 @@ function App() {
         };
       })
     );
+    if (resolvedNow && finalStatus === 'rejected') {
+      registerRejectedInitialMatch(proposal);
+    }
     if (resolvedNow && finalStatus && p2pStatus === 'connected') {
       p2pService.sendMessage('PROPOSAL_DECIDE', {
         proposalId,
@@ -1417,6 +2288,9 @@ function App() {
       gender: formData.gender,
       birthDate: formData.birthDate ? parseDate(formData.birthDate) : undefined,
       deathDate: formData.deathDate ? parseDate(formData.deathDate) : undefined,
+      birthPlace: formData.birthPlace.trim() || undefined,
+      deathPlace: formData.deathPlace.trim() || undefined,
+      notes: formData.notes.trim() || undefined,
       familySpouseIds: [],
       generation: 0,
       source: 'manual'
@@ -1919,6 +2793,7 @@ function App() {
         onSetPrimaryPhoto={handleSetPrimaryPhoto}
         onReviewBulkDecision={handleReviewBulkDecision}
         onReviewGlobalDecision={handleReviewGlobalDecision}
+        reviewFocusSignal={reviewFocusSignal}
       />
 
       {/* --- Top Panel (Share) --- */}
@@ -1938,9 +2813,13 @@ function App() {
         // P2P Props
         p2pStatus={p2pStatus}
         p2pMode={p2pMode}
+        localHasData={!!gedcomData}
+        remoteHasData={remotePeerHasData}
         peerId={peerId}
         onInitP2P={handleInitP2P}
         onConnectP2P={handleConnectP2P}
+        onStartShare={handleStartShare}
+        onStartCompare={handleStartCompare}
         activityEvents={p2pActivityEvents}
         proposals={p2pProposals}
         visibilitySettings={p2pVisibilitySettings}
@@ -1948,6 +2827,8 @@ function App() {
         invites={p2pInvites}
         pendingProposalsCount={pendingProposalsCount}
         syncStatusText={p2pSyncStatusText}
+        initialCompareStatusText={initialCompareStatusText}
+        buildLabel={buildLabel}
         onChangeVisibilitySettings={setP2PVisibilitySettings}
         onCreateInvite={handleCreateInvite}
         onRevokeInvite={handleRevokeInvite}

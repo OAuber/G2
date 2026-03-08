@@ -6,6 +6,7 @@ export type P2PMessageType =
   | 'SYNC_GEDCOM'
   | 'SYNC_GEDCOM_CHUNK'
   | 'SYNC_GEDCOM_REQUEST'
+  | 'SESSION_STATE'
   | 'DOCUMENTS_SYNC'
   | 'INVITE_CREATE'
   | 'INVITE_REVOKE'
@@ -59,6 +60,62 @@ export interface AckPayload {
 export interface SyncGedcomPayload {
   gedcom: GedcomData;
   databaseName?: string;
+}
+
+export type IndividualDiffPhase = 'index' | 'details';
+
+export interface IndividualDiffIndexSignature {
+  initials?: string;
+  gender?: string;
+  birthYear?: number | null;
+  deathYear?: number | null;
+  parentCount?: number;
+  spouseCount?: number;
+  childCount?: number;
+}
+
+export interface IndividualDiffIndexEntry {
+  localId: string;
+  fingerprint: string;
+  lightweightSignature: IndividualDiffIndexSignature;
+  givenName?: string;
+  surname?: string;
+  birthYear?: number | null;
+  deathYear?: number | null;
+  gender?: string;
+}
+
+export interface IndividualDiffPotentialMatch {
+  senderId: string;
+  receiverId: string;
+  score: number;
+}
+
+export interface IndividualDiffRequestPayload {
+  phase: IndividualDiffPhase;
+  requestToken: string;
+  batchId?: string;
+  index?: IndividualDiffIndexEntry[];
+  requestIds?: string[];
+  retryCount?: number;
+}
+
+export interface IndividualDiffResponsePayload {
+  phase: IndividualDiffPhase;
+  requestToken: string;
+  batchId?: string;
+  indexResult?: {
+    onlyOnSender: string[];
+    potentialMatches: IndividualDiffPotentialMatch[];
+  };
+  requestIds?: string[];
+  details?: Array<{
+    senderId: string;
+    fingerprint: string;
+    individual: unknown;
+    relatedFamilies?: Record<string, unknown>;
+    relatedIndividuals?: Record<string, unknown>;
+  }>;
 }
 
 export const DEFAULT_MESSAGE_TTL_MS = 120000;

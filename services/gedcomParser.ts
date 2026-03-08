@@ -170,6 +170,11 @@ export const parseGedcom = (content: string): GedcomData => {
           case 'FAMS': // Spouse in family
             currentIndi.familySpouseIds?.push(value);
             break;
+          case 'NOTE':
+            currentIndi.notes = currentIndi.notes
+              ? `${currentIndi.notes}\n${value}`.trim()
+              : value.trim();
+            break;
         }
       } else if (level === 2) {
         // Level 2 properties (mostly nested under events)
@@ -177,6 +182,13 @@ export const parseGedcom = (content: string): GedcomData => {
           const dateInfo = parseDate(value);
           if (currentEvent === 'BIRT') currentIndi.birthDate = dateInfo;
           if (currentEvent === 'DEAT') currentIndi.deathDate = dateInfo;
+        } else if (tag === 'PLAC' && currentEvent) {
+          if (currentEvent === 'BIRT') currentIndi.birthPlace = value.trim();
+          if (currentEvent === 'DEAT') currentIndi.deathPlace = value.trim();
+        } else if (tag === 'NOTE') {
+          currentIndi.notes = currentIndi.notes
+            ? `${currentIndi.notes}\n${value}`.trim()
+            : value.trim();
         }
       }
 
@@ -280,15 +292,25 @@ export const generateGedcom = (data: GedcomData): string => {
     }
 
     // Birth
-    if (indi.birthDate?.raw) {
+    if (indi.birthDate?.raw || indi.birthPlace) {
       lines.push('1 BIRT');
-      lines.push(`2 DATE ${indi.birthDate.raw}`);
+      if (indi.birthDate?.raw) lines.push(`2 DATE ${indi.birthDate.raw}`);
+      if (indi.birthPlace) lines.push(`2 PLAC ${indi.birthPlace}`);
     }
 
     // Death
-    if (indi.deathDate?.raw) {
+    if (indi.deathDate?.raw || indi.deathPlace) {
       lines.push('1 DEAT');
-      lines.push(`2 DATE ${indi.deathDate.raw}`);
+      if (indi.deathDate?.raw) lines.push(`2 DATE ${indi.deathDate.raw}`);
+      if (indi.deathPlace) lines.push(`2 PLAC ${indi.deathPlace}`);
+    }
+
+    if (indi.notes) {
+      indi.notes
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line) => lines.push(`1 NOTE ${line}`));
     }
 
     // Family Links

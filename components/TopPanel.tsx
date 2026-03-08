@@ -8,6 +8,7 @@ interface P2PVisibilitySettings {
   exposeDates: boolean;
   exposePlaces: boolean;
   exposeNotes: boolean;
+  allowDocuments: boolean;
   allowDownload: boolean;
   allowProposal: boolean;
   allowDirectEdit: boolean;
@@ -26,9 +27,13 @@ interface TopPanelProps {
   // P2P Props
   p2pStatus: P2PStatus;
   p2pMode: P2PMode;
+  localHasData: boolean;
+  remoteHasData: boolean | null;
   peerId: string | null;
   onInitP2P: () => void;
   onConnectP2P: (hostId: string) => void;
+  onStartShare: () => void;
+  onStartCompare: () => void;
   activityEvents: ActivityLogEvent[];
   proposals: Array<{
     proposalId: string;
@@ -40,6 +45,11 @@ interface TopPanelProps {
     changeSet: Record<string, unknown>;
     status: 'pending' | 'accepted' | 'rejected';
     decidedAt?: string;
+    source?: 'live' | 'initial_compare';
+    initialSyncBatchId?: string;
+    matchConfidence?: 'high' | 'medium' | 'low';
+    matchScore?: number;
+    retryAfterReject?: boolean;
   }>;
   visibilitySettings: P2PVisibilitySettings;
   livingCandidates: Array<{ id: string; label: string }>;
@@ -54,6 +64,8 @@ interface TopPanelProps {
   }>;
   pendingProposalsCount: number;
   syncStatusText?: string | null;
+  initialCompareStatusText?: string | null;
+  buildLabel?: string;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
   onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
   onRevokeInvite: (inviteId: string) => void;
@@ -72,9 +84,13 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onMouseLeave,
   p2pStatus,
   p2pMode,
+  localHasData,
+  remoteHasData,
   peerId,
   onInitP2P,
   onConnectP2P,
+  onStartShare,
+  onStartCompare,
   activityEvents,
   proposals,
   visibilitySettings,
@@ -82,6 +98,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
   invites,
   pendingProposalsCount,
   syncStatusText,
+  initialCompareStatusText,
+  buildLabel,
   onChangeVisibilitySettings,
   onCreateInvite,
   onRevokeInvite,
@@ -93,6 +111,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [showActivityDetails, setShowActivityDetails] = useState(false);
+  const [proposalPage, setProposalPage] = useState(0);
+  const PROPOSALS_PAGE_SIZE = 30;
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -140,6 +161,26 @@ const TopPanel: React.FC<TopPanelProps> = ({
     }
     return counts;
   }, [activityEvents]);
+
+  const pagedProposals = useMemo(() => {
+    const start = proposalPage * PROPOSALS_PAGE_SIZE;
+    return proposals.slice(start, start + PROPOSALS_PAGE_SIZE);
+  }, [proposalPage, proposals]);
+
+  const proposalsPageCount = Math.max(1, Math.ceil(proposals.length / PROPOSALS_PAGE_SIZE));
+  const formatProposalType = (op: 'update_individual' | 'create_individual' | 'delete_individual') => {
+    if (op === 'update_individual') return 'Update';
+    if (op === 'create_individual') return 'Create';
+    return 'Delete';
+  };
+  const showShareAction = p2pMode === 'host';
+  // Allow actions when remote state is unknown; handlers perform final checks.
+  const canStartShare = showShareAction && localHasData && remoteHasData !== true;
+  const canStartCompare = localHasData && remoteHasData !== false;
+
+  useEffect(() => {
+    setProposalPage((prev) => Math.min(prev, proposalsPageCount - 1));
+  }, [proposalsPageCount]);
 
   return (
     <div className="fixed top-0 left-0 right-0 z-[100] pointer-events-none">
@@ -259,33 +300,120 @@ const TopPanel: React.FC<TopPanelProps> = ({
               Sync: {syncStatusText}
             </span>
           )}
+          {isOnline && initialCompareStatusText && (
+            <span
+              className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                isDarkMode ? 'border-slate-700 bg-slate-900/60 text-violet-300' : 'border-slate-300 bg-white text-violet-700'
+              }`}
+            >
+              Compare: {initialCompareStatusText}
+            </span>
+          )}
 
         </div>
+
+        {p2pStatus !== 'disconnected' && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {showShareAction && (
+              <button
+                onClick={onStartShare}
+                disabled={!canStartShare}
+                className={`text-[10px] px-2 py-1 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+              >
+                Share
+              </button>
+            )}
+            <button
+              onClick={onStartCompare}
+              disabled={!canStartCompare}
+              className={`text-[10px] px-2 py-1 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-violet-700 hover:bg-violet-600 text-white' : 'bg-violet-600 hover:bg-violet-500 text-white'}`}
+            >
+              Compare
+            </button>
+            <button
+              disabled
+              className={`text-[10px] px-2 py-1 rounded font-bold opacity-50 cursor-not-allowed ${btnAction}`}
+              title="Coming soon"
+            >
+              Search
+            </button>
+            <span className={`text-[9px] ${subTextClass}`}>
+              Remote GEDCOM: {remoteHasData === null ? 'unknown' : remoteHasData ? 'loaded' : 'empty'}
+            </span>
+            <span className={`text-[9px] ${subTextClass}`}>
+              mode:{p2pMode || 'none'} local:{localHasData ? 'loaded' : 'empty'} remote:{remoteHasData === null ? 'unknown' : remoteHasData ? 'loaded' : 'empty'}
+            </span>
+            {buildLabel && (
+              <span className={`text-[9px] ${subTextClass}`}>
+                build: {buildLabel}
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
           <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-3">
               Proposals {proposals.length > 0 ? `(${proposals.length})` : ''}
             </h3>
-            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+            {proposals.length > PROPOSALS_PAGE_SIZE && (
+              <div className="mb-2 flex items-center justify-between">
+                <span className={`text-xs ${subTextClass}`}>Page {proposalPage + 1} / {proposalsPageCount}</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={proposalPage === 0}
+                    onClick={() => setProposalPage((p) => Math.max(0, p - 1))}
+                    className={`px-2 py-1 rounded text-xs font-semibold ${btnAction} disabled:opacity-50`}
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    disabled={proposalPage >= proposalsPageCount - 1}
+                    onClick={() => setProposalPage((p) => Math.min(proposalsPageCount - 1, p + 1))}
+                    className={`px-2 py-1 rounded text-xs font-semibold ${btnAction} disabled:opacity-50`}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
               {proposals.length === 0 ? (
                 <p className={`text-sm ${subTextClass}`}>No proposals yet.</p>
               ) : (
-                proposals.map((proposal) => (
-                  <div key={proposal.proposalId} className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
-                    <div className="font-semibold">{proposal.individualLabel} ({proposal.individualId})</div>
-                    <div className={subTextClass}>
-                      From: {proposal.authorPeerId} | Status: {proposal.status} | At: {new Date(proposal.proposedAt).toLocaleString()}
-                    </div>
-                    <div className="mt-1">
-                      <span className={subTextClass}>Changes: </span>
-                      {Object.keys(proposal.changeSet || {}).join(', ') || 'none'}
+                pagedProposals.map((proposal) => (
+                  <div key={proposal.proposalId} className={`rounded border px-2 py-1 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{proposal.individualLabel}</div>
+                        <div className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
+                          <span className="px-1 rounded border border-slate-500/40">{formatProposalType(proposal.operation)}</span>
+                          {proposal.source === 'initial_compare' && (
+                            <span className="px-1 rounded border border-blue-500/50">Initial compare</span>
+                          )}
+                          {proposal.retryAfterReject && (
+                            <span className="px-1 rounded border border-rose-500/50 text-rose-500">after reject</span>
+                          )}
+                          <span>{new Date(proposal.proposedAt).toLocaleString()}</span>
+                        </div>
+                      </div>
+                      <span className={`text-[9px] px-1 py-0.5 rounded ${
+                        proposal.status === 'pending'
+                          ? 'bg-amber-500/20 text-amber-500'
+                          : proposal.status === 'accepted'
+                            ? 'bg-emerald-500/20 text-emerald-500'
+                            : 'bg-rose-500/20 text-rose-500'
+                      }`}>
+                        {proposal.status}
+                      </span>
                     </div>
                     {proposal.status === 'pending' && (
-                      <div className="mt-2 flex gap-2">
+                      <div className="mt-1 flex gap-2">
                         <button
                           onClick={() => onReviewProposal(proposal.proposalId)}
-                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-blue-800 hover:bg-blue-700' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                          className={`px-2 py-1 rounded text-[11px] font-semibold ${isDarkMode ? 'bg-blue-800 hover:bg-blue-700' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
                         >
                           Review
                         </button>
@@ -304,21 +432,37 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <StatCard label="Downloads" value={activitySummary.download} isDarkMode={isDarkMode} />
               <StatCard label="Proposals" value={activitySummary.proposal} isDarkMode={isDarkMode} />
             </div>
-            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-              {activityEvents.length === 0 ? (
-                <p className={`text-sm ${subTextClass}`}>No activity yet.</p>
-              ) : (
-                activityEvents.slice().reverse().map((event) => (
-                  <div key={event.eventId} className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
-                    <div className="font-semibold">{event.eventType}</div>
-                    <div className={subTextClass}>
-                      Actor: {event.actorPeerId} | Target: {event.targetType}:{event.targetId}
-                    </div>
-                    <div className={subTextClass}>{new Date(event.timestamp).toLocaleString()}</div>
-                  </div>
-                ))
-              )}
+            <div className="flex items-center justify-between mb-2">
+              <p className={`text-xs ${subTextClass}`}>
+                {activityEvents.length === 0
+                  ? 'No activity yet.'
+                  : `${activityEvents.length} events recorded.`}
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowActivityDetails((prev) => !prev)}
+                className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-100' : 'bg-slate-200 hover:bg-slate-300 text-slate-800'}`}
+              >
+                {showActivityDetails ? 'Hide details' : 'Show details'}
+              </button>
             </div>
+            {showActivityDetails && (
+              <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                {activityEvents.length === 0 ? (
+                  <p className={`text-sm ${subTextClass}`}>No activity yet.</p>
+                ) : (
+                  activityEvents.slice().reverse().map((event) => (
+                    <div key={event.eventId} className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
+                      <div className="font-semibold">{event.eventType}</div>
+                      <div className={subTextClass}>
+                        Actor: {event.actorPeerId} | Target: {event.targetType}:{event.targetId}
+                      </div>
+                      <div className={subTextClass}>{new Date(event.timestamp).toLocaleString()}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </section>
 
           <section className={`rounded-xl border p-4 ${cardClass}`}>
@@ -328,6 +472,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <ToggleRow label="Expose dates" checked={visibilitySettings.exposeDates} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })} />
               <ToggleRow label="Expose places" checked={visibilitySettings.exposePlaces} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposePlaces: checked })} />
               <ToggleRow label="Expose notes" checked={visibilitySettings.exposeNotes} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeNotes: checked })} />
+              <ToggleRow label="Allow documents sync" checked={visibilitySettings.allowDocuments} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDocuments: checked })} />
               <ToggleRow label="Allow download" checked={visibilitySettings.allowDownload} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDownload: checked })} />
               <ToggleRow label="Allow proposals" checked={visibilitySettings.allowProposal} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })} />
               <ToggleRow label="Allow direct edits" checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
@@ -335,7 +480,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
           </section>
 
           <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">Invitations</h3>
+            <h3 className="text-sm font-bold uppercase tracking-wide mb-2">Connection Profiles (Invitations)</h3>
+            <p className={`text-xs mb-3 ${subTextClass}`}>
+              No email required in this version. Invitations are linked to a selected person and shared as peer-to-peer profile rules.
+            </p>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
               <select
                 value={newInviteIndividualId}

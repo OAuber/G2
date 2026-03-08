@@ -98,7 +98,9 @@ const STEP_Y    = CELL_H + 10 * YEAR;
 const MARGIN    = 5 * YEAR;
 
 const MIN_ZOOM = 2;
-const MAX_ZOOM = 500;
+const MAX_ZOOM = 100000;
+const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
+const SINGLE_VIEW_UPWARD_OFFSET = 2.5 * YEAR;
 
 /* ------------------------------------------------------------------ */
 /*  Color palettes (aligned with 3D view)                              */
@@ -251,12 +253,20 @@ const ScrollZoomControls: React.FC = () => {
 
       const rect = canvas.getBoundingClientRect();
       const ndcY = -((e.clientY - rect.top) / rect.height * 2 - 1);
-      const prevVisH = (ortho.top - ortho.bottom) / prevZoom;
-      const nextVisH = (ortho.top - ortho.bottom) / nextZoom;
-      ortho.position.y += ndcY * (prevVisH - nextVisH) / 2;
+
+      // Vertical-only anchor:
+      // Keep the world Y under cursor invariant across zoom changes.
+      // X remains unchanged to keep the ribbon horizontally centered.
+      const halfHPrev = (ortho.top - ortho.bottom) / (2 * prevZoom);
+      const worldY = ortho.position.y + ndcY * halfHPrev;
+      const fixedX = ortho.position.x;
 
       ortho.zoom = nextZoom;
       ortho.updateProjectionMatrix();
+
+      const halfHNext = (ortho.top - ortho.bottom) / (2 * nextZoom);
+      ortho.position.x = fixedX;
+      ortho.position.y = worldY - ndcY * halfHNext;
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -322,6 +332,13 @@ const GridContent: React.FC<GridContentProps> = ({
   const initializedRef = useRef(false);
   const needsCenterRef = useRef(false);
   const prevSelectedIdRef = useRef(selectedId);
+  const singleFitRef = useRef<{
+    minZoom: number;
+    centerX: number;
+    centerY: number;
+    baseW: number;
+    baseH: number;
+  } | null>(null);
   const { camera } = useThree();
 
   const ribbonData = useMemo(
@@ -424,6 +441,7 @@ const GridContent: React.FC<GridContentProps> = ({
   useEffect(() => {
     initializedRef.current = false;
     colsRef.current = 0;
+    singleFitRef.current = null;
   }, [ribbonData]);
 
   useEffect(() => {
@@ -488,11 +506,6 @@ const GridContent: React.FC<GridContentProps> = ({
         const row = Math.floor(idx / colsRef.current);
         ortho.position.y = -row * STEP_Y;
       }
-    }
-
-    if (singleIndividual && ribbonData.length === 1) {
-      ortho.position.x = 0;
-      ortho.position.y = 0;
     }
 
     if (!needsReflow && initializedRef.current) {
@@ -582,8 +595,75 @@ const GridContent: React.FC<GridContentProps> = ({
 
     // Camera
     if (singleIndividual && ribbonData.length === 1) {
-      ortho.position.set(0, 0, 100);
+      // Keep original ribbon proportions (lifespan-driven), and adapt camera fit
+      // only when needed (initial load / viewport change). User zoom remains free.
+      const rd = ribbonData[0];
+      const rH = (rd.lifespan / maxLifespan) * CELL_H;
+      const nameFontSize = 5 * YEAR * 0.66;
+      const nameGap = 2.2 * YEAR;
+      const dateFs = nameFontSize * 0.62;
+
+      const left = -RIBBON_W / 2 - (3 * YEAR);
+      const right = (RIBBON_W / 2) + (TIRET_W / 2) + (0.9 * YEAR) + (dateFs * 2.6) + (16 * YEAR);
+      const top = rH / 2 + (3 * YEAR);
+      const bottom = (-rH / 2) - nameGap - (10 * YEAR);
+
+      // Keep ribbon horizontally centered: fit width around X=0.
+      const requiredW = Math.max(0.001, 2 * Math.max(Math.abs(left), Math.abs(right)));
+      // Keep a bit of extra vertical room so the bottom name stays clear
+      // of UI controls such as the VISUALIZE button.
+      const requiredH = Math.max(0.001, (top - bottom) * SINGLE_VIEW_VERTICAL_FIT_PADDING);
+      const frustumWAtZoom1 = ortho.right - ortho.left;
+      const frustumHAtZoom1 = ortho.top - ortho.bottom;
+      const fitZoomW = frustumWAtZoom1 / requiredW;
+      const fitZoomH = frustumHAtZoom1 / requiredH;
+
+      // Cap auto-fit zoom with a standard 80-year reference so short lifespans
+      // do not appear wider than a standard ribbon at initial framing.
+      const referenceHeight80 = (Math.min(DEFAULT_LIFESPAN, maxLifespan) / maxLifespan) * CELL_H;
+      const top80 = referenceHeight80 / 2 + (3 * YEAR);
+      const bottom80 = (-referenceHeight80 / 2) - nameGap - (10 * YEAR);
+      const requiredH80 = Math.max(0.001, (top80 - bottom80) * SINGLE_VIEW_VERTICAL_FIT_PADDING);
+      const fitZoomH80 = frustumHAtZoom1 / requiredH80;
+      const reference80FitZoom = Math.min(fitZoomW, fitZoomH80);
+
+      const minFitZoom = Math.max(
+        MIN_ZOOM,
+        Math.min(MAX_ZOOM, Math.min(Math.min(fitZoomW, fitZoomH), reference80FitZoom))
+      );
+      const centerX = 0;
+      const centerY = (top + bottom) / 2 + SINGLE_VIEW_UPWARD_OFFSET;
+      const prevFit = singleFitRef.current;
+      const viewportChanged = !prevFit
+        || Math.abs(prevFit.baseW - frustumWAtZoom1) > 1e-6
+        || Math.abs(prevFit.baseH - frustumHAtZoom1) > 1e-6;
+
+      singleFitRef.current = {
+        minZoom: minFitZoom,
+        centerX,
+        centerY,
+        baseW: frustumWAtZoom1,
+        baseH: frustumHAtZoom1,
+      };
+
+      if (!initializedRef.current || viewportChanged) {
+        if (!initializedRef.current || ortho.zoom < minFitZoom) {
+          ortho.zoom = minFitZoom;
+          ortho.updateProjectionMatrix();
+        }
+        ortho.position.set(centerX, centerY, 100);
+      } else if (ortho.zoom < minFitZoom) {
+        // Limit dezoom: keep the individual always visible.
+        ortho.zoom = minFitZoom;
+        ortho.updateProjectionMatrix();
+        ortho.position.y = centerY;
+      } else if (Math.abs(ortho.zoom - minFitZoom) < 1e-3) {
+        // When user reaches minimum zoom, recenter vertically to prevent
+        // drift that can push the individual outside the viewport.
+        ortho.position.y = centerY;
+      }
       initializedRef.current = true;
+      return;
     } else {
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
@@ -844,11 +924,19 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
 
   return (
     <div className="w-full h-full relative" style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}>
-      <Canvas gl={{ antialias: true, alpha: false }} dpr={[1, 2]}>
+      <Canvas
+        gl={{ antialias: true, alpha: false }}
+        dpr={[1, 2]}
+        style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}
+        onCreated={({ gl }) => {
+          gl.setClearColor(isDarkMode ? '#000000' : '#f0f9ff', 1);
+          gl.clear(true, true, true);
+        }}
+      >
         <OrthographicCamera
           makeDefault
           position={[0, 0, 100]}
-          zoom={singleIndividual ? 200 : 40}
+          zoom={40}
           near={0.1}
           far={10000}
         />

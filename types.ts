@@ -52,6 +52,9 @@ export interface Individual {
   gender: Gender;
   birthDate?: DateInfo;
   deathDate?: DateInfo;
+  birthPlace?: string;
+  deathPlace?: string;
+  notes?: string;
   familyChildId?: string;
   familySpouseIds?: string[];
   generation?: number;
