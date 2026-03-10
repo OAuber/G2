@@ -805,6 +805,17 @@ function App() {
     () => (selectedIndividual ? (documentsByIndividualId[selectedIndividual.id] || []) : []),
     [documentsByIndividualId, selectedIndividual]
   );
+  const primaryPhotoUrlById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const [individualId, docs] of Object.entries(documentsByIndividualId)) {
+      const primaryPhoto = docs.find((d) => d.kind === 'photo' && d.isPrimaryPhoto)
+        ?? docs.find((d) => d.kind === 'photo');
+      if (primaryPhoto?.url) {
+        map[individualId] = primaryPhoto.url;
+      }
+    }
+    return map;
+  }, [documentsByIndividualId]);
 
   useEffect(() => {
     if (!livingCandidates.length) return;
@@ -1688,6 +1699,12 @@ function App() {
 
       // REPLACE selection (not merge) - show ONLY ancestors or descendants
       setSelectedIdsFor2D(newIds);
+  };
+
+  const handleExpandAndSwitch3D = (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => {
+    if (!selectedIndividual) return;
+    handleExpandFamily(selectedIndividual.id, direction);
+    handleSetDisplayMode(mode === 'top' ? '3d-top' : '3d-free');
   };
 
   // Callback to sync 3D view visibility with 2D selection
@@ -2690,7 +2707,10 @@ function App() {
             data={gedcomData}
             selectedId={selectedIndividual?.id}
             selectedIds={selectedIdsFor2D}
+            primaryPhotoUrlById={primaryPhotoUrlById}
+            documentsByIndividualId={documentsByIndividualId}
             onIndividualClick={handleInspectIndividual}
+            onExpandAndSwitch3D={handleExpandAndSwitch3D}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}

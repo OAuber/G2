@@ -1,9 +1,11 @@
 import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrthographicCamera, Text } from '@react-three/drei';
+import { OrthographicCamera, Text, Html, Mask, useMask } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { matchesFilters, applySortMode } from './Sidebar';
+
+type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
 
 function findRelationshipPath(data: GedcomData, sourceId: string, targetId: string): Set<string> {
   if (sourceId === targetId) return new Set([sourceId]);
@@ -71,6 +73,8 @@ interface Scene2DGridProps {
   data: GedcomData | null;
   selectedId?: string | null;
   selectedIds?: Set<string>;
+  primaryPhotoUrlById?: Record<string, string>;
+  documentsByIndividualId?: Record<string, RibbonDocument[]>;
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
   relationshipRevealEnabled?: boolean;
@@ -79,6 +83,30 @@ interface Scene2DGridProps {
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
   singleIndividual?: boolean;
+  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+}
+
+interface RibbonDocument {
+  id: string;
+  title: string;
+  url: string;
+  kind: 'photo' | 'document';
+  date?: string;
+  isPrimaryPhoto?: boolean;
+}
+
+function extractYearFromDate(input?: string): number | null {
+  if (!input) return null;
+  const m = input.match(/(\d{4})/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function isImageLikeUrl(url: string): boolean {
+  if (!url) return false;
+  if (url.startsWith('data:image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
 }
 
 /* ------------------------------------------------------------------ */
@@ -100,7 +128,8 @@ const MARGIN    = 5 * YEAR;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
-const SINGLE_VIEW_UPWARD_OFFSET = 2.5 * YEAR;
+const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
+const SINGLE_VIEW_ZOOM_OUT_FACTOR = 0.95;
 
 /* ------------------------------------------------------------------ */
 /*  Color palettes (aligned with 3D view)                              */
@@ -138,6 +167,9 @@ interface TraitInfo {
   offset: number;
   childId?: string;
   spouseId?: string;
+  motherId?: string;
+  familyId?: string;
+  isTwinGroupMarker?: boolean;
   year?: number;
   isCalculated?: boolean;
 }
@@ -159,10 +191,14 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
 
     const traits: TraitInfo[] = [];
 
+    const birthFamily = data && indi.familyChildId ? data.families[indi.familyChildId] : null;
+    const birthMotherId = birthFamily?.wifeId ?? undefined;
+
     if (indi.birthDate?.year) {
       traits.push({
         type: 'birth',
         offset: 0,
+        motherId: birthMotherId,
         year: indi.birthDate.year,
         isCalculated: !!indi.birthDate.isCalculated,
       });
@@ -209,13 +245,28 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
           const isFather = indi.gender === Gender.Male;
           const hasMother = !!fam.wifeId;
           if (!(isFather && hasMother)) {
+            const childOffsetCounts = new Map<string, number>();
+            const childEntries: { childId: string; cOffset: number }[] = [];
             for (const childId of fam.childrenIds) {
               const child = data.individuals[childId];
               if (child) {
                 const cBirth = child.birthDate?.year ?? (birthYear + 25);
                 const cOffset = Math.min(Math.max(0, cBirth - birthYear), lifespan);
-                traits.push({ type: 'child', offset: cOffset, childId });
+                childEntries.push({ childId, cOffset });
+                const key = cOffset.toFixed(3);
+                childOffsetCounts.set(key, (childOffsetCounts.get(key) ?? 0) + 1);
               }
+            }
+            for (const entry of childEntries) {
+              const key = entry.cOffset.toFixed(3);
+              const groupSize = childOffsetCounts.get(key) ?? 1;
+              traits.push({
+                type: 'child',
+                offset: entry.cOffset,
+                childId: entry.childId,
+                familyId: famId,
+                isTwinGroupMarker: groupSize > 1,
+              });
             }
           }
         }
@@ -250,23 +301,8 @@ const ScrollZoomControls: React.FC = () => {
       const prevZoom = ortho.zoom;
       const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prevZoom * (1 - e.deltaY * 0.001)));
       if (nextZoom === prevZoom) return;
-
-      const rect = canvas.getBoundingClientRect();
-      const ndcY = -((e.clientY - rect.top) / rect.height * 2 - 1);
-
-      // Vertical-only anchor:
-      // Keep the world Y under cursor invariant across zoom changes.
-      // X remains unchanged to keep the ribbon horizontally centered.
-      const halfHPrev = (ortho.top - ortho.bottom) / (2 * prevZoom);
-      const worldY = ortho.position.y + ndcY * halfHPrev;
-      const fixedX = ortho.position.x;
-
       ortho.zoom = nextZoom;
       ortho.updateProjectionMatrix();
-
-      const halfHNext = (ortho.top - ortho.bottom) / (2 * nextZoom);
-      ortho.position.x = fixedX;
-      ortho.position.y = worldY - ndcY * halfHNext;
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -314,15 +350,19 @@ interface GridContentProps {
   individuals: Individual[];
   data: GedcomData | null;
   selectedId?: string | null;
+  primaryPhotoUrlById?: Record<string, string>;
+  documentsByIndividualId?: Record<string, RibbonDocument[]>;
   onIndividualClick: (indi: Individual) => void;
   isDarkMode: boolean;
   relationshipRevealEnabled: boolean;
   singleIndividual?: boolean;
+  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
 }
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false,
+  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D,
 }) => {
+  const photoMaskMaterialProps = useMask(17);
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
@@ -332,6 +372,15 @@ const GridContent: React.FC<GridContentProps> = ({
   const initializedRef = useRef(false);
   const needsCenterRef = useRef(false);
   const prevSelectedIdRef = useRef(selectedId);
+  const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
+  const [hovered3DAction, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
+  const [photoTexture, setPhotoTexture] = useState<THREE.Texture | null>(null);
+  const [photoImageAspect, setPhotoImageAspect] = useState(1);
+  const [photoReveal, setPhotoReveal] = useState(0);
+  const [photoWindowProgress, setPhotoWindowProgress] = useState(0);
+  const [photoViewportHeight, setPhotoViewportHeight] = useState(0);
+  const [hoveredDocId, setHoveredDocId] = useState<string | null>(null);
+  const [windowPhotoOverrideUrl, setWindowPhotoOverrideUrl] = useState<string | null>(null);
   const singleFitRef = useRef<{
     minZoom: number;
     centerX: number;
@@ -360,6 +409,41 @@ const GridContent: React.FC<GridContentProps> = ({
     () => ribbonData.reduce((s, r) => s + r.traits.length, 0),
     [ribbonData],
   );
+
+  const selectedPhotoWindow = useMemo(() => {
+    if (!singleIndividual || !photoTexture || photoReveal <= 0 || selectedIdx < 0 || colsRef.current === 0) return null;
+    const rd = ribbonData[selectedIdx];
+    const cols = colsRef.current;
+    const col = selectedIdx % cols;
+    const row = Math.floor(selectedIdx / cols);
+    const cx = col * STEP_X;
+    const cy = -row * STEP_Y;
+    const rH = (rd.lifespan / maxLifespan) * CELL_H;
+    const viewportH = Math.max(1e-6, photoViewportHeight || rH);
+    const windowHRaw = rH + (viewportH - rH) * photoWindowProgress;
+    const windowH = Math.min(viewportH, Math.max(1e-6, windowHRaw));
+    const windowW = RIBBON_W;
+    const windowAspect = windowW / Math.max(1e-6, windowH);
+    const imgAspect = Math.max(1e-6, photoImageAspect);
+
+    // Start: fill window height (can overflow horizontally, clipped by mask)
+    const startImageH = windowH;
+    const startImageW = startImageH * imgAspect;
+
+    // End: contain full image inside window (no crop at full zoom)
+    let endImageW = windowW;
+    let endImageH = endImageW / imgAspect;
+    if (endImageH > windowH) {
+      endImageH = windowH;
+      endImageW = endImageH * imgAspect;
+    }
+
+    const p = Math.max(0, Math.min(1, photoWindowProgress));
+    const imageH = startImageH + (endImageH - startImageH) * p;
+    const imageW = startImageW + (endImageW - startImageW) * p;
+
+    return { cx, cy, rH, windowH, imageW, imageH };
+  }, [singleIndividual, photoTexture, photoReveal, selectedIdx, ribbonData, maxLifespan, photoImageAspect, photoWindowProgress, photoViewportHeight]);
 
   /* ---- Geometries ---- */
 
@@ -445,6 +529,60 @@ const GridContent: React.FC<GridContentProps> = ({
   }, [ribbonData]);
 
   useEffect(() => {
+    const selectedPhotoUrl = windowPhotoOverrideUrl || (selectedId ? primaryPhotoUrlById?.[selectedId] : undefined);
+    let cancelled = false;
+
+    if (!selectedPhotoUrl) {
+      setPhotoTexture((prev) => {
+        if (prev) prev.dispose();
+        return null;
+      });
+      setPhotoReveal(0);
+      setPhotoWindowProgress(0);
+      setPhotoViewportHeight(0);
+      return;
+    }
+
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      selectedPhotoUrl,
+      (tex) => {
+        if (cancelled) {
+          tex.dispose();
+          return;
+        }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false;
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        setPhotoImageAspect((tex.image?.width && tex.image?.height) ? (tex.image.width / tex.image.height) : 1);
+        setPhotoTexture((prev) => {
+          if (prev && prev !== tex) prev.dispose();
+          return tex;
+        });
+      },
+      undefined,
+      () => {
+        if (cancelled) return;
+        setPhotoTexture((prev) => {
+          if (prev) prev.dispose();
+          return null;
+        });
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [primaryPhotoUrlById, selectedId, windowPhotoOverrideUrl]);
+
+  useEffect(() => {
+    setWindowPhotoOverrideUrl(null);
+  }, [selectedId]);
+
+  useEffect(() => {
     if (selectedId && selectedId !== prevSelectedIdRef.current) {
       needsCenterRef.current = true;
     }
@@ -526,6 +664,7 @@ const GridContent: React.FC<GridContentProps> = ({
 
     const dummy = new THREE.Object3D();
     let traitIdx = 0;
+    traitActionByInstanceRef.current = [];
 
     for (let i = 0; i < ribbonData.length; i++) {
       const rd = ribbonData[i];
@@ -583,6 +722,7 @@ const GridContent: React.FC<GridContentProps> = ({
         dummy.updateMatrix();
         traitsMesh.setMatrixAt(traitIdx, dummy.matrix);
         traitsMesh.setColorAt(traitIdx, tc);
+        traitActionByInstanceRef.current[traitIdx] = { trait };
         traitIdx++;
       }
     }
@@ -606,7 +746,7 @@ const GridContent: React.FC<GridContentProps> = ({
       const left = -RIBBON_W / 2 - (3 * YEAR);
       const right = (RIBBON_W / 2) + (TIRET_W / 2) + (0.9 * YEAR) + (dateFs * 2.6) + (16 * YEAR);
       const top = rH / 2 + (3 * YEAR);
-      const bottom = (-rH / 2) - nameGap - (10 * YEAR);
+      const bottom = (-rH / 2) - nameGap - (10.5 * YEAR);
 
       // Keep ribbon horizontally centered: fit width around X=0.
       const requiredW = Math.max(0.001, 2 * Math.max(Math.abs(left), Math.abs(right)));
@@ -622,15 +762,16 @@ const GridContent: React.FC<GridContentProps> = ({
       // do not appear wider than a standard ribbon at initial framing.
       const referenceHeight80 = (Math.min(DEFAULT_LIFESPAN, maxLifespan) / maxLifespan) * CELL_H;
       const top80 = referenceHeight80 / 2 + (3 * YEAR);
-      const bottom80 = (-referenceHeight80 / 2) - nameGap - (10 * YEAR);
+      const bottom80 = (-referenceHeight80 / 2) - nameGap - (10.5 * YEAR);
       const requiredH80 = Math.max(0.001, (top80 - bottom80) * SINGLE_VIEW_VERTICAL_FIT_PADDING);
       const fitZoomH80 = frustumHAtZoom1 / requiredH80;
       const reference80FitZoom = Math.min(fitZoomW, fitZoomH80);
 
-      const minFitZoom = Math.max(
+      const rawMinFitZoom = Math.max(
         MIN_ZOOM,
         Math.min(MAX_ZOOM, Math.min(Math.min(fitZoomW, fitZoomH), reference80FitZoom))
       );
+      const minFitZoom = Math.max(MIN_ZOOM, rawMinFitZoom * SINGLE_VIEW_ZOOM_OUT_FACTOR);
       const centerX = 0;
       const centerY = (top + bottom) / 2 + SINGLE_VIEW_UPWARD_OFFSET;
       const prevFit = singleFitRef.current;
@@ -662,9 +803,37 @@ const GridContent: React.FC<GridContentProps> = ({
         // drift that can push the individual outside the viewport.
         ortho.position.y = centerY;
       }
+      if (photoTexture) {
+        const revealStart = minFitZoom * 0.9;
+        const revealEnd = minFitZoom * 1.7;
+        const t = (ortho.zoom - revealStart) / Math.max(1e-6, (revealEnd - revealStart));
+        const targetReveal = Math.max(0, Math.min(1, t));
+        setPhotoReveal((prev) => {
+          const next = prev + (targetReveal - prev) * 0.22;
+          return Math.abs(targetReveal - next) < 0.001 ? targetReveal : next;
+        });
+        const widthRatio = Math.max(0, Math.min(1, RIBBON_W / Math.max(1e-6, visW)));
+        const openStartRatio = 0.38;
+        const openT = (widthRatio - openStartRatio) / Math.max(1e-6, (1 - openStartRatio));
+        const targetOpen = Math.max(0, Math.min(1, openT));
+        setPhotoWindowProgress((prev) => {
+          const next = prev + (targetOpen - prev) * 0.2;
+          return Math.abs(targetOpen - next) < 0.001 ? targetOpen : next;
+        });
+        const targetVisH = Math.max(1e-6, visH);
+        setPhotoViewportHeight((prev) => {
+          const next = prev + (targetVisH - prev) * 0.3;
+          return Math.abs(targetVisH - next) < 0.0005 ? targetVisH : next;
+        });
+      } else if (photoReveal !== 0) {
+        setPhotoReveal(0);
+        if (photoWindowProgress !== 0) setPhotoWindowProgress(0);
+      }
       initializedRef.current = true;
       return;
     } else {
+      if (photoReveal !== 0) setPhotoReveal(0);
+      if (photoWindowProgress !== 0) setPhotoWindowProgress(0);
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
         ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
@@ -729,7 +898,26 @@ const GridContent: React.FC<GridContentProps> = ({
       const indi = ribbonData[id].individual;
       const c = indi.id === selectedId ? selectColor(indi.gender) : hoverColor(indi.gender);
       mesh.setColorAt(id, c);
-      document.body.style.cursor = 'pointer';
+      let cursor = 'pointer';
+
+      if (singleIndividual && id === selectedIdx) {
+        const rd = ribbonData[id];
+        const uvY = e.uv?.y;
+        let action: 'descendants' | 'ancestors' | null = null;
+        if (typeof uvY === 'number') {
+          if ((!rd.hasBirthDate && uvY <= 0.30) || (rd.hasBirthDate && uvY <= 0.14)) {
+            action = 'ancestors';
+            cursor = 'pointer';
+          } else if ((!rd.hasDeathDate && uvY >= 0.70) || (rd.hasDeathDate && uvY >= 0.86)) {
+            action = 'descendants';
+            cursor = 'pointer';
+          }
+        }
+        setHovered3DAction(action);
+      } else if (singleIndividual) {
+        setHovered3DAction(null);
+      }
+      document.body.style.cursor = cursor;
 
       // Compute and highlight relationship path
       if (relationshipRevealEnabled && selectedId && data && indi.id !== selectedId) {
@@ -744,7 +932,7 @@ const GridContent: React.FC<GridContentProps> = ({
     hoveredRef.current = id;
     setHoveredIdx(id);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled]);
+  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled, singleIndividual, selectedIdx]);
 
   const handlePointerLeave = useCallback(() => {
     const mesh = ribbonMeshRef.current;
@@ -760,17 +948,69 @@ const GridContent: React.FC<GridContentProps> = ({
 
     hoveredRef.current = -1;
     setHoveredIdx(-1);
+    setHovered3DAction(null);
     document.body.style.cursor = 'default';
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [ribbonData, selectedId, clearPathHighlight]);
 
-  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
+  const handleClick = useCallback((e: SceneMouseEvent) => {
     const id = e.instanceId;
     if (id !== undefined && id < ribbonData.length) {
       e.stopPropagation();
       onIndividualClick(ribbonData[id].individual);
     }
   }, [ribbonData, onIndividualClick]);
+
+  const isTraitClickable = useCallback((trait: TraitInfo) => {
+    if (trait.type === 'birth') return !!trait.motherId;
+    if (trait.type === 'marriage') return !!trait.spouseId;
+    if (trait.type === 'child') return !!trait.childId && !trait.isTwinGroupMarker;
+    return false;
+  }, []);
+
+  const handleTraitPointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
+    const id = e.instanceId;
+    if (id === undefined) return;
+    const mapped = traitActionByInstanceRef.current[id];
+    if (!mapped) return;
+    const trait = mapped.trait;
+    if (singleIndividual && (trait.type === 'birth' || trait.type === 'death')) {
+      setHovered3DAction(trait.type === 'birth' ? 'ancestors' : 'descendants');
+    } else if (singleIndividual) {
+      setHovered3DAction(null);
+    }
+    document.body.style.cursor = isTraitClickable(trait) ? 'pointer' : 'default';
+  }, [isTraitClickable, singleIndividual]);
+
+  const handleTraitPointerLeave = useCallback(() => {
+    setHovered3DAction(null);
+    document.body.style.cursor = 'default';
+  }, []);
+
+  const handleTraitClick = useCallback((e: SceneMouseEvent) => {
+    const id = e.instanceId;
+    if (id === undefined || !data) return;
+    const mapped = traitActionByInstanceRef.current[id];
+    if (!mapped) return;
+    const trait = mapped.trait;
+    if (!isTraitClickable(trait)) return;
+    e.stopPropagation();
+
+    if (trait.type === 'birth' && trait.motherId) {
+      const mother = data.individuals[trait.motherId];
+      if (mother) onIndividualClick(mother);
+      return;
+    }
+    if (trait.type === 'marriage' && trait.spouseId) {
+      const spouse = data.individuals[trait.spouseId];
+      if (spouse) onIndividualClick(spouse);
+      return;
+    }
+    if (trait.type === 'child' && trait.childId) {
+      const child = data.individuals[trait.childId];
+      if (child) onIndividualClick(child);
+    }
+  }, [data, isTraitClickable, onIndividualClick]);
 
   /* ---- Label helper ---- */
 
@@ -792,8 +1032,9 @@ const GridContent: React.FC<GridContentProps> = ({
     const fs = (isHover ? 5.5 * YEAR : 5 * YEAR) * 0.66;
     const dateFs = fs * 0.62;
     const childFs = dateFs;
-    const nameY = cy - rH / 2 - (2.2 * YEAR);
-    const dateX = cx + (RIBBON_W / 2) + (TIRET_W / 2) + (0.9 * YEAR);
+    const nameY = cy - rH / 2 - (3.7 * YEAR);
+    const relationGapX = (RIBBON_W / 2) + (TIRET_W / 2) + (0.9 * YEAR);
+    const dateX = cx + relationGapX;
     const childX = dateX + (dateFs * 2.6);
 
     const dateTraits = rd.traits
@@ -802,18 +1043,130 @@ const GridContent: React.FC<GridContentProps> = ({
         const progress = rd.lifespan > 0 ? t.offset / rd.lifespan : 0;
         const y = cy - rH / 2 + progress * rH;
         const text = t.year ? `${t.year}${t.isCalculated ? '\nCAL' : ''}` : '?';
-        return { key: `${t.type}-${t.offset}-${t.spouseId ?? ''}`, y, text };
+        const spouse = t.spouseId && data ? data.individuals[t.spouseId] : null;
+        const mother = t.motherId && data ? data.individuals[t.motherId] : null;
+        const relationText =
+          t.type === 'birth'
+            ? (mother ? `${mother.givenName} ${mother.surname}`.trim() : '')
+            : t.type === 'marriage'
+              ? (spouse ? `${spouse.givenName} ${spouse.surname}`.trim() : '')
+              : '';
+        return {
+          key: `${t.type}-${t.offset}-${t.spouseId ?? ''}-${t.motherId ?? ''}`,
+          y,
+          text,
+          relationText,
+          relationId: t.type === 'birth' ? t.motherId : t.type === 'marriage' ? t.spouseId : undefined,
+        };
       });
 
-    const childTraits = rd.traits
+    const childTraitsRaw = rd.traits
       .filter((t) => t.type === 'child' && !!t.childId)
       .map((t) => {
         const progress = rd.lifespan > 0 ? t.offset / rd.lifespan : 0;
-        const y = cy - rH / 2 + progress * rH;
+        const sourceY = cy - rH / 2 + progress * rH;
         const child = t.childId && data ? data.individuals[t.childId] : null;
         const firstName = child?.givenName?.split(/\s+/)[0] || child?.givenName || '?';
-        return { key: `child-${t.childId}-${t.offset}`, y, text: firstName };
+        return {
+          key: `child-${t.childId}-${t.offset}`,
+          sourceY,
+          targetY: sourceY,
+          text: firstName,
+          childId: t.childId,
+        };
       });
+
+    const minGap = Math.max(childFs * 1.45, 0.95 * YEAR);
+    const childTraits = [...childTraitsRaw].sort((a, b) => a.sourceY - b.sourceY);
+    for (let i = 1; i < childTraits.length; i++) {
+      childTraits[i].targetY = Math.max(childTraits[i].sourceY, childTraits[i - 1].targetY + minGap);
+    }
+    const maxY = cy + rH / 2 + (4 * YEAR);
+    for (let i = childTraits.length - 2; i >= 0; i--) {
+      if (childTraits[i + 1].targetY > maxY) {
+        childTraits[i + 1].targetY = maxY;
+      }
+      if (childTraits[i].targetY > childTraits[i + 1].targetY - minGap) {
+        childTraits[i].targetY = childTraits[i + 1].targetY - minGap;
+      }
+    }
+
+    const dateLeftX = cx - relationGapX;
+    const childStartX = cx + (RIBBON_W / 2) + (TIRET_W / 2) + (0.2 * YEAR);
+    const childEndX = childX - (0.55 * YEAR);
+    const connectorColor = isDarkMode ? '#64748b' : '#9ca3af';
+    const connectorThickness = 0.11 * YEAR;
+    const docMarkerW = 1.55 * YEAR;
+    const docMarkerH = 0.2 * YEAR;
+    const docMarkerX = cx - (RIBBON_W / 2) + (docMarkerW / 2) + (0.15 * YEAR);
+    const photoDocColor = '#d6b98c';
+    const textDocColor = '#8b5a2b';
+
+    const handleRelationTextClick = (id?: string) => (e: SceneMouseEvent) => {
+      if (!id || !data) return;
+      const indiTarget = data.individuals[id];
+      if (!indiTarget) return;
+      e.stopPropagation();
+      onIndividualClick(indiTarget);
+    };
+
+    const renderConnector = (key: string, x1: number, y1: number, x2: number, y2: number) => {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len <= 1e-6) return null;
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+      const angle = Math.atan2(dy, dx);
+      return (
+        <mesh key={key} position={[midX, midY, 0]} rotation={[0, 0, angle]}>
+          <planeGeometry args={[len, connectorThickness]} />
+          <meshBasicMaterial color={connectorColor} transparent opacity={0.85} />
+        </mesh>
+      );
+    };
+
+    const docs = (documentsByIndividualId?.[indi.id] ?? []).filter((d) => !!d.url);
+    const docsWithYear = docs
+      .map((doc, originalIndex) => ({ doc, originalIndex, year: extractYearFromDate(doc.date) }))
+      .sort((a, b) => {
+        if (a.year !== null && b.year !== null) return a.year - b.year;
+        if (a.year !== null) return -1;
+        if (b.year !== null) return 1;
+        return a.originalIndex - b.originalIndex;
+      });
+
+    const undatedCount = docsWithYear.filter((d) => d.year === null).length;
+    let undatedCursor = 0;
+    const docMarkers = docsWithYear.map(({ doc, year }, sortedIndex) => {
+      let y: number;
+      if (year !== null) {
+        const docOffset = Math.min(Math.max(0, year - rd.birthYear), rd.lifespan);
+        const p = rd.lifespan > 0 ? docOffset / rd.lifespan : 0.5;
+        y = cy - rH / 2 + p * rH;
+      } else {
+        undatedCursor += 1;
+        const p = undatedCursor / (undatedCount + 1);
+        y = cy - rH / 2 + p * rH;
+      }
+      return {
+        key: `doc-marker-${doc.id}-${sortedIndex}`,
+        doc,
+        y,
+        color: doc.kind === 'photo' ? photoDocColor : textDocColor,
+      };
+    });
+    const minDocGap = 0.28 * YEAR;
+    for (let i = 1; i < docMarkers.length; i++) {
+      docMarkers[i].y = Math.max(docMarkers[i].y, docMarkers[i - 1].y + minDocGap);
+    }
+    const upperBound = cy + rH / 2 - minDocGap;
+    for (let i = docMarkers.length - 1; i >= 0; i--) {
+      if (docMarkers[i].y > upperBound) docMarkers[i].y = upperBound;
+      if (i > 0 && docMarkers[i - 1].y > docMarkers[i].y - minDocGap) {
+        docMarkers[i - 1].y = docMarkers[i].y - minDocGap;
+      }
+    }
 
     return (
       <group position={[0, 0, 0.02]}>
@@ -829,34 +1182,199 @@ const GridContent: React.FC<GridContentProps> = ({
           {nameText}
         </Text>
         {dateTraits.map((d) => (
-          <Text
-            key={d.key}
-            position={[dateX, d.y, 0]}
-            fontSize={dateFs}
-            color={textColor}
-            outlineWidth={outlineW}
-            outlineColor="#000000"
-            anchorX="left"
-            anchorY="middle"
-            lineHeight={0.95}
-          >
-            {d.text}
-          </Text>
+          <group key={d.key}>
+            <Text
+              position={[dateX, d.y, 0]}
+              fontSize={dateFs}
+              color={textColor}
+              outlineWidth={outlineW}
+              outlineColor="#000000"
+              anchorX="left"
+              anchorY="middle"
+              lineHeight={0.95}
+            >
+              {d.text}
+            </Text>
+            {!!d.relationText && !!d.relationId && (
+              <Text
+                position={[dateLeftX, d.y, 0]}
+                fontSize={childFs}
+                color={textColor}
+                outlineWidth={outlineW}
+                outlineColor="#000000"
+                anchorX="right"
+                anchorY="middle"
+                onClick={handleRelationTextClick(d.relationId)}
+                onPointerOver={() => {
+                  document.body.style.cursor = 'pointer';
+                }}
+                onPointerOut={() => {
+                  document.body.style.cursor = 'default';
+                }}
+              >
+                {d.relationText}
+              </Text>
+            )}
+          </group>
         ))}
+        {childTraits.map((c) => renderConnector(`connector-${c.key}`, childStartX, c.sourceY, childEndX, c.targetY))}
         {childTraits.map((c) => (
           <Text
             key={c.key}
-            position={[childX, c.y, 0]}
+            position={[childX, c.targetY, 0]}
             fontSize={childFs}
             color={textColor}
             outlineWidth={outlineW}
             outlineColor="#000000"
             anchorX="left"
             anchorY="middle"
+            onClick={(e: SceneMouseEvent) => {
+              if (!c.childId || !data) return;
+              const child = data.individuals[c.childId];
+              if (!child) return;
+              e.stopPropagation();
+              onIndividualClick(child);
+            }}
+            onPointerOver={() => {
+              document.body.style.cursor = 'pointer';
+            }}
+            onPointerOut={() => {
+              document.body.style.cursor = 'default';
+            }}
           >
             {c.text}
           </Text>
         ))}
+        {docMarkers.map((m) => (
+          <group key={m.key}>
+            <mesh
+              position={[docMarkerX, m.y, 0.05]}
+              onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                e.stopPropagation();
+                setHoveredDocId(m.doc.id);
+                document.body.style.cursor = 'pointer';
+              }}
+              onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                e.stopPropagation();
+                setHoveredDocId((prev) => (prev === m.doc.id ? null : prev));
+                document.body.style.cursor = 'default';
+              }}
+              onClick={(e: SceneMouseEvent) => {
+                e.stopPropagation();
+                if (isImageLikeUrl(m.doc.url)) {
+                  setWindowPhotoOverrideUrl(m.doc.url);
+                } else {
+                  window.open(m.doc.url, '_blank', 'noopener,noreferrer');
+                }
+              }}
+            >
+              <planeGeometry args={[docMarkerW, docMarkerH]} />
+              <meshBasicMaterial color={m.color} />
+            </mesh>
+            {hoveredDocId === m.doc.id && (
+              <Html position={[cx - (RIBBON_W / 2) - (0.28 * YEAR), m.y, 0.2]}>
+                <div
+                  style={{
+                    width: 62,
+                    minHeight: 56,
+                    borderRadius: 8,
+                    border: isDarkMode ? '1px solid #334155' : '1px solid #cbd5e1',
+                    background: isDarkMode ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)',
+                    color: isDarkMode ? '#e2e8f0' : '#1e293b',
+                    overflow: 'hidden',
+                    boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                    pointerEvents: 'none',
+                    transform: 'translate(-100%, -50%)',
+                  }}
+                >
+                  {isImageLikeUrl(m.doc.url) ? (
+                    <img src={m.doc.url} alt={m.doc.title} style={{ width: '100%', height: 56, objectFit: 'cover', display: 'block' }} />
+                  ) : (
+                    <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, padding: '0 6px', textAlign: 'center' }}>
+                      {m.doc.title}
+                    </div>
+                  )}
+                </div>
+              </Html>
+            )}
+          </group>
+        ))}
+        {singleIndividual && !isHover && !!onExpandAndSwitch3D && hovered3DAction === 'descendants' && (
+          <>
+            <Text
+              position={[cx - (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
+              fontSize={childFs * 0.88}
+              color={textColor}
+              outlineWidth={outlineW}
+              outlineColor="#000000"
+              anchorX="right"
+              anchorY="middle"
+              onClick={(e: SceneMouseEvent) => {
+                e.stopPropagation();
+                onExpandAndSwitch3D('descendants', 'top');
+              }}
+              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('descendants'); }}
+              onPointerOut={() => { document.body.style.cursor = 'default'; }}
+            >
+              2D
+            </Text>
+            <Text
+              position={[cx + (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
+              fontSize={childFs * 0.88}
+              color={textColor}
+              outlineWidth={outlineW}
+              outlineColor="#000000"
+              anchorX="left"
+              anchorY="middle"
+              onClick={(e: SceneMouseEvent) => {
+                e.stopPropagation();
+                onExpandAndSwitch3D('descendants', 'free');
+              }}
+              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('descendants'); }}
+              onPointerOut={() => { document.body.style.cursor = 'default'; }}
+            >
+              3D
+            </Text>
+          </>
+        )}
+        {singleIndividual && !isHover && !!onExpandAndSwitch3D && hovered3DAction === 'ancestors' && (
+          <>
+            <Text
+              position={[cx - (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
+              fontSize={childFs * 0.88}
+              color={textColor}
+              outlineWidth={outlineW}
+              outlineColor="#000000"
+              anchorX="right"
+              anchorY="middle"
+              onClick={(e: SceneMouseEvent) => {
+                e.stopPropagation();
+                onExpandAndSwitch3D('ancestors', 'top');
+              }}
+              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('ancestors'); }}
+              onPointerOut={() => { document.body.style.cursor = 'default'; }}
+            >
+              2D
+            </Text>
+            <Text
+              position={[cx + (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
+              fontSize={childFs * 0.88}
+              color={textColor}
+              outlineWidth={outlineW}
+              outlineColor="#000000"
+              anchorX="left"
+              anchorY="middle"
+              onClick={(e: SceneMouseEvent) => {
+                e.stopPropagation();
+                onExpandAndSwitch3D('ancestors', 'free');
+              }}
+              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('ancestors'); }}
+              onPointerOut={() => { document.body.style.cursor = 'default'; }}
+            >
+              3D
+            </Text>
+          </>
+        )}
       </group>
     );
   };
@@ -864,26 +1382,48 @@ const GridContent: React.FC<GridContentProps> = ({
   if (ribbonData.length === 0) return null;
 
   return (
-    <group>
-      <instancedMesh
-        ref={ribbonMeshRef}
-        args={[ribbonGeometry, ribbonMaterial, ribbonData.length]}
-        frustumCulled={false}
-        onPointerMove={handlePointerMove}
-        onPointerLeave={handlePointerLeave}
-        onClick={handleClick}
-      />
-      <instancedMesh
-        ref={traitsMeshRef}
-        args={[traitGeometry, traitMaterial, Math.max(1, totalTraits)]}
-        frustumCulled={false}
-      />
+    <>
+      <group>
+        <instancedMesh
+          ref={ribbonMeshRef}
+          args={[ribbonGeometry, ribbonMaterial, ribbonData.length]}
+          frustumCulled={false}
+          onPointerMove={handlePointerMove}
+          onPointerLeave={handlePointerLeave}
+          onClick={handleClick}
+        />
+        <instancedMesh
+          ref={traitsMeshRef}
+          args={[traitGeometry, traitMaterial, Math.max(1, totalTraits)]}
+          frustumCulled={false}
+          onPointerMove={handleTraitPointerMove}
+          onPointerLeave={handleTraitPointerLeave}
+          onClick={handleTraitClick}
+        />
+        {selectedPhotoWindow && photoTexture && (
+          <>
+            <Mask id={17} position={[selectedPhotoWindow.cx, selectedPhotoWindow.cy, 0.004]}>
+              <planeGeometry args={[RIBBON_W, selectedPhotoWindow.windowH]} />
+            </Mask>
+            <mesh position={[selectedPhotoWindow.cx, selectedPhotoWindow.cy, 0.005]}>
+              <planeGeometry args={[selectedPhotoWindow.imageW, selectedPhotoWindow.imageH]} />
+              <meshBasicMaterial
+                map={photoTexture}
+                transparent
+                opacity={photoReveal * 0.98}
+                depthWrite={false}
+                {...photoMaskMaterialProps}
+              />
+            </mesh>
+          </>
+        )}
 
-      {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} />}
-      {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
-        <RibbonLabel index={hoveredIdx} isHover={true} />
-      )}
-    </group>
+        {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} />}
+        {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
+          <RibbonLabel index={hoveredIdx} isHover={true} />
+        )}
+      </group>
+    </>
   );
 };
 
@@ -894,12 +1434,15 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   data,
   selectedId,
   selectedIds,
+  primaryPhotoUrlById,
+  documentsByIndividualId,
   onIndividualClick,
   isDarkMode,
   relationshipRevealEnabled = false,
   sortMode = 'birth-asc',
   activeFilters,
   singleIndividual = false,
+  onExpandAndSwitch3D,
 }) => {
   const individuals = useMemo(() => {
     if (!data) return [];
@@ -950,10 +1493,13 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           individuals={individuals}
           data={data}
           selectedId={selectedId}
+          primaryPhotoUrlById={primaryPhotoUrlById}
+          documentsByIndividualId={documentsByIndividualId}
           onIndividualClick={onIndividualClick}
           isDarkMode={isDarkMode}
           relationshipRevealEnabled={relationshipRevealEnabled}
           singleIndividual={singleIndividual}
+          onExpandAndSwitch3D={onExpandAndSwitch3D}
         />
       </Canvas>
 
