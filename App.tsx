@@ -2746,6 +2746,7 @@ function App() {
             documentsByIndividualId={documentsByIndividualId}
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
+            onRequest2DModeSwitch={handleSetDisplayMode}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}
@@ -2762,6 +2763,7 @@ function App() {
             documentsByIndividualId={documentsByIndividualId}
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
+            onRequest2DModeSwitch={handleSetDisplayMode}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}

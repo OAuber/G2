@@ -154,7 +154,7 @@ graph TD
     D -->|Layout| E[layoutEngine.ts]
     E -->|Géométrie| F[geometryService.ts]
     F --> G[Scene3D.tsx]
-    F --> H[Scene2D.tsx]
+    F --> H[Scene2DGrid.tsx / Scene2DIndividual.tsx]
     
     I[App.tsx] -->|État global| G
     I --> H
@@ -172,7 +172,8 @@ graph TD
 |---|---|
 | [`App.tsx`](App.tsx) | Composant principal, gestion d'état et orchestration |
 | [`components/Scene3D.tsx`](components/Scene3D.tsx) | Visualisation 3D (Three.js / R3F) |
-| [`components/Scene2D.tsx`](components/Scene2D.tsx) | Timeline 2D interactive (DOM) |
+| [`components/Scene2DGrid.tsx`](components/Scene2DGrid.tsx) | Vue 2D moderne (grid + photo/ruban + interactions) |
+| [`components/Scene2DIndividual.tsx`](components/Scene2DIndividual.tsx) | Façade de la vue 2D individual (pipeline `Scene2DGrid`) |
 | [`components/Scene2DTimeline.tsx`](components/Scene2DTimeline.tsx) | Frise chronologique détaillée |
 | [`components/InstancedGenealogyTree.tsx`](components/InstancedGenealogyTree.tsx) | Rendu GPU instancié pour la 3D |
 | [`services/gedcomParser.ts`](services/gedcomParser.ts) | Parsing des fichiers GEDCOM |

@@ -84,6 +84,7 @@ interface Scene2DGridProps {
   rightPanelOpen?: boolean;
   singleIndividual?: boolean;
   onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+  onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
 }
 
 interface RibbonDocument {
@@ -127,6 +128,8 @@ const MARGIN    = 5 * YEAR;
 
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
+const GRID_DEFAULT_ZOOM = 580;
+const GRID_TO_INDIVIDUAL_SWITCH_ZOOM = GRID_DEFAULT_ZOOM * 1.2;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
 const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
 const SINGLE_VIEW_ZOOM_OUT_FACTOR = 0.95;
@@ -286,29 +289,49 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
 }
 
 /* ------------------------------------------------------------------ */
-/*  Custom 2D controls: vertical pan + zoom, zero rotation             */
+/*  Custom 2D controls: pan + zoom, zero rotation                      */
 /* ------------------------------------------------------------------ */
-const ScrollZoomControls: React.FC = () => {
+const ScrollZoomControls: React.FC<{
+  enableHorizontalPan?: boolean;
+  onWheelZoomIntent?: (params: { deltaY: number; currentZoom: number }) => boolean;
+}> = ({ enableHorizontalPan = true, onWheelZoomIntent }) => {
   const { camera, gl } = useThree();
   const dragging = useRef(false);
+  const lastX = useRef(0);
   const lastY = useRef(0);
 
   useEffect(() => {
     const canvas = gl.domElement;
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const ortho = camera as THREE.OrthographicCamera;
+    const applyZoomDelta = (ortho: THREE.OrthographicCamera, deltaY: number) => {
       const prevZoom = ortho.zoom;
-      const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prevZoom * (1 - e.deltaY * 0.001)));
+      const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prevZoom * (1 - deltaY * 0.001)));
       if (nextZoom === prevZoom) return;
       ortho.zoom = nextZoom;
       ortho.updateProjectionMatrix();
     };
 
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const ortho = camera as THREE.OrthographicCamera;
+      if (onWheelZoomIntent?.({ deltaY: e.deltaY, currentZoom: ortho.zoom })) {
+        return;
+      }
+      applyZoomDelta(ortho, e.deltaY);
+    };
+    const onWindowWheel = (e: WheelEvent) => {
+      const targetNode = e.target as Node | null;
+      if (targetNode && canvas.contains(targetNode)) return;
+      const ortho = camera as THREE.OrthographicCamera;
+      if (onWheelZoomIntent?.({ deltaY: e.deltaY, currentZoom: ortho.zoom })) {
+        return;
+      }
+      applyZoomDelta(ortho, e.deltaY);
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.button !== 2) return;
       dragging.current = true;
+      lastX.current = e.clientX;
       lastY.current = e.clientY;
       canvas.setPointerCapture(e.pointerId);
     };
@@ -316,8 +339,13 @@ const ScrollZoomControls: React.FC = () => {
     const onPointerMove = (e: PointerEvent) => {
       if (!dragging.current) return;
       const ortho = camera as THREE.OrthographicCamera;
+      const dx = e.clientX - lastX.current;
       const dy = e.clientY - lastY.current;
+      if (enableHorizontalPan) {
+        camera.position.x -= dx / ortho.zoom;
+      }
       camera.position.y += dy / ortho.zoom;
+      lastX.current = e.clientX;
       lastY.current = e.clientY;
     };
 
@@ -328,6 +356,7 @@ const ScrollZoomControls: React.FC = () => {
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('wheel', onWindowWheel, { passive: true });
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
@@ -335,11 +364,12 @@ const ScrollZoomControls: React.FC = () => {
 
     return () => {
       canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('wheel', onWindowWheel);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
     };
-  }, [camera, gl]);
+  }, [camera, gl, enableHorizontalPan, onWheelZoomIntent]);
 
   return null;
 };
@@ -363,6 +393,7 @@ interface GridContentProps {
     inset: { top: number; right: number; bottom: number; left: number };
     reveal: number;
   } | null) => void;
+  onIndividualDefaultZoomChange?: (zoom: number) => void;
 }
 
 interface PhotoOverlayLayerProps {
@@ -415,7 +446,7 @@ const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
 );
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, onPhotoOverlayChange,
+  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, onPhotoOverlayChange, onIndividualDefaultZoomChange,
 }) => {
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -423,8 +454,12 @@ const GridContent: React.FC<GridContentProps> = ({
   const [hoveredIdx, setHoveredIdx] = useState(-1);
   const pathSetRef = useRef<Set<string>>(new Set());
   const colsRef = useRef(0);
+  const [layoutCols, setLayoutCols] = useState(1);
   const initializedRef = useRef(false);
+  const prevZoomRef = useRef<number | null>(null);
   const needsCenterRef = useRef(false);
+  const shouldApplyGridDefaultZoomRef = useRef(true);
+  const prevSingleIndividualRef = useRef(singleIndividual);
   const prevSelectedIdRef = useRef(selectedId);
   const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
   const [hovered3DAction, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
@@ -506,19 +541,21 @@ const GridContent: React.FC<GridContentProps> = ({
   }, [isSlideshowMode, isSlideshowPlaying, isAtZoomLimit, selectedImageDocs]);
 
   useEffect(() => {
-    if (!isAtZoomLimit && !isSlideshowMode) return;
-    const onWheel = (e: WheelEvent) => {
-      // Dezoom exits max-photo mode even if slideshow is not playing.
-      if (e.deltaY <= 0) return;
-      setIsSlideshowPlaying(false);
-      setIsSlideshowMode(false);
-      setIsAtZoomLimit(false);
-      setSlideshowIndex(0);
-      setWindowPhotoOverrideUrl(null);
-    };
-    window.addEventListener('wheel', onWheel, { passive: true });
-    return () => window.removeEventListener('wheel', onWheel);
-  }, [isAtZoomLimit, isSlideshowMode]);
+    // In build, pointer-out may not fire when markers are hidden at zoom-max.
+    // Clear hover preview proactively when entering/leaving this mode.
+    if (hoveredDocId !== null && (isAtZoomLimit || isSlideshowMode)) {
+      setHoveredDocId(null);
+      document.body.style.cursor = 'default';
+    }
+  }, [isAtZoomLimit, isSlideshowMode, hoveredDocId]);
+
+  useEffect(() => {
+    // Also clear stale preview on selection switch.
+    if (hoveredDocId !== null) {
+      setHoveredDocId(null);
+      document.body.style.cursor = 'default';
+    }
+  }, [selectedId]);
 
   /* ---- Geometries ---- */
 
@@ -610,9 +647,22 @@ const GridContent: React.FC<GridContentProps> = ({
   useEffect(() => {
     if (selectedId && selectedId !== prevSelectedIdRef.current) {
       needsCenterRef.current = true;
+      if (!singleIndividual) {
+        shouldApplyGridDefaultZoomRef.current = true;
+      }
     }
     prevSelectedIdRef.current = selectedId;
-  }, [selectedId]);
+  }, [selectedId, singleIndividual]);
+
+  useEffect(() => {
+    if (prevSingleIndividualRef.current && !singleIndividual) {
+      // Entering grid view from individual view:
+      // recenter selected ribbon and use a slightly wider default framing.
+      needsCenterRef.current = true;
+      shouldApplyGridDefaultZoomRef.current = true;
+    }
+    prevSingleIndividualRef.current = singleIndividual;
+  }, [singleIndividual]);
 
   /* ---- Colors & fading (sync, before first paint) ---- */
 
@@ -654,6 +704,16 @@ const GridContent: React.FC<GridContentProps> = ({
     if (!ribbonMesh || !traitsMesh || ribbonData.length === 0) return;
 
     const ortho = camera as THREE.OrthographicCamera;
+    const prevZoom = prevZoomRef.current ?? ortho.zoom;
+    const zoomChanged = Math.abs(prevZoom - ortho.zoom) > 1e-6;
+    const zoomingOut = ortho.zoom < prevZoom - 1e-6;
+    prevZoomRef.current = ortho.zoom;
+    if (singleIndividual && zoomingOut && isSlideshowMode) {
+      setIsSlideshowPlaying(false);
+      setIsSlideshowMode(false);
+      if (slideshowIndex !== 0) setSlideshowIndex(0);
+      if (windowPhotoOverrideUrl !== null) setWindowPhotoOverrideUrl(null);
+    }
     const visW = (ortho.right - ortho.left) / ortho.zoom;
     const visH = (ortho.top - ortho.bottom) / ortho.zoom;
     if (visW <= 0 || !isFinite(visW)) return;
@@ -661,18 +721,41 @@ const GridContent: React.FC<GridContentProps> = ({
     const cols = Math.max(1, Math.floor(visW / STEP_X));
     const needsReflow = cols !== colsRef.current;
 
-    // Center camera on newly selected individual
-    if (needsCenterRef.current && colsRef.current > 0 && initializedRef.current) {
+    const applyGridDefaultZoomIfNeeded = () => {
+      if (!singleIndividual && shouldApplyGridDefaultZoomRef.current) {
+        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, GRID_DEFAULT_ZOOM));
+        if (Math.abs(nextZoom - ortho.zoom) > 1e-6) {
+          ortho.zoom = nextZoom;
+          ortho.updateProjectionMatrix();
+        }
+        shouldApplyGridDefaultZoomRef.current = false;
+      }
+    };
+
+    let centeredSelectedThisFrame = false;
+    // Center camera on newly selected individual in grid mode
+    if (needsCenterRef.current && cols > 0 && initializedRef.current && !singleIndividual) {
       needsCenterRef.current = false;
       const idx = ribbonData.findIndex(rd => rd.individual.id === selectedId);
       if (idx >= 0) {
-        const row = Math.floor(idx / colsRef.current);
+        const row = Math.floor(idx / cols);
+        const col = idx % cols;
+        ortho.position.x = col * STEP_X;
         ortho.position.y = -row * STEP_Y;
+        centeredSelectedThisFrame = true;
+        applyGridDefaultZoomIfNeeded();
       }
     }
 
     if (!needsReflow && initializedRef.current && !singleIndividual) {
-      ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
+      // Keep selected individual centered while zooming in grid mode,
+      // regardless of pointer position.
+      if (zoomChanged && selectedIdx >= 0) {
+        const row = Math.floor(selectedIdx / cols);
+        const col = selectedIdx % cols;
+        ortho.position.x = col * STEP_X;
+        ortho.position.y = -row * STEP_Y;
+      }
       return;
     }
 
@@ -686,6 +769,7 @@ const GridContent: React.FC<GridContentProps> = ({
     }
 
     colsRef.current = cols;
+    setLayoutCols(cols);
 
     const dummy = new THREE.Object3D();
     let traitIdx = 0;
@@ -800,6 +884,7 @@ const GridContent: React.FC<GridContentProps> = ({
         Math.min(MAX_ZOOM, Math.min(Math.min(fitZoomW, fitZoomH), reference80FitZoom))
       );
       const minFitZoom = Math.max(MIN_ZOOM, rawMinFitZoom * SINGLE_VIEW_ZOOM_OUT_FACTOR);
+      onIndividualDefaultZoomChange?.(minFitZoom);
       const centerX = 0;
       const centerY = (top + bottom) / 2 + SINGLE_VIEW_UPWARD_OFFSET;
       const prevFit = singleFitRef.current;
@@ -860,7 +945,7 @@ const GridContent: React.FC<GridContentProps> = ({
           const halfW = RIBBON_W / 2;
           const halfH = windowH / 2;
 
-          const projectRibbonRectPx = () => {
+          const projectRibbonRectPx = (): { left: number; right: number; top: number; bottom: number } => {
             const a = projectVecARef.current.set(cx - halfW, cy + halfH, 0).project(ortho);
             const b = projectVecBRef.current.set(cx + halfW, cy - halfH, 0).project(ortho);
             const x1 = (a.x * 0.5 + 0.5) * size.width;
@@ -917,8 +1002,13 @@ const GridContent: React.FC<GridContentProps> = ({
             reveal: 1,
           });
 
-          // Consider near-full-width as zoom-max state for UI controls.
-          const atZoomLimitNow = projectedW >= maxWidthPx * 0.97;
+          // Consider near-full-width as zoom-max state for UI controls, with
+          // hysteresis to prevent rapid show/hide flicker near the threshold.
+          const enterZoomLimit = 0.975;
+          const exitZoomLimit = 0.94;
+          const atZoomLimitNow = isAtZoomLimit
+            ? projectedW >= maxWidthPx * exitZoomLimit
+            : projectedW >= maxWidthPx * enterZoomLimit;
           if (atZoomLimitNow) {
             if (!isAtZoomLimit) setIsAtZoomLimit(true);
           } else if (isAtZoomLimit) {
@@ -952,12 +1042,27 @@ const GridContent: React.FC<GridContentProps> = ({
       if (isAtZoomLimit) setIsAtZoomLimit(false);
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
-        ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
+        if (selectedIdx >= 0) {
+          const selectedRow = Math.floor(selectedIdx / cols);
+          const selectedCol = selectedIdx % cols;
+          ortho.position.set(selectedCol * STEP_X, -selectedRow * STEP_Y, 100);
+        } else {
+          ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
+        }
+        applyGridDefaultZoomIfNeeded();
         initializedRef.current = true;
-      } else {
-        const newRow = Math.floor(anchorIndex / cols);
-        ortho.position.x = gridCx;
-        ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
+      } else if (!centeredSelectedThisFrame) {
+        if (zoomChanged && selectedIdx >= 0) {
+          // On zoom (including reflow), always keep selected centered.
+          const selectedRow = Math.floor(selectedIdx / cols);
+          const selectedCol = selectedIdx % cols;
+          ortho.position.x = selectedCol * STEP_X;
+          ortho.position.y = -selectedRow * STEP_Y;
+        } else {
+          const newRow = Math.floor(anchorIndex / cols);
+          // Preserve user free horizontal pan in grid mode.
+          ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
+        }
       }
     }
   });
@@ -1039,7 +1144,6 @@ const GridContent: React.FC<GridContentProps> = ({
       if (relationshipRevealEnabled && selectedId && data && indi.id !== selectedId) {
         try {
           const pathIds = findRelationshipPath(data, selectedId, indi.id);
-          console.log('[2D Path]', selectedId, '→', indi.id, 'path size:', pathIds.size, [...pathIds]);
           applyPathHighlight(mesh, pathIds);
         } catch (e) { console.error('[2D Path] error:', e); }
       }
@@ -1130,12 +1234,12 @@ const GridContent: React.FC<GridContentProps> = ({
 
   /* ---- Label helper ---- */
 
-  const RibbonLabel = ({ index, isHover }: { index: number; isHover: boolean }) => {
-    if (index < 0 || index >= ribbonData.length || colsRef.current === 0) return null;
+  const RibbonLabel = ({ index, isHover, isSelectedPinned = false }: { index: number; isHover: boolean; isSelectedPinned?: boolean }) => {
+    if (index < 0 || index >= ribbonData.length || layoutCols <= 0) return null;
 
     const rd = ribbonData[index];
     const indi = rd.individual;
-    const cols = colsRef.current;
+    const cols = layoutCols;
     const col = index % cols;
     const row = Math.floor(index / cols);
     const cx = col * STEP_X;
@@ -1146,7 +1250,7 @@ const GridContent: React.FC<GridContentProps> = ({
     const textColor = isDarkMode ? '#ffffff' : '#1e293b';
     // In dark mode, outline halos create black boxes over ribbon/text overlap.
     const outlineW = 0;
-    const fs = (isHover ? 5.5 * YEAR : 5 * YEAR) * 0.66;
+    const fs = ((isHover || isSelectedPinned) ? 5.5 * YEAR : 5 * YEAR) * 0.66;
     const dateFs = fs * 0.62;
     const childFs = dateFs;
     const nameY = cy - rH / 2 - (3.7 * YEAR);
@@ -1287,7 +1391,7 @@ const GridContent: React.FC<GridContentProps> = ({
     }
 
     return (
-      <group position={[0, 0, 0.02]}>
+      <group position={[0, 0, isSelectedPinned ? 0.04 : 0.02]}>
         <Text
           position={[cx, nameY, 0]}
           fontSize={fs}
@@ -1522,11 +1626,11 @@ const GridContent: React.FC<GridContentProps> = ({
             </div>
           </Html>
         )}
-        {singleIndividual && !isHover && !!onExpandAndSwitch3D && hovered3DAction === 'descendants' && (
+        {singleIndividual && !isHover && !!onExpandAndSwitch3D && (
           <>
             <Text
               position={[cx - (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.88}
+              fontSize={childFs * 0.76}
               color={textColor}
               outlineWidth={outlineW}
               outlineColor="#000000"
@@ -1543,7 +1647,7 @@ const GridContent: React.FC<GridContentProps> = ({
             </Text>
             <Text
               position={[cx + (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.88}
+              fontSize={childFs * 0.76}
               color={textColor}
               outlineWidth={outlineW}
               outlineColor="#000000"
@@ -1560,11 +1664,11 @@ const GridContent: React.FC<GridContentProps> = ({
             </Text>
           </>
         )}
-        {singleIndividual && !isHover && !!onExpandAndSwitch3D && hovered3DAction === 'ancestors' && (
+        {singleIndividual && !isHover && !!onExpandAndSwitch3D && (
           <>
             <Text
               position={[cx - (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.88}
+              fontSize={childFs * 0.76}
               color={textColor}
               outlineWidth={outlineW}
               outlineColor="#000000"
@@ -1581,7 +1685,7 @@ const GridContent: React.FC<GridContentProps> = ({
             </Text>
             <Text
               position={[cx + (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.88}
+              fontSize={childFs * 0.76}
               color={textColor}
               outlineWidth={outlineW}
               outlineColor="#000000"
@@ -1623,7 +1727,7 @@ const GridContent: React.FC<GridContentProps> = ({
           onPointerLeave={handleTraitPointerLeave}
           onClick={handleTraitClick}
         />
-        {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} />}
+        {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} isSelectedPinned={true} />}
         {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
           <RibbonLabel index={hoveredIdx} isHover={true} />
         )}
@@ -1648,6 +1752,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   activeFilters,
   singleIndividual = false,
   onExpandAndSwitch3D,
+  onRequest2DModeSwitch,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -1656,7 +1761,35 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   const maskBottomRef = useRef<HTMLDivElement>(null);
   const maskLeftRef = useRef<HTMLDivElement>(null);
   const maskRightRef = useRef<HTMLDivElement>(null);
+  const individualDefaultZoomRef = useRef<number | null>(null);
   const overlayBg = isDarkMode ? '#000000' : '#f0f9ff';
+  const modeSwitchLockRef = useRef(false);
+  useEffect(() => {
+    modeSwitchLockRef.current = false;
+  }, [singleIndividual, selectedId]);
+  const handleWheelZoomIntent = useCallback(({ deltaY, currentZoom }: { deltaY: number; currentZoom: number }) => {
+    if (modeSwitchLockRef.current || !onRequest2DModeSwitch) return false;
+    if (!singleIndividual && deltaY < 0 && currentZoom >= GRID_TO_INDIVIDUAL_SWITCH_ZOOM) {
+      modeSwitchLockRef.current = true;
+      onRequest2DModeSwitch('2d-individual');
+      return true;
+    }
+    // In individual view, dezoom should first return progressively to the
+    // default individual zoom. Switch to grid only once that baseline is reached.
+    if (singleIndividual && deltaY > 0) {
+      const baselineZoom = individualDefaultZoomRef.current;
+      if (baselineZoom !== null && currentZoom <= baselineZoom * 1.02) {
+        modeSwitchLockRef.current = true;
+        onRequest2DModeSwitch('2d-grid');
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }, [onRequest2DModeSwitch, singleIndividual]);
+  const handleIndividualDefaultZoomChange = useCallback((zoom: number) => {
+    individualDefaultZoomRef.current = zoom;
+  }, []);
   const handlePhotoOverlayChange = useCallback((overlay: {
     url: string;
     inset: { top: number; right: number; bottom: number; left: number };
@@ -1753,7 +1886,10 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           far={10000}
         />
 
-        <ScrollZoomControls />
+        <ScrollZoomControls
+          enableHorizontalPan={!singleIndividual}
+          onWheelZoomIntent={handleWheelZoomIntent}
+        />
 
         <ambientLight intensity={1} />
 
@@ -1769,6 +1905,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           singleIndividual={singleIndividual}
           onExpandAndSwitch3D={onExpandAndSwitch3D}
           onPhotoOverlayChange={handlePhotoOverlayChange}
+          onIndividualDefaultZoomChange={handleIndividualDefaultZoomChange}
         />
       </Canvas>
 
