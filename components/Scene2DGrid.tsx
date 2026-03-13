@@ -429,6 +429,10 @@ const GridContent: React.FC<GridContentProps> = ({
   const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
   const [hovered3DAction, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
   const [photoReveal, setPhotoReveal] = useState(0);
+  const [isAtZoomLimit, setIsAtZoomLimit] = useState(false);
+  const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
+  const [isSlideshowMode, setIsSlideshowMode] = useState(false);
+  const [slideshowIndex, setSlideshowIndex] = useState(0);
   const projectVecARef = useRef(new THREE.Vector3());
   const projectVecBRef = useRef(new THREE.Vector3());
   const [hoveredDocId, setHoveredDocId] = useState<string | null>(null);
@@ -463,6 +467,58 @@ const GridContent: React.FC<GridContentProps> = ({
   );
 
   const selectedPhotoUrl = windowPhotoOverrideUrl || (selectedId ? primaryPhotoUrlById?.[selectedId] : undefined);
+  const selectedImageDocs = useMemo(() => {
+    if (!selectedId) return [] as RibbonDocument[];
+    const docs = (documentsByIndividualId?.[selectedId] ?? []).filter((d) => !!d.url && isImageLikeUrl(d.url));
+    return docs
+      .map((doc, originalIndex) => ({ doc, originalIndex, time: doc.date ? Date.parse(doc.date) : Number.NaN }))
+      .sort((a, b) => {
+        const aTime = Number.isFinite(a.time);
+        const bTime = Number.isFinite(b.time);
+        if (aTime && bTime) return a.time - b.time;
+        if (aTime) return -1;
+        if (bTime) return 1;
+        return a.originalIndex - b.originalIndex;
+      })
+      .map((entry) => entry.doc);
+  }, [documentsByIndividualId, selectedId]);
+
+  useEffect(() => {
+    // On zoom-out from slideshow mode: always stop and return to primary photo.
+    if (!isAtZoomLimit && isSlideshowMode) {
+      if (isSlideshowPlaying) setIsSlideshowPlaying(false);
+      if (slideshowIndex !== 0) setSlideshowIndex(0);
+      if (windowPhotoOverrideUrl !== null) setWindowPhotoOverrideUrl(null);
+      setIsSlideshowMode(false);
+    }
+  }, [isAtZoomLimit, isSlideshowMode, isSlideshowPlaying, slideshowIndex, windowPhotoOverrideUrl]);
+
+  useEffect(() => {
+    if (!isSlideshowMode || !isSlideshowPlaying || !isAtZoomLimit || selectedImageDocs.length === 0) return;
+    const handle = window.setInterval(() => {
+      setSlideshowIndex((prev) => {
+        const next = (prev + 1) % selectedImageDocs.length;
+        setWindowPhotoOverrideUrl(selectedImageDocs[next].url);
+        return next;
+      });
+    }, 2200);
+    return () => window.clearInterval(handle);
+  }, [isSlideshowMode, isSlideshowPlaying, isAtZoomLimit, selectedImageDocs]);
+
+  useEffect(() => {
+    if (!isAtZoomLimit && !isSlideshowMode) return;
+    const onWheel = (e: WheelEvent) => {
+      // Dezoom exits max-photo mode even if slideshow is not playing.
+      if (e.deltaY <= 0) return;
+      setIsSlideshowPlaying(false);
+      setIsSlideshowMode(false);
+      setIsAtZoomLimit(false);
+      setSlideshowIndex(0);
+      setWindowPhotoOverrideUrl(null);
+    };
+    window.addEventListener('wheel', onWheel, { passive: true });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, [isAtZoomLimit, isSlideshowMode]);
 
   /* ---- Geometries ---- */
 
@@ -652,6 +708,9 @@ const GridContent: React.FC<GridContentProps> = ({
 
       // Traits for this individual
       for (const trait of rd.traits) {
+        if (singleIndividual && isAtZoomLimit && trait.type === 'child') {
+          continue;
+        }
         const progress = rd.lifespan > 0 ? trait.offset / rd.lifespan : 0;
         const ty = cy - rH / 2 + progress * rH;
 
@@ -844,17 +903,27 @@ const GridContent: React.FC<GridContentProps> = ({
             rightPx = size.width;
           }
 
-          const nextInset = {
-            top,
-            right: Math.max(0, size.width - rightPx),
-            bottom: Math.max(0, size.height - bottomPx),
-            left,
-          };
+          const nextInset = (widthProgressRaw >= 0.97)
+            ? { top: 0, right: 0, bottom: 0, left: 0 }
+            : {
+                top,
+                right: Math.max(0, size.width - rightPx),
+                bottom: Math.max(0, size.height - bottomPx),
+                left,
+              };
           onPhotoOverlayChange?.({
             url: selectedPhotoUrl,
             inset: nextInset,
             reveal: 1,
           });
+
+          // Consider near-full-width as zoom-max state for UI controls.
+          const atZoomLimitNow = projectedW >= maxWidthPx * 0.97;
+          if (atZoomLimitNow) {
+            if (!isAtZoomLimit) setIsAtZoomLimit(true);
+          } else if (isAtZoomLimit) {
+            setIsAtZoomLimit(false);
+          }
 
           // Ribbon opacity reaches exactly 0 when projected width is near viewport width.
           if (projectedW >= maxWidthPx * 0.97) {
@@ -866,11 +935,13 @@ const GridContent: React.FC<GridContentProps> = ({
         } else {
           onPhotoOverlayChange?.(null);
           ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+          if (isAtZoomLimit) setIsAtZoomLimit(false);
         }
       } else if (photoReveal !== 0) {
         setPhotoReveal(0);
         onPhotoOverlayChange?.(null);
         ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+        if (isAtZoomLimit) setIsAtZoomLimit(false);
       }
       initializedRef.current = true;
       return;
@@ -878,6 +949,7 @@ const GridContent: React.FC<GridContentProps> = ({
       if (photoReveal !== 0) setPhotoReveal(0);
       onPhotoOverlayChange?.(null);
       ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+      if (isAtZoomLimit) setIsAtZoomLimit(false);
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
         ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
@@ -1135,6 +1207,7 @@ const GridContent: React.FC<GridContentProps> = ({
         childTraits[i].targetY = childTraits[i + 1].targetY - minGap;
       }
     }
+    const hideDocAndChildMarkers = singleIndividual && index === selectedIdx && isAtZoomLimit;
 
     const dateLeftX = cx - relationGapX;
     const childStartX = cx + (RIBBON_W / 2) + (TIRET_W / 2) + (0.2 * YEAR);
@@ -1262,8 +1335,8 @@ const GridContent: React.FC<GridContentProps> = ({
             )}
           </group>
         ))}
-        {childTraits.map((c) => renderConnector(`connector-${c.key}`, childStartX, c.sourceY, childEndX, c.targetY))}
-        {childTraits.map((c) => (
+        {!hideDocAndChildMarkers && childTraits.map((c) => renderConnector(`connector-${c.key}`, childStartX, c.sourceY, childEndX, c.targetY))}
+        {!hideDocAndChildMarkers && childTraits.map((c) => (
           <Text
             key={c.key}
             position={[childX, c.targetY, 0]}
@@ -1290,60 +1363,165 @@ const GridContent: React.FC<GridContentProps> = ({
             {c.text}
           </Text>
         ))}
-        {docMarkers.map((m) => (
-          <group key={m.key}>
-            <mesh
-              position={[docMarkerX, m.y, 0.05]}
-              onPointerOver={(e: ThreeEvent<PointerEvent>) => {
-                e.stopPropagation();
-                setHoveredDocId(m.doc.id);
-                document.body.style.cursor = 'pointer';
-              }}
-              onPointerOut={(e: ThreeEvent<PointerEvent>) => {
-                e.stopPropagation();
-                setHoveredDocId((prev) => (prev === m.doc.id ? null : prev));
-                document.body.style.cursor = 'default';
-              }}
-              onClick={(e: SceneMouseEvent) => {
-                e.stopPropagation();
-                if (isImageLikeUrl(m.doc.url)) {
-                  setWindowPhotoOverrideUrl(m.doc.url);
-                } else {
-                  window.open(m.doc.url, '_blank', 'noopener,noreferrer');
-                }
+        {!hideDocAndChildMarkers && docMarkers.map((m) => (
+            <group key={m.key}>
+              <mesh
+                position={[docMarkerX, m.y, 0.05]}
+                onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                  e.stopPropagation();
+                  setHoveredDocId(m.doc.id);
+                  document.body.style.cursor = 'pointer';
+                }}
+                onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                  e.stopPropagation();
+                  setHoveredDocId((prev) => (prev === m.doc.id ? null : prev));
+                  document.body.style.cursor = 'default';
+                }}
+                onClick={(e: SceneMouseEvent) => {
+                  e.stopPropagation();
+                  setIsSlideshowMode(false);
+                  if (isImageLikeUrl(m.doc.url)) {
+                    setIsSlideshowPlaying(false);
+                    setWindowPhotoOverrideUrl(m.doc.url);
+                  } else {
+                    window.open(m.doc.url, '_blank', 'noopener,noreferrer');
+                  }
+                }}
+              >
+                <planeGeometry args={[docMarkerW, docMarkerH]} />
+                <meshBasicMaterial color={m.color} />
+              </mesh>
+              {hoveredDocId === m.doc.id && (
+                <Html position={[cx - (RIBBON_W / 2) - (0.28 * YEAR), m.y, 0.2]}>
+                  <div
+                    style={{
+                      width: 62,
+                      minHeight: 56,
+                      borderRadius: 8,
+                      border: isDarkMode ? '1px solid #334155' : '1px solid #cbd5e1',
+                      background: isDarkMode ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)',
+                      color: isDarkMode ? '#e2e8f0' : '#1e293b',
+                      overflow: 'hidden',
+                      boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                      pointerEvents: 'none',
+                      transform: 'translate(-100%, -50%)',
+                    }}
+                  >
+                    {isImageLikeUrl(m.doc.url) ? (
+                      <img src={m.doc.url} alt={m.doc.title} style={{ width: '100%', height: 56, objectFit: 'cover', display: 'block' }} />
+                    ) : (
+                      <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, padding: '0 6px', textAlign: 'center' }}>
+                        {m.doc.title}
+                      </div>
+                    )}
+                  </div>
+                </Html>
+              )}
+            </group>
+          ))}
+        {hideDocAndChildMarkers && selectedImageDocs.length > 0 && (
+          <Html fullscreen transform={false}>
+            <div
+              style={{
+                position: 'absolute',
+                left: '72px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                display: 'flex',
+                flexDirection: 'row',
+                gap: 7,
+                pointerEvents: 'auto',
+                zIndex: 9999,
               }}
             >
-              <planeGeometry args={[docMarkerW, docMarkerH]} />
-              <meshBasicMaterial color={m.color} />
-            </mesh>
-            {hoveredDocId === m.doc.id && (
-              <Html position={[cx - (RIBBON_W / 2) - (0.28 * YEAR), m.y, 0.2]}>
-                <div
-                  style={{
-                    width: 62,
-                    minHeight: 56,
-                    borderRadius: 8,
-                    border: isDarkMode ? '1px solid #334155' : '1px solid #cbd5e1',
-                    background: isDarkMode ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)',
-                    color: isDarkMode ? '#e2e8f0' : '#1e293b',
-                    overflow: 'hidden',
-                    boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
-                    pointerEvents: 'none',
-                    transform: 'translate(-100%, -50%)',
-                  }}
-                >
-                  {isImageLikeUrl(m.doc.url) ? (
-                    <img src={m.doc.url} alt={m.doc.title} style={{ width: '100%', height: 56, objectFit: 'cover', display: 'block' }} />
-                  ) : (
-                    <div style={{ height: 56, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, padding: '0 6px', textAlign: 'center' }}>
-                      {m.doc.title}
-                    </div>
-                  )}
-                </div>
-              </Html>
-            )}
-          </group>
-        ))}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSlideshowMode(true);
+                  setIsSlideshowPlaying(true);
+                  setSlideshowIndex(0);
+                  setWindowPhotoOverrideUrl(selectedImageDocs[0].url);
+                }}
+                style={{
+                  width: 58,
+                  height: 58,
+                  borderRadius: 9999,
+                  border: 'none',
+                  background: isDarkMode ? 'rgba(32, 20, 8, 0.52)' : 'rgba(236, 210, 169, 0.62)',
+                  color: isDarkMode ? '#e2e8f0' : '#0f172a',
+                  padding: 0,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title="Play"
+              >
+                <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+                  <polygon points="8,6 19,12 8,18" fill="currentColor" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSlideshowMode(true);
+                  setIsSlideshowPlaying(false);
+                  const next = (slideshowIndex + 1) % selectedImageDocs.length;
+                  setSlideshowIndex(next);
+                  setWindowPhotoOverrideUrl(selectedImageDocs[next].url);
+                }}
+                style={{
+                  width: 58,
+                  height: 58,
+                  borderRadius: 9999,
+                  border: 'none',
+                  background: isDarkMode ? 'rgba(32, 20, 8, 0.52)' : 'rgba(236, 210, 169, 0.62)',
+                  color: isDarkMode ? '#e2e8f0' : '#0f172a',
+                  padding: 0,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title="Next"
+              >
+                <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="5" y1="9" x2="19" y2="9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <line x1="5" y1="15" x2="19" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSlideshowMode(true);
+                  setIsSlideshowPlaying(false);
+                }}
+                style={{
+                  width: 58,
+                  height: 58,
+                  borderRadius: 9999,
+                  border: 'none',
+                  background: isDarkMode ? 'rgba(32, 20, 8, 0.52)' : 'rgba(236, 210, 169, 0.62)',
+                  color: isDarkMode ? '#e2e8f0' : '#0f172a',
+                  padding: 0,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title="Pause"
+              >
+                <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="6" width="3" height="12" rx="1" fill="currentColor" />
+                  <rect x="14" y="6" width="3" height="12" rx="1" fill="currentColor" />
+                </svg>
+              </button>
+            </div>
+          </Html>
+        )}
         {singleIndividual && !isHover && !!onExpandAndSwitch3D && hovered3DAction === 'descendants' && (
           <>
             <Text

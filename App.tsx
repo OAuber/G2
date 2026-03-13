@@ -2265,6 +2265,40 @@ function App() {
     sendDocumentsToPeer(nextSnapshot, individualId);
   };
 
+  const handleUpdateDocument = (
+    individualId: string,
+    docId: string,
+    patch: {
+      title?: string;
+      url?: string;
+      source?: 'local' | 'online';
+      kind?: 'photo' | 'document';
+      date?: string;
+    }
+  ) => {
+    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    setDocumentsByIndividualId((prev) => {
+      const current = prev[individualId] || [];
+      nextSnapshot = {
+        ...prev,
+        [individualId]: current.map((doc) => {
+          if (doc.id !== docId) return doc;
+          const nextUrl = patch.url ?? doc.url;
+          const nextKind: 'photo' | 'document' =
+            patch.kind ?? ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
+          return {
+            ...doc,
+            ...patch,
+            kind: nextKind,
+            date: patch.date === '' ? undefined : (patch.date ?? doc.date),
+          };
+        }),
+      };
+      return nextSnapshot;
+    });
+    sendDocumentsToPeer(nextSnapshot, individualId);
+  };
+
   // --- Creation, Linking & Deletion Logic ---
 
   const handleInitCreation = () => {
@@ -2826,6 +2860,7 @@ function App() {
         documents={selectedIndividualDocuments}
         onOpenReviewProposal={handleReviewProposal}
         onAddDocument={handleAddDocument}
+        onUpdateDocument={handleUpdateDocument}
         onRemoveDocument={handleRemoveDocument}
         onSetPrimaryPhoto={handleSetPrimaryPhoto}
         onReviewBulkDecision={handleReviewBulkDecision}

@@ -87,6 +87,13 @@ interface DetailsPanelProps {
     kind: 'photo' | 'document';
     date?: string;
   }) => void;
+  onUpdateDocument?: (individualId: string, docId: string, patch: {
+    title?: string;
+    url?: string;
+    source?: 'local' | 'online';
+    kind?: 'photo' | 'document';
+    date?: string;
+  }) => void;
   onRemoveDocument?: (individualId: string, docId: string) => void;
   onSetPrimaryPhoto?: (individualId: string, docId: string) => void;
   onReviewBulkDecision?: (proposalId: string, fields: Array<keyof Individual>, decision: 'accept' | 'reject') => void;
@@ -267,6 +274,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   documents = [],
   onOpenReviewProposal,
   onAddDocument,
+  onUpdateDocument,
   onRemoveDocument,
   onSetPrimaryPhoto,
   onReviewBulkDecision,
@@ -291,11 +299,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   }>({
     title: '',
     url: '',
-    source: 'online',
-    kind: 'document',
+    source: 'local',
+    kind: 'photo',
     date: '',
     file: null,
   });
+  const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [editingDocTitle, setEditingDocTitle] = useState('');
+  const [editingDocDate, setEditingDocDate] = useState('');
 
   useEffect(() => {
     if (isCreating) {
@@ -682,16 +693,16 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     value={docForm.source}
                     onChange={(e) => setDocForm((prev) => ({ ...prev, source: e.target.value as 'local' | 'online', url: '', file: null }))}
                   >
+                    <option value="local">Offline (Local)</option>
                     <option value="online">Online</option>
-                    <option value="local">Local</option>
                   </select>
                   <select
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     value={docForm.kind}
                     onChange={(e) => setDocForm((prev) => ({ ...prev, kind: e.target.value as 'photo' | 'document' }))}
                   >
-                    <option value="document">Document</option>
                     <option value="photo">Photo</option>
+                    <option value="document">Document</option>
                   </select>
                 </div>
                 {docForm.source === 'online' ? (
@@ -749,7 +760,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       kind: inferredKind,
                       date: docForm.date || undefined,
                     });
-                    setDocForm({ title: '', url: '', source: 'online', kind: 'document', date: '', file: null });
+                    setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', file: null });
                   }}
                 >
                   Add document
@@ -768,8 +779,71 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         <div className={`text-[11px] ${subTextClass}`}>
                           {doc.kind} | {doc.source}{doc.date ? ` | ${doc.date}` : ''}
                         </div>
+                        {editingDocId === doc.id && (
+                          <div className="mt-2 space-y-2">
+                            <input
+                              type="text"
+                              placeholder="Document name"
+                              className={`w-full rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
+                              value={editingDocTitle}
+                              onChange={(e) => setEditingDocTitle(e.target.value)}
+                            />
+                            <div className="flex items-center gap-2">
+                            <input
+                              type="date"
+                              className={`rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
+                              value={editingDocDate}
+                              onChange={(e) => setEditingDocDate(e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!individual) return;
+                                onUpdateDocument?.(individual.id, doc.id, {
+                                  title: editingDocTitle.trim() || doc.title,
+                                  date: editingDocDate || undefined,
+                                });
+                                setEditingDocId(null);
+                                setEditingDocTitle('');
+                                setEditingDocDate('');
+                              }}
+                              className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingDocId(null);
+                                setEditingDocTitle('');
+                                setEditingDocDate('');
+                              }}
+                              className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
+                            >
+                              Cancel
+                            </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (editingDocId === doc.id) {
+                              setEditingDocId(null);
+                              setEditingDocTitle('');
+                              setEditingDocDate('');
+                              return;
+                            }
+                            setEditingDocId(doc.id);
+                            setEditingDocTitle(doc.title || '');
+                            setEditingDocDate(doc.date || '');
+                          }}
+                          className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
+                        >
+                          {editingDocId === doc.id ? 'Close' : 'Edit'}
+                        </button>
                         {(doc.kind === 'photo' || doc.url.startsWith('data:image/')) && (
                           <button
                             type="button"
