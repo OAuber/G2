@@ -1,6 +1,6 @@
 import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrthographicCamera, Text, Html, Mask, useMask } from '@react-three/drei';
+import { OrthographicCamera, Text, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { matchesFilters, applySortMode } from './Sidebar';
@@ -130,6 +130,7 @@ const MAX_ZOOM = 100000;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
 const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
 const SINGLE_VIEW_ZOOM_OUT_FACTOR = 0.95;
+const DEFAULT_RIBBON_OPACITY = 0.42;
 
 /* ------------------------------------------------------------------ */
 /*  Color palettes (aligned with 3D view)                              */
@@ -357,12 +358,65 @@ interface GridContentProps {
   relationshipRevealEnabled: boolean;
   singleIndividual?: boolean;
   onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+  onPhotoOverlayChange?: (overlay: {
+    url: string;
+    inset: { top: number; right: number; bottom: number; left: number };
+    reveal: number;
+  } | null) => void;
 }
 
+interface PhotoOverlayLayerProps {
+  photoLayerRef: React.RefObject<HTMLDivElement>;
+  photoImgRef: React.RefObject<HTMLImageElement>;
+  photoMaskLayerRef: React.RefObject<HTMLDivElement>;
+  maskTopRef: React.RefObject<HTMLDivElement>;
+  maskBottomRef: React.RefObject<HTMLDivElement>;
+  maskLeftRef: React.RefObject<HTMLDivElement>;
+  maskRightRef: React.RefObject<HTMLDivElement>;
+  overlayBg: string;
+}
+
+const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
+  photoLayerRef,
+  photoImgRef,
+  photoMaskLayerRef,
+  maskTopRef,
+  maskBottomRef,
+  maskLeftRef,
+  maskRightRef,
+  overlayBg,
+}) => (
+  <>
+    <div
+      ref={photoLayerRef}
+      className="absolute inset-0 pointer-events-none z-0 overflow-hidden"
+      style={{ opacity: 0, visibility: 'hidden' }}
+    >
+      <img
+        ref={photoImgRef}
+        alt="Selected individual"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          userSelect: 'none',
+        }}
+      />
+    </div>
+    <div ref={photoMaskLayerRef} className="absolute inset-0 pointer-events-none z-[1]" style={{ visibility: 'hidden' }}>
+      <div ref={maskTopRef} style={{ position: 'absolute', left: 0, top: 0, right: 0, height: 0, background: overlayBg }} />
+      <div ref={maskBottomRef} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 0, background: overlayBg }} />
+      <div ref={maskLeftRef} style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 0, background: overlayBg }} />
+      <div ref={maskRightRef} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 0, background: overlayBg }} />
+    </div>
+  </>
+);
+
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D,
+  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, onPhotoOverlayChange,
 }) => {
-  const photoMaskMaterialProps = useMask(17);
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
@@ -374,11 +428,9 @@ const GridContent: React.FC<GridContentProps> = ({
   const prevSelectedIdRef = useRef(selectedId);
   const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
   const [hovered3DAction, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
-  const [photoTexture, setPhotoTexture] = useState<THREE.Texture | null>(null);
-  const [photoImageAspect, setPhotoImageAspect] = useState(1);
   const [photoReveal, setPhotoReveal] = useState(0);
-  const [photoWindowProgress, setPhotoWindowProgress] = useState(0);
-  const [photoViewportHeight, setPhotoViewportHeight] = useState(0);
+  const projectVecARef = useRef(new THREE.Vector3());
+  const projectVecBRef = useRef(new THREE.Vector3());
   const [hoveredDocId, setHoveredDocId] = useState<string | null>(null);
   const [windowPhotoOverrideUrl, setWindowPhotoOverrideUrl] = useState<string | null>(null);
   const singleFitRef = useRef<{
@@ -388,7 +440,7 @@ const GridContent: React.FC<GridContentProps> = ({
     baseW: number;
     baseH: number;
   } | null>(null);
-  const { camera } = useThree();
+  const { camera, size } = useThree();
 
   const ribbonData = useMemo(
     () => computeRibbonData(individuals, data),
@@ -410,40 +462,7 @@ const GridContent: React.FC<GridContentProps> = ({
     [ribbonData],
   );
 
-  const selectedPhotoWindow = useMemo(() => {
-    if (!singleIndividual || !photoTexture || photoReveal <= 0 || selectedIdx < 0 || colsRef.current === 0) return null;
-    const rd = ribbonData[selectedIdx];
-    const cols = colsRef.current;
-    const col = selectedIdx % cols;
-    const row = Math.floor(selectedIdx / cols);
-    const cx = col * STEP_X;
-    const cy = -row * STEP_Y;
-    const rH = (rd.lifespan / maxLifespan) * CELL_H;
-    const viewportH = Math.max(1e-6, photoViewportHeight || rH);
-    const windowHRaw = rH + (viewportH - rH) * photoWindowProgress;
-    const windowH = Math.min(viewportH, Math.max(1e-6, windowHRaw));
-    const windowW = RIBBON_W;
-    const windowAspect = windowW / Math.max(1e-6, windowH);
-    const imgAspect = Math.max(1e-6, photoImageAspect);
-
-    // Start: fill window height (can overflow horizontally, clipped by mask)
-    const startImageH = windowH;
-    const startImageW = startImageH * imgAspect;
-
-    // End: contain full image inside window (no crop at full zoom)
-    let endImageW = windowW;
-    let endImageH = endImageW / imgAspect;
-    if (endImageH > windowH) {
-      endImageH = windowH;
-      endImageW = endImageH * imgAspect;
-    }
-
-    const p = Math.max(0, Math.min(1, photoWindowProgress));
-    const imageH = startImageH + (endImageH - startImageH) * p;
-    const imageW = startImageW + (endImageW - startImageW) * p;
-
-    return { cx, cy, rH, windowH, imageW, imageH };
-  }, [singleIndividual, photoTexture, photoReveal, selectedIdx, ribbonData, maxLifespan, photoImageAspect, photoWindowProgress, photoViewportHeight]);
+  const selectedPhotoUrl = windowPhotoOverrideUrl || (selectedId ? primaryPhotoUrlById?.[selectedId] : undefined);
 
   /* ---- Geometries ---- */
 
@@ -469,7 +488,7 @@ const GridContent: React.FC<GridContentProps> = ({
   const ribbonMaterial = useMemo(() => {
     const mat = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: 0.92,
+      opacity: DEFAULT_RIBBON_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: true,
     });
@@ -527,56 +546,6 @@ const GridContent: React.FC<GridContentProps> = ({
     colsRef.current = 0;
     singleFitRef.current = null;
   }, [ribbonData]);
-
-  useEffect(() => {
-    const selectedPhotoUrl = windowPhotoOverrideUrl || (selectedId ? primaryPhotoUrlById?.[selectedId] : undefined);
-    let cancelled = false;
-
-    if (!selectedPhotoUrl) {
-      setPhotoTexture((prev) => {
-        if (prev) prev.dispose();
-        return null;
-      });
-      setPhotoReveal(0);
-      setPhotoWindowProgress(0);
-      setPhotoViewportHeight(0);
-      return;
-    }
-
-    const loader = new THREE.TextureLoader();
-    loader.load(
-      selectedPhotoUrl,
-      (tex) => {
-        if (cancelled) {
-          tex.dispose();
-          return;
-        }
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.minFilter = THREE.LinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        tex.generateMipmaps = false;
-        tex.wrapS = THREE.ClampToEdgeWrapping;
-        tex.wrapT = THREE.ClampToEdgeWrapping;
-        setPhotoImageAspect((tex.image?.width && tex.image?.height) ? (tex.image.width / tex.image.height) : 1);
-        setPhotoTexture((prev) => {
-          if (prev && prev !== tex) prev.dispose();
-          return tex;
-        });
-      },
-      undefined,
-      () => {
-        if (cancelled) return;
-        setPhotoTexture((prev) => {
-          if (prev) prev.dispose();
-          return null;
-        });
-      }
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [primaryPhotoUrlById, selectedId, windowPhotoOverrideUrl]);
 
   useEffect(() => {
     setWindowPhotoOverrideUrl(null);
@@ -646,8 +615,8 @@ const GridContent: React.FC<GridContentProps> = ({
       }
     }
 
-    if (!needsReflow && initializedRef.current) {
-      if (!singleIndividual) ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
+    if (!needsReflow && initializedRef.current && !singleIndividual) {
+      ortho.position.x = ((colsRef.current - 1) * STEP_X) / 2;
       return;
     }
 
@@ -803,37 +772,112 @@ const GridContent: React.FC<GridContentProps> = ({
         // drift that can push the individual outside the viewport.
         ortho.position.y = centerY;
       }
-      if (photoTexture) {
-        const revealStart = minFitZoom * 0.9;
-        const revealEnd = minFitZoom * 1.7;
-        const t = (ortho.zoom - revealStart) / Math.max(1e-6, (revealEnd - revealStart));
-        const targetReveal = Math.max(0, Math.min(1, t));
-        setPhotoReveal((prev) => {
-          const next = prev + (targetReveal - prev) * 0.22;
-          return Math.abs(targetReveal - next) < 0.001 ? targetReveal : next;
-        });
-        const widthRatio = Math.max(0, Math.min(1, RIBBON_W / Math.max(1e-6, visW)));
-        const openStartRatio = 0.38;
-        const openT = (widthRatio - openStartRatio) / Math.max(1e-6, (1 - openStartRatio));
-        const targetOpen = Math.max(0, Math.min(1, openT));
-        setPhotoWindowProgress((prev) => {
-          const next = prev + (targetOpen - prev) * 0.2;
-          return Math.abs(targetOpen - next) < 0.001 ? targetOpen : next;
-        });
-        const targetVisH = Math.max(1e-6, visH);
-        setPhotoViewportHeight((prev) => {
-          const next = prev + (targetVisH - prev) * 0.3;
-          return Math.abs(targetVisH - next) < 0.0005 ? targetVisH : next;
-        });
+      // In photo overlay mode, lock camera center on the selected ribbon
+      // to remove zoom-position drift.
+      if (selectedPhotoUrl) {
+        if (cols > 0 && selectedIdx >= 0) {
+          const selCol = selectedIdx % cols;
+          const selRow = Math.floor(selectedIdx / cols);
+          ortho.position.x = selCol * STEP_X;
+          ortho.position.y = -selRow * STEP_Y;
+        } else {
+          ortho.position.x = centerX;
+          ortho.position.y = centerY;
+        }
+        ortho.updateMatrixWorld();
+      }
+      if (selectedPhotoUrl) {
+        // Photo is always present from default zoom, visible only through ribbon mask.
+        if (photoReveal !== 1) setPhotoReveal(1);
+
+        if (cols > 0 && selectedIdx >= 0) {
+          const rdSel = ribbonData[selectedIdx];
+          const col = selectedIdx % cols;
+          const row = Math.floor(selectedIdx / cols);
+          const cx = col * STEP_X;
+          const cy = -row * STEP_Y;
+          const rHSel = (rdSel.lifespan / maxLifespan) * CELL_H;
+          const windowH = Math.max(1e-6, rHSel);
+          const halfW = RIBBON_W / 2;
+          const halfH = windowH / 2;
+
+          const projectRibbonRectPx = () => {
+            const a = projectVecARef.current.set(cx - halfW, cy + halfH, 0).project(ortho);
+            const b = projectVecBRef.current.set(cx + halfW, cy - halfH, 0).project(ortho);
+            const x1 = (a.x * 0.5 + 0.5) * size.width;
+            const y1 = (-a.y * 0.5 + 0.5) * size.height;
+            const x2 = (b.x * 0.5 + 0.5) * size.width;
+            const y2 = (-b.y * 0.5 + 0.5) * size.height;
+            return {
+              left: Math.min(x1, x2),
+              right: Math.max(x1, x2),
+              top: Math.min(y1, y2),
+              bottom: Math.max(y1, y2),
+            };
+          };
+
+          let rect = projectRibbonRectPx();
+          let projectedW = Math.max(1e-6, rect.right - rect.left);
+
+          // Strict max zoom: ribbon width never exceeds viewport width.
+          // Use a tiny iterative correction to remove residual overshoot.
+          const maxWidthPx = Math.max(1e-6, size.width);
+          for (let i = 0; i < 3 && projectedW > maxWidthPx; i += 1) {
+            const factor = maxWidthPx / projectedW;
+            ortho.zoom = Math.max(minFitZoom, ortho.zoom * factor);
+            ortho.updateProjectionMatrix();
+            ortho.updateMatrixWorld();
+            rect = projectRibbonRectPx();
+            projectedW = Math.max(1e-6, rect.right - rect.left);
+          }
+
+          let left = Math.max(0, Math.min(size.width, rect.left));
+          let rightPx = Math.max(0, Math.min(size.width, rect.right));
+          const top = Math.max(0, Math.min(size.height, rect.top));
+          const bottomPx = Math.max(0, Math.min(size.height, rect.bottom));
+
+          // End-state snap:
+          // when ribbon is close enough to viewport width, force exact terminal state.
+          const widthProgressRaw = Math.max(0, Math.min(1, projectedW / Math.max(1e-6, maxWidthPx)));
+          if (widthProgressRaw >= 0.97) {
+            left = 0;
+            rightPx = size.width;
+          }
+
+          const nextInset = {
+            top,
+            right: Math.max(0, size.width - rightPx),
+            bottom: Math.max(0, size.height - bottomPx),
+            left,
+          };
+          onPhotoOverlayChange?.({
+            url: selectedPhotoUrl,
+            inset: nextInset,
+            reveal: 1,
+          });
+
+          // Ribbon opacity reaches exactly 0 when projected width is near viewport width.
+          if (projectedW >= maxWidthPx * 0.97) {
+            ribbonMaterial.opacity = 0;
+          } else {
+            const widthProgress = Math.max(0, Math.min(1, projectedW / maxWidthPx));
+            ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY * (1 - widthProgress);
+          }
+        } else {
+          onPhotoOverlayChange?.(null);
+          ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+        }
       } else if (photoReveal !== 0) {
         setPhotoReveal(0);
-        if (photoWindowProgress !== 0) setPhotoWindowProgress(0);
+        onPhotoOverlayChange?.(null);
+        ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
       }
       initializedRef.current = true;
       return;
     } else {
       if (photoReveal !== 0) setPhotoReveal(0);
-      if (photoWindowProgress !== 0) setPhotoWindowProgress(0);
+      onPhotoOverlayChange?.(null);
+      ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
         ortho.position.set(gridCx, CELL_H / 2 + MARGIN - visH / 2, 100);
@@ -1028,7 +1072,8 @@ const GridContent: React.FC<GridContentProps> = ({
 
     const nameText = `${indi.givenName} ${indi.surname}`;
     const textColor = isDarkMode ? '#ffffff' : '#1e293b';
-    const outlineW = isDarkMode ? 0.06 : 0;
+    // In dark mode, outline halos create black boxes over ribbon/text overlap.
+    const outlineW = 0;
     const fs = (isHover ? 5.5 * YEAR : 5 * YEAR) * 0.66;
     const dateFs = fs * 0.62;
     const childFs = dateFs;
@@ -1400,24 +1445,6 @@ const GridContent: React.FC<GridContentProps> = ({
           onPointerLeave={handleTraitPointerLeave}
           onClick={handleTraitClick}
         />
-        {selectedPhotoWindow && photoTexture && (
-          <>
-            <Mask id={17} position={[selectedPhotoWindow.cx, selectedPhotoWindow.cy, 0.004]}>
-              <planeGeometry args={[RIBBON_W, selectedPhotoWindow.windowH]} />
-            </Mask>
-            <mesh position={[selectedPhotoWindow.cx, selectedPhotoWindow.cy, 0.005]}>
-              <planeGeometry args={[selectedPhotoWindow.imageW, selectedPhotoWindow.imageH]} />
-              <meshBasicMaterial
-                map={photoTexture}
-                transparent
-                opacity={photoReveal * 0.98}
-                depthWrite={false}
-                {...photoMaskMaterialProps}
-              />
-            </mesh>
-          </>
-        )}
-
         {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} />}
         {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
           <RibbonLabel index={hoveredIdx} isHover={true} />
@@ -1444,6 +1471,59 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   singleIndividual = false,
   onExpandAndSwitch3D,
 }) => {
+  const photoLayerRef = useRef<HTMLDivElement>(null);
+  const photoImgRef = useRef<HTMLImageElement>(null);
+  const photoMaskLayerRef = useRef<HTMLDivElement>(null);
+  const maskTopRef = useRef<HTMLDivElement>(null);
+  const maskBottomRef = useRef<HTMLDivElement>(null);
+  const maskLeftRef = useRef<HTMLDivElement>(null);
+  const maskRightRef = useRef<HTMLDivElement>(null);
+  const overlayBg = isDarkMode ? '#000000' : '#f0f9ff';
+  const handlePhotoOverlayChange = useCallback((overlay: {
+    url: string;
+    inset: { top: number; right: number; bottom: number; left: number };
+    reveal: number;
+  } | null) => {
+    const layer = photoLayerRef.current;
+    const img = photoImgRef.current;
+    const maskLayer = photoMaskLayerRef.current;
+    const mTop = maskTopRef.current;
+    const mBottom = maskBottomRef.current;
+    const mLeft = maskLeftRef.current;
+    const mRight = maskRightRef.current;
+    if (!layer || !img || !maskLayer || !mTop || !mBottom || !mLeft || !mRight) return;
+
+    if (!overlay) {
+      layer.style.opacity = '0';
+      layer.style.visibility = 'hidden';
+      maskLayer.style.visibility = 'hidden';
+      return;
+    }
+
+    if (img.src !== overlay.url) img.src = overlay.url;
+    layer.style.visibility = 'visible';
+    maskLayer.style.visibility = 'visible';
+    layer.style.opacity = String(overlay.reveal);
+
+    const top = Math.max(0, overlay.inset.top);
+    const right = Math.max(0, overlay.inset.right);
+    const bottom = Math.max(0, overlay.inset.bottom);
+    const left = Math.max(0, overlay.inset.left);
+
+    mTop.style.height = `${top}px`;
+    mBottom.style.height = `${bottom}px`;
+    mLeft.style.top = `${top}px`;
+    mLeft.style.bottom = `${bottom}px`;
+    mLeft.style.width = `${left}px`;
+    mRight.style.top = `${top}px`;
+    mRight.style.bottom = `${bottom}px`;
+    mRight.style.width = `${right}px`;
+
+    mTop.style.background = overlayBg;
+    mBottom.style.background = overlayBg;
+    mLeft.style.background = overlayBg;
+    mRight.style.background = overlayBg;
+  }, [overlayBg]);
   const individuals = useMemo(() => {
     if (!data) return [];
     if (singleIndividual && selectedId) {
@@ -1467,12 +1547,23 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
 
   return (
     <div className="w-full h-full relative" style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}>
+      <PhotoOverlayLayer
+        photoLayerRef={photoLayerRef}
+        photoImgRef={photoImgRef}
+        photoMaskLayerRef={photoMaskLayerRef}
+        maskTopRef={maskTopRef}
+        maskBottomRef={maskBottomRef}
+        maskLeftRef={maskLeftRef}
+        maskRightRef={maskRightRef}
+        overlayBg={overlayBg}
+      />
       <Canvas
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: true }}
         dpr={[1, 2]}
-        style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}
+        className="relative z-10"
+        style={{ background: 'transparent' }}
         onCreated={({ gl }) => {
-          gl.setClearColor(isDarkMode ? '#000000' : '#f0f9ff', 1);
+          gl.setClearColor('#000000', 0);
           gl.clear(true, true, true);
         }}
       >
@@ -1486,7 +1577,6 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
 
         <ScrollZoomControls />
 
-        <color attach="background" args={[isDarkMode ? '#000000' : '#f0f9ff']} />
         <ambientLight intensity={1} />
 
         <GridContent
@@ -1500,6 +1590,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           relationshipRevealEnabled={relationshipRevealEnabled}
           singleIndividual={singleIndividual}
           onExpandAndSwitch3D={onExpandAndSwitch3D}
+          onPhotoOverlayChange={handlePhotoOverlayChange}
         />
       </Canvas>
 

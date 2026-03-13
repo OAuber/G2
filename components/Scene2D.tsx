@@ -1,6 +1,20 @@
 import React, { useMemo, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Individual, GedcomData, Gender, SortMode } from '../types';
 
+/*
+ * ============================================================================
+ * WARNING - LEGACY COMPONENT (DO NOT REUSE FOR ACTIVE 2D INDIVIDUAL FLOW)
+ * ----------------------------------------------------------------------------
+ * This file is intentionally kept as historical reference only.
+ * The active 2D individual rendering path is now handled by `Scene2DIndividual`
+ * (which delegates to the modern `Scene2DGrid` pipeline in single-individual mode).
+ *
+ * TODO (cleanup phase):
+ * - Remove this legacy implementation once migration is validated long-term.
+ * - Do not add new features here.
+ * ============================================================================
+ */
+
 interface Scene2DProps {
   data: GedcomData | null;
   selectedId?: string | null;

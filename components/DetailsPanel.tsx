@@ -287,12 +287,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     source: 'local' | 'online';
     kind: 'photo' | 'document';
     date: string;
+    file: File | null;
   }>({
     title: '',
     url: '',
     source: 'online',
     kind: 'document',
     date: '',
+    file: null,
   });
 
   useEffect(() => {
@@ -678,7 +680,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   <select
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     value={docForm.source}
-                    onChange={(e) => setDocForm((prev) => ({ ...prev, source: e.target.value as 'local' | 'online', url: '' }))}
+                    onChange={(e) => setDocForm((prev) => ({ ...prev, source: e.target.value as 'local' | 'online', url: '', file: null }))}
                   >
                     <option value="online">Online</option>
                     <option value="local">Local</option>
@@ -704,16 +706,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     type="file"
                     accept={docForm.kind === 'photo' ? 'image/*' : '*'}
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
-                    onChange={async (e) => {
+                    onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (!file) return;
-                      const dataUrl = await new Promise<string>((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onload = () => resolve(String(reader.result || ''));
-                        reader.onerror = () => reject(reader.error);
-                        reader.readAsDataURL(file);
-                      });
-                      setDocForm((prev) => ({ ...prev, url: dataUrl, title: prev.title || file.name }));
+                      setDocForm((prev) => ({ ...prev, file, title: prev.title || file.name }));
                       e.currentTarget.value = '';
                     }}
                   />
@@ -726,24 +722,34 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 />
                 <button
                   type="button"
-                  disabled={!docForm.title || !docForm.url}
+                  disabled={!docForm.title || (docForm.source === 'online' ? !docForm.url : !docForm.file)}
                   className={`w-full py-2 rounded text-sm font-bold ${actionBtnClass} disabled:opacity-50`}
-                  onClick={() => {
+                  onClick={async () => {
                     if (!individual || !onAddDocument) return;
+                    let resolvedUrl = docForm.url;
+                    if (docForm.source === 'local') {
+                      if (!docForm.file) return;
+                      resolvedUrl = await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(String(reader.result || ''));
+                        reader.onerror = () => reject(reader.error);
+                        reader.readAsDataURL(docForm.file as Blob);
+                      });
+                    }
                     const inferredKind: 'photo' | 'document' =
                       docForm.kind === 'photo' ||
-                      docForm.url.startsWith('data:image/') ||
-                      /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(docForm.url)
+                      resolvedUrl.startsWith('data:image/') ||
+                      /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(resolvedUrl)
                         ? 'photo'
                         : 'document';
                     onAddDocument(individual.id, {
                       title: docForm.title,
-                      url: docForm.url,
+                      url: resolvedUrl,
                       source: docForm.source,
                       kind: inferredKind,
                       date: docForm.date || undefined,
                     });
-                    setDocForm({ title: '', url: '', source: 'online', kind: 'document', date: '' });
+                    setDocForm({ title: '', url: '', source: 'online', kind: 'document', date: '', file: null });
                   }}
                 >
                   Add document

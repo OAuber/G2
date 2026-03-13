@@ -3,6 +3,7 @@ import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 import Scene3D from './components/Scene3D';
+import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
@@ -2701,6 +2702,22 @@ function App() {
             layoutParams={layoutParams}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
+          />
+        ) : is2dIndividual ? (
+          <Scene2DIndividual
+            data={gedcomData}
+            selectedId={selectedIndividual?.id}
+            selectedIds={selectedIdsFor2D}
+            primaryPhotoUrlById={primaryPhotoUrlById}
+            documentsByIndividualId={documentsByIndividualId}
+            onIndividualClick={handleInspectIndividual}
+            onExpandAndSwitch3D={handleExpandAndSwitch3D}
+            isDarkMode={isDarkMode}
+            relationshipRevealEnabled={relationshipRevealEnabled}
+            sortMode={sortMode}
+            activeFilters={activeFilters}
+            leftPanelOpen={leftPanelOpen}
+            rightPanelOpen={rightPanelOpen}
           />
         ) : (
           <Scene2DGrid
