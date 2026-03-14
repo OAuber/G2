@@ -85,6 +85,7 @@ interface Scene2DGridProps {
   singleIndividual?: boolean;
   onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
   onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
+  onWebGLContextLost?: () => void;
 }
 
 interface RibbonDocument {
@@ -1753,6 +1754,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   singleIndividual = false,
   onExpandAndSwitch3D,
   onRequest2DModeSwitch,
+  onWebGLContextLost,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -1762,6 +1764,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   const maskLeftRef = useRef<HTMLDivElement>(null);
   const maskRightRef = useRef<HTMLDivElement>(null);
   const individualDefaultZoomRef = useRef<number | null>(null);
+  const contextLostNotifiedRef = useRef(false);
   const overlayBg = isDarkMode ? '#000000' : '#f0f9ff';
   const modeSwitchLockRef = useRef(false);
   useEffect(() => {
@@ -1876,6 +1879,13 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
         onCreated={({ gl }) => {
           gl.setClearColor('#000000', 0);
           gl.clear(true, true, true);
+          const canvas = gl.domElement;
+          canvas.addEventListener('webglcontextlost', (event) => {
+            event.preventDefault();
+            if (contextLostNotifiedRef.current) return;
+            contextLostNotifiedRef.current = true;
+            onWebGLContextLost?.();
+          }, { passive: false });
         }}
       >
         <OrthographicCamera

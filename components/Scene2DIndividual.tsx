@@ -24,6 +24,7 @@ interface Scene2DIndividualProps {
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
   onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
+  onWebGLContextLost?: () => void;
 }
 
 const Scene2DIndividual: React.FC<Scene2DIndividualProps> = (props) => {

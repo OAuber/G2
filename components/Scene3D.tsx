@@ -48,13 +48,15 @@ function computeModePosition(mode: CameraMode, ct: Vector3, sceneSize: number, s
         return new Vector3(ct.x, ct.y + dist, ct.z);
     }
     if (mode === 'individual') {
-        const dist = individualViewDistance();
-        const zSign = selectedGender === Gender.Female ? 1 : -1;
-        const cos45 = Math.SQRT1_2;
+        // Close-up framing with explicit camera offsets.
+        // `ct.x` is centered on the ribbon (width = INDIVIDUAL_WIDTH),
+        // so birth point is at x = ct.x - INDIVIDUAL_WIDTH / 2.
+        const birthX = ct.x - INDIVIDUAL_WIDTH / 2;
+        const zOffset = selectedGender === Gender.Female ? -90 : 90;
         return new Vector3(
-            ct.x,
-            ct.y - dist * cos45,
-            ct.z + zSign * dist * cos45
+            birthX + 80,
+            ct.y,
+            ct.z + zOffset
         );
     }
     // free: random-ish 3/4 view, camera on X- side looking toward X+
@@ -229,6 +231,7 @@ interface Scene3DProps {
   layoutParams?: LayoutParams;
   topViewLabelMaxZSpan?: number;
   labelFontSize?: number;
+  onWebGLContextLost?: () => void;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -254,8 +257,10 @@ const Scene3D: React.FC<Scene3DProps> = ({
   layoutParams,
   topViewLabelMaxZSpan = 500,
   labelFontSize = 3,
+  onWebGLContextLost,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
+  const contextLostNotifiedRef = useRef(false);
 
   const centerTargetRef = useRef(new Vector3());
   const sceneSizeRef = useRef(100);
@@ -460,16 +465,16 @@ const Scene3D: React.FC<Scene3DProps> = ({
             const pos = new Vector3();
             const scl = new Vector3();
             targetNode.matrix.decompose(pos, new Quaternion(), scl);
-
-            // True geometric center of the ribbon (matrix position is already centered)
-            const indivCenter = new Vector3(pos.x, pos.y, pos.z);
-
-            // Label pivot: offset to 3/4 along life path
-            const progress = 0.25;
+            // Matrix pivot is at ~75% of life path. Recenter to true geometric
+            // middle (50%) so close-up camera targets the ribbon center.
+            const progressToCenter = 0.25;
             const zSign = targetNode.gender === Gender.Female ? 1 : -1;
-            pos.y += scl.y * progress;
-            pos.z += scl.z * progress * zSign;
-            return { centerTarget: pos, individualCenter: indivCenter, sceneSize: size || 100 };
+            const indivCenter = new Vector3(
+              pos.x,
+              pos.y - scl.y * progressToCenter,
+              pos.z - scl.z * progressToCenter * zSign
+            );
+            return { centerTarget: indivCenter, individualCenter: indivCenter, sceneSize: size || 100 };
         }
         const center = new Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
         return { centerTarget: center, individualCenter: center.clone(), sceneSize: size || 100 };
@@ -513,7 +518,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   const isOrtho = cameraMode === 'top' && flyTarget === null;
   const isAnimating = flyTarget !== null;
 
-  // Determine the gender of the selected individual (for individual view angle)
+  // Determine selected individual gender for close-up Z offset.
   const selectedGender: Gender | null = useMemo(() => {
     if (!selectedId || !data) return null;
     return data.individuals[selectedId]?.gender ?? null;
@@ -566,6 +571,15 @@ const Scene3D: React.FC<Scene3DProps> = ({
       className="bg-transparent"
       dpr={[1, 1.5]}
       gl={{ antialias: false, powerPreference: 'high-performance' }}
+      onCreated={({ gl }) => {
+        const canvas = gl.domElement;
+        canvas.addEventListener('webglcontextlost', (event) => {
+          event.preventDefault();
+          if (contextLostNotifiedRef.current) return;
+          contextLostNotifiedRef.current = true;
+          onWebGLContextLost?.();
+        }, { passive: false });
+      }}
     >
         {/* IMPORTANT: Restore background color to make sure the scene reacts to theme changes (fixes Light Mode) */}
         <color attach="background" args={[isDarkMode ? '#000000' : '#f0f9ff']} />
@@ -616,8 +630,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             ref={controlsRef} 
             makeDefault 
             enabled={!disableControls && !isAnimating}
-            enableRotate={cameraMode === 'free' && !isAnimating}
-            enableDamping={cameraMode === 'free'}
+            enableRotate={cameraMode !== 'top' && !isAnimating}
+            enableDamping={cameraMode !== 'top'}
             dampingFactor={0.1}
             enablePan={true}
             screenSpacePanning={true}

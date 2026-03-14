@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
@@ -274,6 +274,7 @@ function App() {
   const [p2pProposals, setP2PProposals] = useState<P2PProposalItem[]>([]);
   const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
+  const [webglRecoveryKey, setWebglRecoveryKey] = useState(0);
   const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
@@ -299,6 +300,10 @@ function App() {
   const visibilitySettingsRef = useRef<P2PVisibilitySettings>(p2pVisibilitySettings);
   const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
   const databaseNameRef = useRef<string>(databaseName);
+  const webglRecoveryInFlightRef = useRef(false);
+  const webglLastRecoveryAtRef = useRef(0);
+  const webglRecoverySuppressedUntilRef = useRef(0);
+  const webglRecoveryTimerRef = useRef<number | null>(null);
   const bundleToastTimeoutRef = useRef<number | null>(null);
   const syncChunkReceiveTimeoutRef = useRef<number | null>(null);
   const incomingSyncChunksRef = useRef<Record<string, {
@@ -1453,6 +1458,11 @@ function App() {
 
   const handleSetDisplayMode = (target: DisplayMode) => {
       if (flyTarget !== null) return;
+      if (target !== displayMode) {
+        // During intentional view switches, old canvases can emit context-lost
+        // while unmounting. Ignore recovery in that short window to prevent flicker.
+        webglRecoverySuppressedUntilRef.current = Date.now() + 1500;
+      }
 
       const wasIn2D = viewMode === '2D';
       const goingTo3D = target.startsWith('3d');
@@ -1481,6 +1491,34 @@ function App() {
 
       setDisplayMode(target);
   };
+
+  const handleWebGLContextLost = useCallback(() => {
+    const now = Date.now();
+    if (now < webglRecoverySuppressedUntilRef.current) return;
+    // Guard against rapid context-lost storms (notably during HMR/dev updates)
+    // to avoid visible remount flicker loops.
+    if (webglRecoveryInFlightRef.current) return;
+    if (now - webglLastRecoveryAtRef.current < 2000) return;
+    webglRecoveryInFlightRef.current = true;
+    webglLastRecoveryAtRef.current = now;
+    if (webglRecoveryTimerRef.current !== null) {
+      window.clearTimeout(webglRecoveryTimerRef.current);
+      webglRecoveryTimerRef.current = null;
+    }
+    webglRecoveryTimerRef.current = window.setTimeout(() => {
+      setWebglRecoveryKey((prev) => prev + 1);
+      webglRecoveryInFlightRef.current = false;
+      webglRecoveryTimerRef.current = null;
+    }, 120);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (webglRecoveryTimerRef.current !== null) {
+        window.clearTimeout(webglRecoveryTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
     setOriginalGedcomData(data);
@@ -2714,6 +2752,7 @@ function App() {
         
         {viewMode === '3D' ? (
           <Scene3D 
+            key={`scene3d-${webglRecoveryKey}`}
             rootIndividual={rootIndividual} 
             selectedId={selectedIndividual?.id}
             data={gedcomData} 
@@ -2736,9 +2775,11 @@ function App() {
             layoutParams={layoutParams}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
+            onWebGLContextLost={handleWebGLContextLost}
           />
         ) : is2dIndividual ? (
           <Scene2DIndividual
+            key={`scene2d-individual-${webglRecoveryKey}`}
             data={gedcomData}
             selectedId={selectedIndividual?.id}
             selectedIds={selectedIdsFor2D}
@@ -2753,9 +2794,11 @@ function App() {
             activeFilters={activeFilters}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
+            onWebGLContextLost={handleWebGLContextLost}
           />
         ) : (
           <Scene2DGrid
+            key={`scene2d-grid-${webglRecoveryKey}`}
             data={gedcomData}
             selectedId={selectedIndividual?.id}
             selectedIds={selectedIdsFor2D}
@@ -2771,6 +2814,7 @@ function App() {
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
             singleIndividual={is2dIndividual}
+            onWebGLContextLost={handleWebGLContextLost}
           />
         )}
         
