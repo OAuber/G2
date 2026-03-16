@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { Text, Billboard } from '@react-three/drei';
@@ -13,6 +13,8 @@ interface InstancedTreeProps {
   selectedId?: string | null;
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
+  onChildLabelClick?: (childId: string) => void;
+  onMotherLabelClick?: (motherId: string) => void;
   isDarkMode?: boolean;
   relationshipRevealEnabled?: boolean;
   cameraMode?: CameraMode;
@@ -25,12 +27,15 @@ interface TraitInstanceInfo {
     nodeId: string;
     type: string;
     relatedId?: string;
+    slotKey?: string;
+    childGender?: Gender;
 }
 
 // Data for child name labels (collected during layout, rendered by ChildLabels)
 interface ChildLabelData {
     x: number; y: number; z: number;
     childId: string;
+    slotKey: string;
     nodeZ: number;
     stackIndex: number; // vertical offset index for twins/triplets at the same position
     stackTotal: number; // total siblings at this position (for centering)
@@ -54,6 +59,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   selectedId,
   onNodeClick, 
   onTraitClick,
+  onChildLabelClick,
+  onMotherLabelClick,
   isDarkMode = true,
   relationshipRevealEnabled = false,
   cameraMode = 'individual',
@@ -67,7 +74,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const connectorsGeometryRef = useRef<THREE.BufferGeometry>(null);
   
   const [hoveredNode, setHoveredNode] = useState<LayoutNode | null>(null);
+  const [activeChildSlotKey, setActiveChildSlotKey] = useState<string | null>(null);
+  const [activeBirthNodeId, setActiveBirthNodeId] = useState<string | null>(null);
+  const [activeChildHoverId, setActiveChildHoverId] = useState<string | null>(null);
   const traitMapRef = useRef<TraitInstanceInfo[]>([]);
+  const baseTraitColorsRef = useRef<Float32Array | null>(null);
+  const hideHoverTimerRef = useRef<number | null>(null);
   const childLabelsDataRef = useRef<ChildLabelData[]>([]);
   const isTopView = cameraMode === 'top';
 
@@ -199,6 +211,28 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const totalTraits = useMemo(() => nodes.reduce((sum, n) => sum + n.traits.length, 0), [nodes]);
   const nodesMap = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
+  const cancelHoverHide = () => {
+      if (hideHoverTimerRef.current !== null) {
+          window.clearTimeout(hideHoverTimerRef.current);
+          hideHoverTimerRef.current = null;
+      }
+  };
+  const scheduleHoverHide = () => {
+      cancelHoverHide();
+      hideHoverTimerRef.current = window.setTimeout(() => {
+          setActiveChildSlotKey(null);
+          setActiveBirthNodeId(null);
+          setActiveChildHoverId(null);
+      }, 1300);
+  };
+  useEffect(() => {
+      return () => {
+          if (hideHoverTimerRef.current !== null) {
+              window.clearTimeout(hideHoverTimerRef.current);
+              hideHoverTimerRef.current = null;
+          }
+      };
+  }, []);
 
   // Main Render Loop: Updates Matrices and Colors
   useLayoutEffect(() => {
@@ -216,6 +250,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
     // Buffers
     traitMapRef.current = new Array(totalTraits);
+    baseTraitColorsRef.current = new Float32Array(Math.max(1, totalTraits) * 3);
     childLabelsDataRef.current = [];
     const fadingData = new Float32Array(nodes.length);
     const linePositions: number[] = [];
@@ -279,6 +314,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       pathMesh.setMatrixAt(i, pathMatrix);
       pathMesh.setColorAt(i, nodeColor.clone().addScalar(isSelected ? 0.05 : 0.1));
 
+      const childSlotMeta = new Map<string, { mixed: boolean; gender: Gender }>();
+      node.traits.forEach((t) => {
+          if (t.type !== 'child' || !t.childId) return;
+          const slotKey = `${node.id}:${t.offset.toFixed(4)}`;
+          const childGender = nodesMap.get(t.childId)?.gender ?? data?.individuals[t.childId]?.gender ?? Gender.Unknown;
+          const prev = childSlotMeta.get(slotKey);
+          if (!prev) {
+              childSlotMeta.set(slotKey, { mixed: false, gender: childGender });
+          } else if (prev.gender !== childGender) {
+              childSlotMeta.set(slotKey, { mixed: true, gender: Gender.Unknown });
+          }
+      });
+
       // 4. Traits & Connectors
       node.traits.forEach(trait => {
           const traitY = bottomY + trait.offset;
@@ -303,8 +351,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           else if (trait.type === 'death') traitColor.set('#1e293b'); 
           else if (trait.type === 'child') {
               let cColor = '#cbd5e1';
+              const slotKey = `${node.id}:${trait.offset.toFixed(4)}`;
+              const slotInfo = childSlotMeta.get(slotKey);
+              let childGender: Gender = Gender.Unknown;
               if (trait.childId) {
                   const c = nodesMap.get(trait.childId);
+                  childGender = c?.gender ?? data?.individuals[trait.childId]?.gender ?? Gender.Unknown;
                   if (c) {
                       cColor = c.gender === Gender.Female ? '#ef4444' : '#3b82f6';
                   } else if (data?.individuals[trait.childId]) {
@@ -312,6 +364,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       cColor = child.gender === Gender.Female ? '#ef4444' : '#3b82f6';
                   }
               }
+              if (slotInfo?.mixed) cColor = '#9ca3af';
               traitColor.set(cColor);
               overrideColor = cColor; 
 
@@ -334,11 +387,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       y: traitY,
                       z: traitZ,
                       childId: trait.childId,
+                      slotKey,
                       nodeZ: tempPos.z,
                       stackIndex: 0,
                       stackTotal: 1
                   });
               }
+              traitMapRef.current[traitIndex] = {
+                  nodeId: node.id,
+                  type: trait.type,
+                  relatedId: trait.childId,
+                  slotKey,
+                  childGender,
+              };
           }
           else if (trait.type === 'marriage') {
               traitColor.set('#cbd5e1');
@@ -353,12 +414,17 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               traitMatrix.compose(new THREE.Vector3(posX, traitY, traitZ), tempQuat, traitScale);
               traitsMesh.setMatrixAt(traitIndex, traitMatrix);
               traitsMesh.setColorAt(traitIndex, traitColor);
+              baseTraitColorsRef.current![traitIndex * 3] = traitColor.r;
+              baseTraitColorsRef.current![(traitIndex * 3) + 1] = traitColor.g;
+              baseTraitColorsRef.current![(traitIndex * 3) + 2] = traitColor.b;
 
-              traitMapRef.current[traitIndex] = {
-                  nodeId: node.id,
-                  type: trait.type,
-                  relatedId: trait.spouseId || trait.childId
-              };
+              if (!traitMapRef.current[traitIndex]) {
+                  traitMapRef.current[traitIndex] = {
+                      nodeId: node.id,
+                      type: trait.type,
+                      relatedId: trait.spouseId || trait.childId
+                  };
+              }
               traitIndex++;
           }
 
@@ -533,6 +599,36 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     applyPathColors(new Set());
   }, [relationshipRevealEnabled]);
 
+  useEffect(() => {
+    const mesh = traitsMeshRef.current;
+    const base = baseTraitColorsRef.current;
+    if (!mesh || !base) return;
+    const hoveredGender = activeChildHoverId
+      ? (data?.individuals[activeChildHoverId]?.gender ?? Gender.Unknown)
+      : Gender.Unknown;
+    const hoveredColor = hoveredGender === Gender.Female
+      ? new THREE.Color('#ef4444')
+      : hoveredGender === Gender.Male
+        ? new THREE.Color('#3b82f6')
+        : new THREE.Color('#9ca3af');
+    const c = new THREE.Color();
+    for (let i = 0; i < traitMapRef.current.length; i++) {
+      const info = traitMapRef.current[i];
+      if (!info) continue;
+      c.setRGB(base[i * 3], base[(i * 3) + 1], base[(i * 3) + 2]);
+      if (
+        info.type === 'child' &&
+        activeChildSlotKey &&
+        info.slotKey === activeChildSlotKey &&
+        activeChildHoverId
+      ) {
+        c.copy(hoveredColor);
+      }
+      mesh.setColorAt(i, c);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [activeChildSlotKey, activeChildHoverId, data]);
+
   // --- Interaction Handlers ---
 
   const handleBoxClick = (e: ThreeEvent<MouseEvent>) => {
@@ -572,14 +668,45 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       if (e.instanceId !== undefined) {
           const info = traitMapRef.current[e.instanceId];
           if (info) {
+              // Birth dashes (child traits) are hover-only: no click side-effect.
+              if (info.type === 'child') {
+                  return;
+              }
+              if (info.type === 'birth') {
+                  const motherId = data?.individuals[info.nodeId]?.familyChildId
+                      ? data?.families[data.individuals[info.nodeId].familyChildId!]?.wifeId
+                      : undefined;
+                  if (motherId) {
+                      onMotherLabelClick?.(motherId);
+                  }
+                  return;
+              }
+
               onTraitClick?.(info.type, info.nodeId, info.relatedId);
               if (info.type === 'marriage' && info.relatedId) {
-                   onNodeClick?.(info.relatedId);
-              } else if (info.type === 'birth' || info.type === 'death') {
-                   onNodeClick?.(info.nodeId);
+                  onNodeClick?.(info.relatedId);
+              } else if (info.type === 'death') {
+                  onNodeClick?.(info.nodeId);
               }
           }
       }
+  };
+  const handleTraitPointerMove = (e: ThreeEvent<PointerEvent>) => {
+      if (e.instanceId === undefined) return;
+      const info = traitMapRef.current[e.instanceId];
+      if (!info) return;
+      e.stopPropagation();
+      cancelHoverHide();
+      if (info.type === 'child' && info.slotKey) {
+          setActiveChildSlotKey(info.slotKey);
+          setActiveBirthNodeId(null);
+          setActiveChildHoverId(null);
+      } else if (info.type === 'birth') {
+          setActiveBirthNodeId(info.nodeId);
+          setActiveChildSlotKey(null);
+          setActiveChildHoverId(null);
+      }
+      document.body.style.cursor = 'pointer';
   };
 
   const selectedSpouseIds = useMemo<string[]>(() => {
@@ -655,6 +782,18 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       };
       const birthPos = traitPos(0);
       const deathPos = traitPos(height);
+      const dateXOffset = thickness * (isTopView ? DATE_X_FACTOR_TOP : DATE_X_FACTOR_SIDE);
+      // Keep the mother label at the same ribbon-to-name distance as child first names.
+      const dashLen = thickness / 3;
+      const traitEndX = (thickness / 2) + (dashLen / 2);
+      const uniformGapX = Math.max(thickness * 0.025, (dateXOffset - traitEndX) * 0.82);
+      const estimatedDateWidthX = (labelFontSize * 0.48) * (isTopView ? 2.6 : 2.3);
+      const motherNameOffsetX = dateXOffset + estimatedDateWidthX + uniformGapX;
+      const motherPos = new THREE.Vector3(
+          p.x - motherNameOffsetX,
+          birthPos.y,
+          birthPos.z
+      );
       const camDir = new THREE.Vector3();
       camera.getWorldDirection(camDir);
       const fromPositiveZ = camDir.z < 0;
@@ -663,15 +802,55 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const effectiveFromNegativeZ = isTopView ? false : fromNegativeZ;
       const birthAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
       const deathAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
-      const topNameAnchor: 'left' | 'right' = node.gender === Gender.Female ? 'left' : 'right';
-      const topNameShift = node.gender === Gender.Female ? thickness * 1.06 : -thickness * 1.06;
+      const topSideForGender = (g: Gender) => {
+          // Dedicated top-view layout:
+          // - men justified on left side
+          // - women justified on right side
+          if (g === Gender.Female) return { anchor: 'left' as const, offsetX: -9, offsetZ: 10 };
+          return { anchor: 'right' as const, offsetX: -9, offsetZ: -10 };
+      };
+      const topSelfSide = topSideForGender(node.gender);
       const fullName = `${indi.givenName} ${indi.surname}`.trim();
-      const marriageCount = node.traits.reduce((acc, t) => acc + (t.type === 'marriage' ? 1 : 0), 0);
-      const jitterHash = node.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-      const outwardSteps = [1.2, 2.0, 2.8];
-      const outwardStep = outwardSteps[jitterHash % outwardSteps.length];
-      // In top view with multiple unions, push labels farther from the ribbon (never closer).
-      const topNameJitter = (isTopView && marriageCount > 1) ? -(outwardStep * fs * 0.7) : 0;
+      // Keep top-view line alignment deterministic to avoid random vertical drift.
+      const topNameJitter = 0;
+      const spouseUnionLines = (() => {
+          if (!data || !indi.familySpouseIds || indi.familySpouseIds.length === 0) {
+              return [] as Array<{ spouseId: string; spouseName: string; spouseGender: Gender; year: number | null; idx: number }>;
+          }
+          const entries = indi.familySpouseIds.map((famId, idx) => {
+              const fam = data.families[famId];
+              if (!fam) return null;
+              const spouseId = fam.husbandId === node.id ? fam.wifeId : fam.husbandId;
+              if (!spouseId) return null;
+              const spouse = data.individuals[spouseId];
+              if (!spouse) return null;
+              const spouseName = `${spouse.givenName} ${spouse.surname}`.trim();
+              if (!spouseName) return null;
+              const year = fam.marriageDate?.year ?? null;
+              const spouseGender = spouse.gender ?? Gender.Unknown;
+              return { spouseId, spouseName, spouseGender, year, idx };
+          }).filter((e): e is { spouseId: string; spouseName: string; spouseGender: Gender; year: number | null; idx: number } => !!e);
+          entries.sort((a, b) => {
+              if (a.year === null && b.year === null) return a.idx - b.idx;
+              if (a.year === null) return 1;
+              if (b.year === null) return -1;
+              if (a.year !== b.year) return a.year - b.year;
+              return a.idx - b.idx;
+          });
+          const seen = new Set<string>();
+          const unique: Array<{ spouseId: string; spouseName: string; spouseGender: Gender; year: number | null; idx: number }> = [];
+          for (const entry of entries) {
+              if (seen.has(entry.spouseId)) continue;
+              seen.add(entry.spouseId);
+              unique.push(entry);
+          }
+          return unique;
+      })();
+      // In top-view, render union lines for any married individual (not only selected),
+      // otherwise the behavior appears inconsistent and hard to validate.
+      // Keep union lines only for the selected individual in top-view.
+      // This avoids duplicate partner labels from multiple nodes.
+      const hasUnionLines = isTopView && node.id === selectedId && spouseUnionLines.length >= 1;
       const nameFacingRef = useRef<THREE.Group>(null);
       const namePosRef = useRef(new THREE.Vector3());
       namePosRef.current.copy(namePos);
@@ -707,26 +886,111 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               if (mYear === null && bYear) mYear = Math.round(bYear + t.offset);
               return { key: `m-${node.id}-${idx}`, text: mYear ? `${mYear}${mCal ? '\n(CAL)' : ''}` : '?', pos: traitPos(t.offset) };
           });
+      const motherId = indi.familyChildId ? data.families[indi.familyChildId]?.wifeId : undefined;
+      const mother = motherId ? data.individuals[motherId] : undefined;
+      const motherName = mother ? `${mother.givenName} ${mother.surname}`.trim() : '';
+      const motherAnchor: 'left' | 'right' = birthAnchor === 'left' ? 'right' : 'left';
 
+      const topBaseY = bottomY - (thickness * 1.1) - labelOffset + topNameJitter;
       return (
         <>
-          <group position={namePos} ref={nameFacingRef}>
-              {/* Name moved to former date line position */}
-              <Text
-                  ref={alwaysOnTop}
-                  position={[isTopView ? topNameShift : 0, -labelOffset + topNameJitter, 0]}
-                  rotation={[0, 0, 0]}
-                  fontSize={fs}
-                  color={textColor}
-                  outlineWidth={outlineW}
-                  outlineColor={outlineC}
-                  anchorX={isTopView ? topNameAnchor : 'center'}
-                  anchorY="middle"
-                  renderOrder={999}
-              >
-                  {fullName}
-              </Text>
-          </group>
+          {isTopView ? (
+              <>
+                {!hasUnionLines && (
+                  <Billboard
+                      position={[p.x + topSelfSide.offsetX, topBaseY, p.z + topSelfSide.offsetZ]}
+                      follow
+                      lockX={false}
+                      lockY={true}
+                      lockZ={true}
+                  >
+                      <Text
+                          ref={alwaysOnTop}
+                          rotation={[0, 0, -Math.PI / 2]}
+                          fontSize={fs}
+                          color={textColor}
+                          outlineWidth={outlineW}
+                          outlineColor={outlineC}
+                          anchorX={topSelfSide.anchor}
+                          anchorY="middle"
+                          renderOrder={999}
+                      >
+                          {fullName}
+                      </Text>
+                  </Billboard>
+                )}
+                {hasUnionLines && spouseUnionLines.map((spouseLine, idx) => {
+                    const spouseSide = topSideForGender(spouseLine.spouseGender);
+                    // In top-view, screen vertical axis follows world X (camera up = +X).
+                    // Stack union rows on X to display union #2 below union #1.
+                    const topUnionLineSpacingX = Math.max(26, fs * 5.2);
+                    const lineXDelta = idx * topUnionLineSpacingX;
+                    return (
+                        <React.Fragment key={`union-line-${node.id}-${idx}-${spouseLine.spouseId}`}>
+                            <Billboard
+                                position={[p.x + topSelfSide.offsetX - lineXDelta, topBaseY, p.z + topSelfSide.offsetZ]}
+                                follow
+                                lockX={false}
+                                lockY={true}
+                                lockZ={true}
+                            >
+                                <Text
+                                    ref={alwaysOnTop}
+                                    rotation={[0, 0, -Math.PI / 2]}
+                                    fontSize={fs * 0.92}
+                                    color={textColor}
+                                    outlineWidth={outlineW}
+                                    outlineColor={outlineC}
+                                    anchorX={topSelfSide.anchor}
+                                    anchorY="middle"
+                                    renderOrder={999}
+                                >
+                                    {fullName}
+                                </Text>
+                            </Billboard>
+                            <Billboard
+                                position={[p.x + spouseSide.offsetX - lineXDelta, topBaseY, p.z + spouseSide.offsetZ]}
+                                follow
+                                lockX={false}
+                                lockY={true}
+                                lockZ={true}
+                            >
+                                <Text
+                                    ref={alwaysOnTop}
+                                    rotation={[0, 0, -Math.PI / 2]}
+                                    fontSize={fs * 0.92}
+                                    color={textColor}
+                                    outlineWidth={outlineW}
+                                    outlineColor={outlineC}
+                                    anchorX={spouseSide.anchor}
+                                    anchorY="middle"
+                                    renderOrder={999}
+                                >
+                                    {spouseLine.spouseName}
+                                </Text>
+                            </Billboard>
+                        </React.Fragment>
+                    );
+                })}
+              </>
+          ) : (
+              <group position={namePos} ref={nameFacingRef}>
+                  <Text
+                      ref={alwaysOnTop}
+                      position={[0, -labelOffset + topNameJitter, 0]}
+                      rotation={[0, 0, 0]}
+                      fontSize={fs}
+                      color={textColor}
+                      outlineWidth={outlineW}
+                      outlineColor={outlineC}
+                      anchorX="center"
+                      anchorY="middle"
+                      renderOrder={999}
+                  >
+                      {fullName}
+                  </Text>
+              </group>
+          )}
 
           {/* Birth date on birth trait axis, opposite side of ribbon */}
           <Billboard
@@ -750,6 +1014,44 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   {birthStr}
               </Text>
           </Billboard>
+
+          {/* Mother label on birth trait axis (same principle as 2D), visible on hover in all 3D modes */}
+          {activeBirthNodeId === node.id && !!motherId && !!motherName && (
+            <Billboard
+                position={motherPos}
+                follow
+                lockX={false}
+                lockY={true}
+                lockZ={true}
+            >
+                <Text
+                    ref={alwaysOnTop}
+                    rotation={[0, 0, effectiveFromNegativeZ ? Math.PI : 0]}
+                    fontSize={labelFontSize * 0.48}
+                    color={textColor}
+                    outlineWidth={outlineW}
+                    outlineColor={outlineC}
+                    anchorX={motherAnchor}
+                    anchorY="middle"
+                    renderOrder={999}
+                    onClick={(e: ThreeEvent<MouseEvent>) => {
+                        e.stopPropagation();
+                        onMotherLabelClick?.(motherId);
+                    }}
+                    onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                        e.stopPropagation();
+                        cancelHoverHide();
+                        setActiveBirthNodeId(node.id);
+                        document.body.style.cursor = 'pointer';
+                    }}
+                    onPointerOut={() => {
+                        scheduleHoverHide();
+                    }}
+                >
+                    {motherName}
+                </Text>
+            </Billboard>
+          )}
 
           {/* Death date on death trait axis, opposite side of ribbon */}
           <Billboard
@@ -801,50 +1103,16 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       );
   };
 
-  // Child name labels — visible only when camera is close
+  // Child name labels — visible on birth-dash hover with persistence
   const ChildLabels: React.FC = () => {
-      const [visibleLabels, setVisibleLabels] = useState<Array<ChildLabelData & { flip: boolean }>>([]);
-      const lastKeyRef = useRef('');
-      const DISTANCE_THRESHOLD = isTopView ? 100000 : 220;
-      const MAX_LABELS = isTopView ? 220 : 80;
-
-      useFrame(({ camera }) => {
-          const topLabelsEnabled = isTopLabelVisible(camera);
-          if (!topLabelsEnabled) {
-              if (lastKeyRef.current !== '__hidden__') {
-                  lastKeyRef.current = '__hidden__';
-                  setVisibleLabels([]);
-              }
-              return;
-          }
-          const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-          const camDir = new THREE.Vector3();
-          camera.getWorldDirection(camDir);
-          const fromPositiveZ = camDir.z < 0;
-          const labels = childLabelsDataRef.current;
-
-          const nearby: Array<ChildLabelData & { dist: number; flip: boolean }> = [];
-          for (let i = 0; i < labels.length; i++) {
-              const l = labels[i];
-              const dx = cx - l.x, dy = cy - l.y, dz = cz - l.z;
-              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-              const ndc = new THREE.Vector3(l.x, l.y, l.z).project(camera);
-              const inView = ndc.z > -1 && ndc.z < 1 && ndc.x > -1.15 && ndc.x < 1.15 && ndc.y > -1.15 && ndc.y < 1.15;
-              if (dist < DISTANCE_THRESHOLD && inView) {
-                  nearby.push({ ...l, dist, flip: isTopView ? false : !fromPositiveZ });
-              }
-          }
-
-          nearby.sort((a, b) => a.dist - b.dist);
-          if (nearby.length > MAX_LABELS) nearby.length = MAX_LABELS;
-
-          const key = nearby.map(l => `${l.childId}:${l.y.toFixed(0)}:${l.flip ? 1 : 0}`).join(',');
-          if (key !== lastKeyRef.current) {
-              lastKeyRef.current = key;
-              setVisibleLabels(nearby);
-          }
-      });
-
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      const fromPositiveZ = camDir.z < 0;
+      const visibleLabels = activeChildSlotKey
+          ? childLabelsDataRef.current
+              .filter((l) => l.slotKey === activeChildSlotKey)
+              .map((l) => ({ ...l, flip: isTopView ? false : !fromPositiveZ }))
+          : [];
       if (!data) return null;
 
       const textColor = isDarkMode ? '#ffffff' : '#000000';
@@ -857,13 +1125,17 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               {visibleLabels.map(label => {
                   const child = data!.individuals[label.childId];
                   if (!child) return null;
-                  // Stack twins/triplets vertically (Y axis), centered on the trait position
-                  const yOffset = (label.stackIndex - (label.stackTotal - 1) / 2) * fs * 1.4;
+                  // Twins/triplets distribution:
+                  // - top view: horizontal spread on Z around the birth-dash axis
+                  // - other views: vertical spread on Y
+                  const siblingOffset = (label.stackIndex - (label.stackTotal - 1) / 2) * fs * 1.4;
+                  const labelY = isTopView ? label.y : label.y + siblingOffset;
+                  const labelZ = isTopView ? label.z + siblingOffset : label.z;
                   const firstName = child.givenName?.split(/\s+/)[0] || child.givenName;
                   return (
                       <Billboard
                           key={`${label.childId}-${label.y.toFixed(0)}`}
-                          position={[label.x, label.y + yOffset, label.z]}
+                          position={[label.x, labelY, labelZ]}
                           follow
                           lockX={false}
                           lockY={true}
@@ -879,6 +1151,20 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                               anchorX={label.flip ? 'right' : 'left'}
                               anchorY="middle"
                               renderOrder={999}
+                              onClick={(e: ThreeEvent<MouseEvent>) => {
+                                  e.stopPropagation();
+                                  onChildLabelClick?.(label.childId);
+                              }}
+                              onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                                  e.stopPropagation();
+                                  cancelHoverHide();
+                                  setActiveChildSlotKey(label.slotKey);
+                                  setActiveChildHoverId(label.childId);
+                                  document.body.style.cursor = 'pointer';
+                              }}
+                              onPointerOut={() => {
+                                  scheduleHoverHide();
+                              }}
                           >
                               {firstName}
                           </Text>
@@ -923,12 +1209,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           nearby.sort((a, b) => a.dist - b.dist);
           if (nearby.length > MAX) nearby.length = MAX;
 
+          // In top view, when selected individual has multiple unions,
+          // spouse names are already rendered as union lines in RenderLabel.
+          // Avoid forcing spouse standalone labels to prevent duplicates.
+          const hideSpouseStandalone = isTopView && selectedSpouseIds.length >= 1;
+          const spouseSet = hideSpouseStandalone ? new Set(selectedSpouseIds) : null;
+          const filteredNearby = spouseSet ? nearby.filter((n) => !spouseSet.has(n.id)) : nearby;
+          const forceSpouses = !hideSpouseStandalone;
           const forced = new Set<string>([
               ...(selectedId ? [selectedId] : []),
               ...(hoveredNode ? [hoveredNode.id] : []),
-              ...selectedSpouseIds,
+              ...(forceSpouses ? selectedSpouseIds : []),
           ]);
-          for (const n of nearby) forced.add(n.id);
+          for (const n of filteredNearby) forced.add(n.id);
 
           const ids = Array.from(forced);
           const key = ids.join(',');
@@ -972,8 +1265,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
             args={[traitGeometry, traitMaterial, totalTraits]}
             frustumCulled={false}
             onClick={handleTraitClick}
-            onPointerOver={() => document.body.style.cursor = 'pointer'}
-            onPointerOut={() => document.body.style.cursor = 'auto'}
+            onPointerOver={handleTraitPointerMove}
+            onPointerMove={handleTraitPointerMove}
+            onPointerOut={() => {
+                scheduleHoverHide();
+                document.body.style.cursor = 'auto';
+            }}
         />
         <lineSegments material={connectorMaterial}>
             <bufferGeometry ref={connectorsGeometryRef} />

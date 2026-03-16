@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -11,6 +11,10 @@ import InstancedGenealogyTree from './InstancedGenealogyTree';
 // --- Camera Controller ---
 // Handles animated transitions between 3 camera modes: top, individual, free.
 const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const smootherstep = (t: number) => {
+  const x = Math.min(1, Math.max(0, t));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+};
 
 const INDIVIDUAL_WIDTH = 10;
 const FOV_DEG = 50;
@@ -78,9 +82,28 @@ const CameraController: React.FC<{
   individualCenter: Vector3;
   sceneSize: number;
   selectedGender: Gender | null;
+  manualFocusTarget: Vector3 | null;
+  manualFocusSource: Vector3 | null;
+  manualFocusGender: Gender | null;
+  manualFocusKind: 'child' | 'mother' | null;
+  manualFocusNonce: number;
   onFlyComplete: () => void;
-}> = ({ cameraMode, flyTarget, centerTarget, individualCenter, sceneSize, selectedGender, onFlyComplete }) => {
+}> = ({
+  cameraMode,
+  flyTarget,
+  centerTarget,
+  individualCenter,
+  sceneSize,
+  selectedGender,
+  manualFocusTarget,
+  manualFocusSource,
+  manualFocusGender,
+  manualFocusKind,
+  manualFocusNonce,
+  onFlyComplete,
+}) => {
   const lastTarget = useRef(new Vector3());
+  const lastManualFocusNonceRef = useRef(0);
 
   // Animation refs
   const animProgress = useRef(0);
@@ -97,8 +120,35 @@ const CameraController: React.FC<{
   const holdUp = useRef<Vector3 | null>(null);
   const animEndPos = useRef(new Vector3());
   const FLY_DURATION = 2.5;
+  const focusStartPos = useRef(new Vector3());
+  const focusEndPos = useRef(new Vector3());
+  const focusStartLookAt = useRef(new Vector3());
+  const focusEndLookAt = useRef(new Vector3());
+  const focusBirthLookAt = useRef(new Vector3());
+  const focusCurrentPos = useRef(new Vector3());
+  const focusCurrentLookAt = useRef(new Vector3());
+  const focusStartOffset = useRef(new Vector3());
+  const focusEndOffset = useRef(new Vector3());
+  const focusProgress = useRef(1);
+  const isFocusing = useRef(false);
+  const focusDurationRef = useRef(0.85);
+  const focusConnectorLengthRef = useRef(0);
+  const focusUseConnectorPathRef = useRef(false);
+  const topFocusStartZoomRef = useRef<number | null>(null);
+  const topFocusZoomPulseActiveRef = useRef(false);
+  const topFocusTargetZoomRef = useRef<number | null>(null);
+  const FOCUS_DURATION_DEFAULT = 0.85;
+  const FOCUS_DURATION_CONNECTOR = 1.8;
+  const TOP_FOCUS_DURATION = 3.8; // extra-slow top-view lateral movement
+  const TOP_FOCUS_OVERVIEW_PORTION = 1 / 3; // pulse peak shows about one third of the tree
+  const TOP_FOCUS_MIN_PULSE_DEPTH = 0.12; // keep a minimum visual pulse
+  const TOP_PHASE_DEZOOM_END = 0.22; // phase 1: dezoom
+  const TOP_PHASE_REZOOM_START = 0.78; // phase 3: rezoom
 
-  const lookAtForMode = (mode: CameraMode) => mode === 'individual' ? individualCenter : centerTarget;
+  const lookAtForMode = (mode: CameraMode) => {
+    if (manualFocusTarget) return manualFocusTarget;
+    return mode === 'individual' ? individualCenter : centerTarget;
+  };
   const upForMode = (mode: CameraMode) => mode === 'top' ? new Vector3(1, 0, 0) : new Vector3(0, 1, 0);
 
   useFrame((state, delta) => {
@@ -166,6 +216,199 @@ const CameraController: React.FC<{
       return;
     }
 
+    // --- MANUAL CHILD-FOCUS TRANSITION (selection remains unchanged) ---
+    if (
+      manualFocusTarget &&
+      manualFocusNonce > 0 &&
+      manualFocusNonce !== lastManualFocusNonceRef.current
+    ) {
+      lastManualFocusNonceRef.current = manualFocusNonce;
+      focusStartPos.current.copy(state.camera.position);
+      focusStartLookAt.current.copy(ctrl.target);
+      focusEndLookAt.current.copy(manualFocusTarget);
+      if (cameraMode === 'top') {
+        focusEndPos.current.set(manualFocusTarget.x, manualFocusTarget.y + 10000, manualFocusTarget.z);
+        focusUseConnectorPathRef.current = false;
+        focusDurationRef.current = TOP_FOCUS_DURATION;
+        const orthoCam = state.camera as any;
+        if (orthoCam.isOrthographicCamera) {
+          const startZoom = Math.max(0.0001, orthoCam.zoom);
+          const fitZoom = Math.max(0.0001, topViewOrthoZoom(sceneSize));
+          // If full tree is visible around fitZoom, half-tree overview is ~2x fitZoom.
+          const halfTreeOverviewZoom = fitZoom / TOP_FOCUS_OVERVIEW_PORTION;
+          const minPulseZoom = startZoom * (1 - TOP_FOCUS_MIN_PULSE_DEPTH);
+          // Target pulse zoom is proportional to tree size while ensuring a visible pulse.
+          const targetZoom = Math.min(minPulseZoom, halfTreeOverviewZoom);
+          topFocusStartZoomRef.current = startZoom;
+          topFocusTargetZoomRef.current = Math.max(0.0001, targetZoom);
+          topFocusZoomPulseActiveRef.current = true;
+        }
+      } else {
+        // Close-up and free share close-up-like movement for child focus.
+        focusEndPos.current.copy(
+          computeModePosition('individual', manualFocusTarget, sceneSize, manualFocusGender ?? selectedGender)
+        );
+        focusUseConnectorPathRef.current = !!manualFocusSource;
+        if (focusUseConnectorPathRef.current && manualFocusSource) {
+          const connectorLen = manualFocusTarget.clone().sub(manualFocusSource).length();
+          focusConnectorLengthRef.current = connectorLen;
+          // Adaptive duration for long connectors to avoid early stop.
+          focusDurationRef.current = Math.min(6.0, Math.max(
+            FOCUS_DURATION_CONNECTOR,
+            FOCUS_DURATION_CONNECTOR + connectorLen * 0.01
+          ));
+        } else {
+          focusConnectorLengthRef.current = 0;
+          focusDurationRef.current = FOCUS_DURATION_DEFAULT;
+        }
+        if (focusUseConnectorPathRef.current && manualFocusSource) {
+          // "Birth dash" reference from source ribbon center.
+          focusBirthLookAt.current.set(
+            manualFocusSource.x - (INDIVIDUAL_WIDTH / 2),
+            manualFocusSource.y,
+            manualFocusSource.z
+          );
+        }
+      }
+      focusStartOffset.current.copy(focusStartPos.current.clone().sub(focusStartLookAt.current));
+      focusEndOffset.current.copy(focusEndPos.current.clone().sub(focusEndLookAt.current));
+      focusCurrentPos.current.copy(focusStartPos.current);
+      focusCurrentLookAt.current.copy(focusStartLookAt.current);
+      focusProgress.current = 0;
+      isFocusing.current = true;
+      lastTarget.current.copy(manualFocusTarget);
+      if (cameraMode === 'top') {
+        // Keep current top zoom as baseline for pulse; avoid forced reset.
+        const orthoCam = state.camera as any;
+        if (orthoCam.isOrthographicCamera && topFocusStartZoomRef.current === null) {
+          topFocusStartZoomRef.current = orthoCam.zoom;
+          topFocusTargetZoomRef.current = null;
+        }
+      }
+      return;
+    }
+
+    // --- FOCUS TRANSITION (same mode, new selected individual) ---
+    if (isFocusing.current && focusProgress.current < 1) {
+      focusProgress.current = Math.min(1, focusProgress.current + delta / focusDurationRef.current);
+      const tRaw = focusProgress.current;
+      const t = easeInOutCubic(tRaw);
+
+      let nextPos: Vector3;
+      let nextLookAt: Vector3;
+      if (focusUseConnectorPathRef.current && manualFocusSource && cameraMode !== 'top') {
+        // Smooth two-stage look-at path:
+        // (1) ease to birth dash, (2) progress along connector toward child.
+        const birth = focusBirthLookAt.current;
+        const child = focusEndLookAt.current;
+        const connectorDir = child.clone().sub(birth).normalize();
+        const stageSplit = 0.35;
+        const connectorApproach = 0.98; // approach much closer to child center
+
+        let desiredLookAt: Vector3;
+        const useBirthApproachStage = manualFocusKind !== 'mother';
+        if (useBirthApproachStage && t < stageSplit) {
+          const u = easeInOutCubic(t / stageSplit);
+          desiredLookAt = new Vector3().lerpVectors(focusStartLookAt.current, birth, u);
+        } else {
+          const u = useBirthApproachStage
+            ? easeInOutCubic((t - stageSplit) / (1 - stageSplit))
+            : easeInOutCubic(t);
+          const nearChild = new Vector3().lerpVectors(birth, child, connectorApproach);
+          desiredLookAt = new Vector3().lerpVectors(birth, nearChild, u);
+        }
+
+        // Camera follows with inertia while staying strictly aligned on connector axis.
+        const startDistance = Math.max(24, focusStartOffset.current.length());
+        const stopDistance = 34;
+        const desiredDistance = startDistance + (stopDistance - startDistance) * t;
+        const desiredPos = desiredLookAt.clone().add(connectorDir.clone().multiplyScalar(-desiredDistance));
+
+        const lookAlpha = 1 - Math.exp(-delta * 4.6);
+        const posAlpha = 1 - Math.exp(-delta * 3.0);
+        focusCurrentLookAt.current.lerp(desiredLookAt, lookAlpha);
+        focusCurrentPos.current.lerp(desiredPos, posAlpha);
+
+        // Enforce strict connector-axis constraint (remove residual lateral drift).
+        const rel = focusCurrentPos.current.clone().sub(focusCurrentLookAt.current);
+        const longitudinal = rel.dot(connectorDir);
+        focusCurrentPos.current.copy(
+          focusCurrentLookAt.current.clone().add(connectorDir.clone().multiplyScalar(longitudinal))
+        );
+
+        nextLookAt = focusCurrentLookAt.current.clone();
+        nextPos = focusCurrentPos.current.clone();
+      } else {
+        if (
+          cameraMode === 'top' &&
+          topFocusZoomPulseActiveRef.current &&
+          topFocusStartZoomRef.current !== null &&
+          topFocusTargetZoomRef.current !== null
+        ) {
+          // Strict sequence in top view:
+          // 1) dezoom, 2) translate, 3) rezoom.
+          let translateT = 0;
+          if (tRaw > TOP_PHASE_DEZOOM_END && tRaw < TOP_PHASE_REZOOM_START) {
+            const u = (tRaw - TOP_PHASE_DEZOOM_END) / Math.max(0.0001, (TOP_PHASE_REZOOM_START - TOP_PHASE_DEZOOM_END));
+            translateT = easeInOutCubic(u);
+          } else if (tRaw >= TOP_PHASE_REZOOM_START) {
+            translateT = 1;
+          }
+          nextPos = new Vector3().lerpVectors(focusStartPos.current, focusEndPos.current, translateT);
+          nextLookAt = new Vector3().lerpVectors(focusStartLookAt.current, focusEndLookAt.current, translateT);
+        } else {
+          nextPos = new Vector3().lerpVectors(focusStartPos.current, focusEndPos.current, t);
+          nextLookAt = new Vector3().lerpVectors(focusStartLookAt.current, focusEndLookAt.current, t);
+        }
+      }
+      state.camera.position.copy(nextPos);
+      state.camera.up.copy(upForMode(cameraMode));
+      state.camera.lookAt(nextLookAt);
+      if (
+        cameraMode === 'top' &&
+        topFocusZoomPulseActiveRef.current &&
+        topFocusStartZoomRef.current !== null &&
+        topFocusTargetZoomRef.current !== null
+      ) {
+        const orthoCam = state.camera as any;
+        if (orthoCam.isOrthographicCamera) {
+          let zoomT = 0;
+          if (tRaw <= TOP_PHASE_DEZOOM_END) {
+            zoomT = smootherstep(tRaw / Math.max(0.0001, TOP_PHASE_DEZOOM_END));
+          } else if (tRaw < TOP_PHASE_REZOOM_START) {
+            zoomT = 1;
+          } else {
+            const u = (tRaw - TOP_PHASE_REZOOM_START) / Math.max(0.0001, (1 - TOP_PHASE_REZOOM_START));
+            zoomT = 1 - smootherstep(u);
+          }
+          orthoCam.zoom = topFocusStartZoomRef.current +
+            (topFocusTargetZoomRef.current - topFocusStartZoomRef.current) * zoomT;
+        }
+      }
+      state.camera.updateProjectionMatrix();
+      ctrl.target.copy(nextLookAt);
+      ctrl.update();
+      if (focusProgress.current >= 1) {
+        if (
+          cameraMode === 'top' &&
+          topFocusZoomPulseActiveRef.current &&
+          topFocusStartZoomRef.current !== null
+        ) {
+          const orthoCam = state.camera as any;
+          if (orthoCam.isOrthographicCamera) {
+            orthoCam.zoom = topFocusStartZoomRef.current;
+            orthoCam.updateProjectionMatrix();
+          }
+        }
+        topFocusZoomPulseActiveRef.current = false;
+        topFocusStartZoomRef.current = null;
+        topFocusTargetZoomRef.current = null;
+        isFocusing.current = false;
+        focusUseConnectorPathRef.current = false;
+      }
+      return;
+    }
+
     // Reset animation flags when truly idle (flyTarget is null in React state)
     animStarted.current = false;
     animCompleted.current = false;
@@ -187,21 +430,27 @@ const CameraController: React.FC<{
     // Sync orbit target when it changes (new individual selected)
     const currentLookAt = lookAtForMode(cameraMode);
     if (!lastTarget.current.equals(currentLookAt)) {
-      ctrl.target.copy(currentLookAt);
-      lastTarget.current.copy(currentLookAt);
-
+      focusStartPos.current.copy(state.camera.position);
+      focusStartLookAt.current.copy(ctrl.target);
+      focusEndLookAt.current.copy(currentLookAt);
       if (cameraMode === 'top') {
-        state.camera.position.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
-        state.camera.up.set(1, 0, 0);
-        state.camera.lookAt(currentLookAt);
+        focusEndPos.current.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
+      } else {
+        // In close-up and free, use close-up style movement toward selected child.
+        focusEndPos.current.copy(computeModePosition('individual', currentLookAt, sceneSize, selectedGender));
+      }
+      focusUseConnectorPathRef.current = false;
+      focusDurationRef.current = FOCUS_DURATION_DEFAULT;
+      focusProgress.current = 0;
+      isFocusing.current = true;
+      lastTarget.current.copy(currentLookAt);
+      if (cameraMode === 'top') {
         const orthoCam = state.camera as any;
         if (orthoCam.isOrthographicCamera) {
           orthoCam.zoom = topViewOrthoZoom(sceneSize);
           orthoCam.updateProjectionMatrix();
         }
       }
-
-      ctrl.update();
     }
   });
 
@@ -261,6 +510,12 @@ const Scene3D: React.FC<Scene3DProps> = ({
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const contextLostNotifiedRef = useRef(false);
+  const focusNonceRef = useRef(0);
+  const [manualFocusTarget, setManualFocusTarget] = useState<Vector3 | null>(null);
+  const [manualFocusSource, setManualFocusSource] = useState<Vector3 | null>(null);
+  const [manualFocusGender, setManualFocusGender] = useState<Gender | null>(null);
+  const [manualFocusKind, setManualFocusKind] = useState<'child' | 'mother' | null>(null);
+  const [manualFocusNonce, setManualFocusNonce] = useState(0);
 
   const centerTargetRef = useRef(new Vector3());
   const sceneSizeRef = useRef(100);
@@ -510,6 +765,32 @@ const Scene3D: React.FC<Scene3DProps> = ({
     return { centerTarget: orbitCenter, individualCenter: orbitCenter.clone(), sceneSize: size };
   }, [mainCalculation, extraCalculations, allLayoutNodes, autoLayoutMode, rootIndividual, selectedId]);
 
+  const layoutNodeCenterById = useMemo(() => {
+    const map = new Map<string, { center: Vector3; gender: Gender }>();
+    allLayoutNodes.forEach((node) => {
+      const pos = new Vector3();
+      const scl = new Vector3();
+      node.matrix.decompose(pos, new Quaternion(), scl);
+      const progressToCenter = 0.25;
+      const zSign = node.gender === Gender.Female ? 1 : -1;
+      const center = new Vector3(
+        pos.x,
+        pos.y - scl.y * progressToCenter,
+        pos.z - scl.z * progressToCenter * zSign
+      );
+      map.set(node.id, { center, gender: node.gender });
+    });
+    return map;
+  }, [allLayoutNodes]);
+
+  useEffect(() => {
+    // Any explicit selection change restores normal camera target behavior.
+    setManualFocusTarget(null);
+    setManualFocusSource(null);
+    setManualFocusGender(null);
+    setManualFocusKind(null);
+  }, [selectedId]);
+
   // Keep refs in sync for camera setup functions
   centerTargetRef.current = centerTarget;
   sceneSizeRef.current = sceneSize;
@@ -565,6 +846,32 @@ const Scene3D: React.FC<Scene3DProps> = ({
       if (indi) onIndividualClick(indi);
   }, [data, onIndividualClick]);
 
+  const handleChildLabelClick = useCallback((childId: string) => {
+      const nodeInfo = layoutNodeCenterById.get(childId);
+      if (!nodeInfo) return;
+      const sourceId = selectedId || rootIndividual?.id || '';
+      const sourceInfo = layoutNodeCenterById.get(sourceId);
+      setManualFocusTarget(nodeInfo.center.clone());
+      setManualFocusSource(sourceInfo ? sourceInfo.center.clone() : null);
+      setManualFocusGender(nodeInfo.gender);
+      setManualFocusKind('child');
+      focusNonceRef.current += 1;
+      setManualFocusNonce(focusNonceRef.current);
+  }, [layoutNodeCenterById, selectedId, rootIndividual]);
+
+  const handleMotherLabelClick = useCallback((motherId: string) => {
+      const nodeInfo = layoutNodeCenterById.get(motherId);
+      if (!nodeInfo) return;
+      const sourceId = selectedId || rootIndividual?.id || '';
+      const sourceInfo = layoutNodeCenterById.get(sourceId);
+      setManualFocusTarget(nodeInfo.center.clone());
+      setManualFocusSource(sourceInfo ? sourceInfo.center.clone() : null);
+      setManualFocusGender(nodeInfo.gender);
+      setManualFocusKind('mother');
+      focusNonceRef.current += 1;
+      setManualFocusNonce(focusNonceRef.current);
+  }, [layoutNodeCenterById, selectedId, rootIndividual]);
+
   return (
     <Canvas
       shadows={true}
@@ -610,6 +917,11 @@ const Scene3D: React.FC<Scene3DProps> = ({
             individualCenter={individualCenter}
             sceneSize={sceneSize}
             selectedGender={selectedGender}
+            manualFocusTarget={manualFocusTarget}
+            manualFocusSource={manualFocusSource}
+            manualFocusGender={manualFocusGender}
+            manualFocusKind={manualFocusKind}
+            manualFocusNonce={manualFocusNonce}
             onFlyComplete={onFlyComplete}
         />
 
@@ -657,6 +969,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             selectedId={selectedId}
             onNodeClick={handleInstancedNodeClick}
             onTraitClick={handleInstancedTraitClick}
+            onChildLabelClick={handleChildLabelClick}
+            onMotherLabelClick={handleMotherLabelClick}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             cameraMode={cameraMode}
