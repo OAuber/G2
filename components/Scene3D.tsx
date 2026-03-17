@@ -140,8 +140,9 @@ const CameraController: React.FC<{
   const FOCUS_DURATION_DEFAULT = 0.85;
   const FOCUS_DURATION_CONNECTOR = 1.8;
   const TOP_FOCUS_DURATION = 3.8; // extra-slow top-view lateral movement
-  const TOP_FOCUS_OVERVIEW_PORTION = 1 / 3; // pulse peak shows about one third of the tree
-  const TOP_FOCUS_MIN_PULSE_DEPTH = 0.12; // keep a minimum visual pulse
+  const TOP_FOCUS_MIN_PULSE_DEPTH = 0.2; // stronger baseline pulse for short travel
+  const TOP_FOCUS_MAX_PULSE_DEPTH = 0.96; // extreme pulse for very long travel
+  const TOP_FOCUS_CONNECTOR_REF_RATIO = 0.45; // reach strong pulse sooner on long connectors
   const TOP_PHASE_DEZOOM_END = 0.22; // phase 1: dezoom
   const TOP_PHASE_REZOOM_START = 0.78; // phase 3: rezoom
 
@@ -233,12 +234,16 @@ const CameraController: React.FC<{
         const orthoCam = state.camera as any;
         if (orthoCam.isOrthographicCamera) {
           const startZoom = Math.max(0.0001, orthoCam.zoom);
-          const fitZoom = Math.max(0.0001, topViewOrthoZoom(sceneSize));
-          // If full tree is visible around fitZoom, half-tree overview is ~2x fitZoom.
-          const halfTreeOverviewZoom = fitZoom / TOP_FOCUS_OVERVIEW_PORTION;
-          const minPulseZoom = startZoom * (1 - TOP_FOCUS_MIN_PULSE_DEPTH);
-          // Target pulse zoom is proportional to tree size while ensuring a visible pulse.
-          const targetZoom = Math.min(minPulseZoom, halfTreeOverviewZoom);
+          const connectorLen = manualFocusSource
+            ? manualFocusTarget.clone().sub(manualFocusSource).length()
+            : Math.max(1, sceneSize * 0.15);
+          const refLen = Math.max(40, sceneSize * TOP_FOCUS_CONNECTOR_REF_RATIO);
+          const normalized = Math.max(0, Math.min(1, connectorLen / refLen));
+          // Keep short-distance pulse unchanged; boost only medium/long connectors.
+          const longOnly = Math.max(0, Math.min(1, (normalized - 0.28) / 0.72));
+          const depth = TOP_FOCUS_MIN_PULSE_DEPTH +
+            (TOP_FOCUS_MAX_PULSE_DEPTH - TOP_FOCUS_MIN_PULSE_DEPTH) * smootherstep(longOnly);
+          const targetZoom = startZoom * Math.max(0.02, 1 - depth);
           topFocusStartZoomRef.current = startZoom;
           topFocusTargetZoomRef.current = Math.max(0.0001, targetZoom);
           topFocusZoomPulseActiveRef.current = true;
@@ -974,6 +979,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             cameraMode={cameraMode}
+            showTopViewLabels={cameraMode === 'top' && flyTarget === null}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
         />

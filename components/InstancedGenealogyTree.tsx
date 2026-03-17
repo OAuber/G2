@@ -18,6 +18,7 @@ interface InstancedTreeProps {
   isDarkMode?: boolean;
   relationshipRevealEnabled?: boolean;
   cameraMode?: CameraMode;
+  showTopViewLabels?: boolean;
   labelFontSize?: number;
   topViewLabelMaxZSpan?: number;
 }
@@ -51,6 +52,7 @@ const DEFAULT_RIBBON_OPACITY = 0.9;
 const TOP_VIEW_RIBBON_OPACITY = 0.68;
 const DATE_X_FACTOR_TOP = 0.75;
 const DATE_X_FACTOR_SIDE = 0.67;
+const TOP_VIEW_UNION_LINE_SPACING_X = 4; // tweak this for top-view union line spacing
 
 const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
   nodes, 
@@ -64,6 +66,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   isDarkMode = true,
   relationshipRevealEnabled = false,
   cameraMode = 'individual',
+  showTopViewLabels = true,
   labelFontSize = 3,
   topViewLabelMaxZSpan = 500,
 }) => {
@@ -82,6 +85,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const hideHoverTimerRef = useRef<number | null>(null);
   const childLabelsDataRef = useRef<ChildLabelData[]>([]);
   const isTopView = cameraMode === 'top';
+  const isTopViewActive = isTopView && showTopViewLabels;
 
   const activePathRef = useRef<Set<string>>(new Set());
   const baseConnectorColorsRef = useRef<Float32Array | null>(null);
@@ -90,14 +94,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       if (!isTopView) {
           return true;
       }
-      const ortho = cam as THREE.OrthographicCamera;
-      if (!ortho.isOrthographicCamera) {
-          return true;
-      }
-      // In top view, screen horizontal axis maps to world Z.
-      // Visible span along Z ≈ frustum width / zoom.
-      const visibleZSpan = Math.abs((ortho.right - ortho.left) / Math.max(ortho.zoom, 0.0001));
-      return visibleZSpan <= topViewLabelMaxZSpan;
+      // Keep top-view labels always visible; visibility is managed by dedicated
+      // top-view layout rules and frustum-safe clamping.
+      return true;
   };
 
   // Geometries
@@ -641,6 +640,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const handleBoxHover = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
       document.body.style.cursor = 'pointer';
+      if (isTopViewActive) {
+          // In top-view, keep labels stable; no hover-injected name variants.
+          return;
+      }
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
           const node = nodes[e.instanceId];
           if (hoveredNode?.id !== node.id) {
@@ -722,6 +725,23 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
       return ids;
   }, [data, selectedId]);
+  const multiUnionSpouseIdsByNode = useMemo(() => {
+      const map = new Map<string, Set<string>>();
+      if (!data) return map;
+      for (const [id, indi] of Object.entries(data.individuals)) {
+          const famIds = indi.familySpouseIds || [];
+          if (famIds.length <= 1) continue;
+          const spouses = new Set<string>();
+          for (const famId of famIds) {
+              const fam = data.families[famId];
+              if (!fam) continue;
+              const spouseId = fam.husbandId === id ? fam.wifeId : fam.husbandId;
+              if (spouseId) spouses.add(spouseId);
+          }
+          if (spouses.size > 0) map.set(id, spouses);
+      }
+      return map;
+  }, [data]);
 
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
@@ -802,14 +822,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const effectiveFromNegativeZ = isTopView ? false : fromNegativeZ;
       const birthAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
       const deathAnchor: 'left' | 'right' = effectiveFromNegativeZ ? 'right' : 'left';
-      const topSideForGender = (g: Gender) => {
-          // Dedicated top-view layout:
-          // - men justified on left side
-          // - women justified on right side
-          if (g === Gender.Female) return { anchor: 'left' as const, offsetX: -9, offsetZ: 10 };
-          return { anchor: 'right' as const, offsetX: -9, offsetZ: -10 };
-      };
-      const topSelfSide = topSideForGender(node.gender);
       const fullName = `${indi.givenName} ${indi.surname}`.trim();
       // Keep top-view line alignment deterministic to avoid random vertical drift.
       const topNameJitter = 0;
@@ -846,11 +858,55 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           }
           return unique;
       })();
-      // In top-view, render union lines for any married individual (not only selected),
-      // otherwise the behavior appears inconsistent and hard to validate.
-      // Keep union lines only for the selected individual in top-view.
-      // This avoids duplicate partner labels from multiple nodes.
-      const hasUnionLines = isTopView && node.id === selectedId && spouseUnionLines.length >= 1;
+      const hasAnyUnion = spouseUnionLines.length >= 1;
+      const topRailInset = Math.max(1.5, labelFontSize * 0.35);
+      const computeZBoundsForNode = (target: LayoutNode) => {
+          const tp = new THREE.Vector3();
+          const ts = new THREE.Vector3();
+          target.matrix.decompose(tp, new THREE.Quaternion(), ts);
+          return { minZ: tp.z - (ts.z / 2), maxZ: tp.z + (ts.z / 2) };
+      };
+      const computeZBoundsForNodeIds = (ids: string[]) => {
+          let minZ = Number.POSITIVE_INFINITY;
+          let maxZ = Number.NEGATIVE_INFINITY;
+          ids.forEach((id) => {
+              const n = nodesMap.get(id);
+              if (!n) return;
+              const b = computeZBoundsForNode(n);
+              if (b.minZ < minZ) minZ = b.minZ;
+              if (b.maxZ > maxZ) maxZ = b.maxZ;
+          });
+          if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+              return computeZBoundsForNode(node);
+          }
+          return { minZ, maxZ };
+      };
+      const computePairZBounds = (spouseId?: string) => {
+          const selfBounds = computeZBoundsForNode(node);
+          if (!spouseId) return selfBounds;
+          const spouseNode = nodesMap.get(spouseId);
+          if (!spouseNode) return selfBounds;
+          const spouseBounds = computeZBoundsForNode(spouseNode);
+          return {
+              minZ: Math.min(selfBounds.minZ, spouseBounds.minZ),
+              maxZ: Math.max(selfBounds.maxZ, spouseBounds.maxZ),
+          };
+      };
+      const topNamePlacement = (g: Gender, bounds: { minZ: number; maxZ: number }, inCouple: boolean) => {
+          if (!inCouple) return { anchor: 'center' as const, z: (bounds.minZ + bounds.maxZ) * 0.5 };
+          if (g === Gender.Female) return { anchor: 'right' as const, z: bounds.maxZ - topRailInset };
+          return { anchor: 'left' as const, z: bounds.minZ + topRailInset };
+      };
+      const primaryBounds = computePairZBounds(spouseUnionLines[0]?.spouseId);
+      const multiUnionGroupBounds = computeZBoundsForNodeIds([
+          node.id,
+          ...spouseUnionLines.map((s) => s.spouseId),
+      ]);
+      const topSelfPlacement = topNamePlacement(node.gender, primaryBounds, hasAnyUnion);
+      const topNameOffsetX = -9;
+      // In top-view, always render multi-union lines when they exist.
+      // Keep completeness first; de-dup is handled in nearby label filtering.
+      const hasUnionLines = isTopViewActive && spouseUnionLines.length > 1;
       const nameFacingRef = useRef<THREE.Group>(null);
       const namePosRef = useRef(new THREE.Vector3());
       namePosRef.current.copy(namePos);
@@ -894,11 +950,11 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const topBaseY = bottomY - (thickness * 1.1) - labelOffset + topNameJitter;
       return (
         <>
-          {isTopView ? (
+          {isTopViewActive ? (
               <>
                 {!hasUnionLines && (
                   <Billboard
-                      position={[p.x + topSelfSide.offsetX, topBaseY, p.z + topSelfSide.offsetZ]}
+                      position={[p.x + topNameOffsetX, topBaseY, topSelfPlacement.z]}
                       follow
                       lockX={false}
                       lockY={true}
@@ -911,7 +967,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                           color={textColor}
                           outlineWidth={outlineW}
                           outlineColor={outlineC}
-                          anchorX={topSelfSide.anchor}
+                          anchorX={topSelfPlacement.anchor}
                           anchorY="middle"
                           renderOrder={999}
                       >
@@ -920,36 +976,38 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   </Billboard>
                 )}
                 {hasUnionLines && spouseUnionLines.map((spouseLine, idx) => {
-                    const spouseSide = topSideForGender(spouseLine.spouseGender);
+                    const lineSelfPlacement = topNamePlacement(node.gender, multiUnionGroupBounds, true);
+                    const spousePlacement = topNamePlacement(spouseLine.spouseGender, multiUnionGroupBounds, true);
                     // In top-view, screen vertical axis follows world X (camera up = +X).
                     // Stack union rows on X to display union #2 below union #1.
-                    const topUnionLineSpacingX = Math.max(26, fs * 5.2);
-                    const lineXDelta = idx * topUnionLineSpacingX;
+                    const lineXDelta = idx * TOP_VIEW_UNION_LINE_SPACING_X;
                     return (
                         <React.Fragment key={`union-line-${node.id}-${idx}-${spouseLine.spouseId}`}>
-                            <Billboard
-                                position={[p.x + topSelfSide.offsetX - lineXDelta, topBaseY, p.z + topSelfSide.offsetZ]}
-                                follow
-                                lockX={false}
-                                lockY={true}
-                                lockZ={true}
-                            >
-                                <Text
-                                    ref={alwaysOnTop}
-                                    rotation={[0, 0, -Math.PI / 2]}
-                                    fontSize={fs * 0.92}
-                                    color={textColor}
-                                    outlineWidth={outlineW}
-                                    outlineColor={outlineC}
-                                    anchorX={topSelfSide.anchor}
-                                    anchorY="middle"
-                                    renderOrder={999}
+                            {idx === 0 && (
+                                <Billboard
+                                    position={[p.x + topNameOffsetX - lineXDelta, topBaseY, lineSelfPlacement.z]}
+                                    follow
+                                    lockX={false}
+                                    lockY={true}
+                                    lockZ={true}
                                 >
-                                    {fullName}
-                                </Text>
-                            </Billboard>
+                                    <Text
+                                        ref={alwaysOnTop}
+                                        rotation={[0, 0, -Math.PI / 2]}
+                                        fontSize={fs * 0.92}
+                                        color={textColor}
+                                        outlineWidth={outlineW}
+                                        outlineColor={outlineC}
+                                        anchorX={lineSelfPlacement.anchor}
+                                        anchorY="middle"
+                                        renderOrder={999}
+                                    >
+                                        {fullName}
+                                    </Text>
+                                </Billboard>
+                            )}
                             <Billboard
-                                position={[p.x + spouseSide.offsetX - lineXDelta, topBaseY, p.z + spouseSide.offsetZ]}
+                                position={[p.x + topNameOffsetX - lineXDelta, topBaseY, spousePlacement.z]}
                                 follow
                                 lockX={false}
                                 lockY={true}
@@ -962,7 +1020,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                                     color={textColor}
                                     outlineWidth={outlineW}
                                     outlineColor={outlineC}
-                                    anchorX={spouseSide.anchor}
+                                    anchorX={spousePlacement.anchor}
                                     anchorY="middle"
                                     renderOrder={999}
                                 >
@@ -1190,6 +1248,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               }
               return;
           }
+          const orthoCam = camera as any;
+          const topVisibleZSpan = (isTopViewActive && orthoCam.isOrthographicCamera)
+              ? Math.abs((orthoCam.right - orthoCam.left) / Math.max(orthoCam.zoom, 0.0001))
+              : 0;
+          // When zoomed out very wide in top-view, reduce label density to keep fluidity.
+          const topIsWideOverview = isTopViewActive && topVisibleZSpan > topViewLabelMaxZSpan;
+          const effectiveMax = topIsWideOverview ? 70 : MAX;
           const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
           const nearby: Array<{ id: string; dist: number }> = [];
           const tmpP = new THREE.Vector3();
@@ -1207,19 +1272,28 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           }
 
           nearby.sort((a, b) => a.dist - b.dist);
-          if (nearby.length > MAX) nearby.length = MAX;
+          if (nearby.length > effectiveMax) nearby.length = effectiveMax;
 
-          // In top view, when selected individual has multiple unions,
-          // spouse names are already rendered as union lines in RenderLabel.
-          // Avoid forcing spouse standalone labels to prevent duplicates.
-          const hideSpouseStandalone = isTopView && selectedSpouseIds.length >= 1;
-          const spouseSet = hideSpouseStandalone ? new Set(selectedSpouseIds) : null;
-          const filteredNearby = spouseSet ? nearby.filter((n) => !spouseSet.has(n.id)) : nearby;
+          // In top-view, if a visible node has multi-union lines, hide standalone
+          // labels of its spouse nodes to avoid duplicate names.
+          const hideSpouseIds = new Set<string>();
+          if (isTopViewActive) {
+              const visibleNodeIds = new Set(nearby.map((n) => n.id));
+              for (const nodeId of visibleNodeIds) {
+                  const spouses = multiUnionSpouseIdsByNode.get(nodeId);
+                  if (!spouses) continue;
+                  for (const spouseId of spouses) hideSpouseIds.add(spouseId);
+              }
+          }
+          const filteredNearby = isTopViewActive
+              ? nearby.filter((n) => !hideSpouseIds.has(n.id) || n.id === selectedId)
+              : nearby;
+          const hideSpouseStandalone = isTopViewActive && selectedSpouseIds.length >= 1;
           const forceSpouses = !hideSpouseStandalone;
           const forced = new Set<string>([
               ...(selectedId ? [selectedId] : []),
-              ...(hoveredNode ? [hoveredNode.id] : []),
-              ...(forceSpouses ? selectedSpouseIds : []),
+              ...(!isTopViewActive && hoveredNode ? [hoveredNode.id] : []),
+              ...(topIsWideOverview ? [] : (forceSpouses ? selectedSpouseIds : [])),
           ]);
           for (const n of filteredNearby) forced.add(n.id);
 
