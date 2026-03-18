@@ -932,6 +932,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       if (e.instanceId !== undefined) {
           const info = traitMapRef.current[e.instanceId];
           if (info) {
+              // In top-view, union traits are hover-only (bold feedback); no click side-effect.
+              if (isTopViewActive && info.type === 'marriage') {
+                  return;
+              }
               if (info.type === 'child') {
                   const childId = resolveClickableChildFromSlot(info);
                   if (childId) {
@@ -1242,6 +1246,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const motherAnchor: 'left' | 'right' = birthAnchor === 'left' ? 'right' : 'left';
 
       const topBaseY = bottomY - (thickness * 1.1) - labelOffset + topNameJitter;
+      // Match top-view individual names to the same size as date labels.
+      const topNameFontSize = labelFontSize * 0.48;
+      const unionHoverScale = isDarkMode ? 1.18 : 1.1;
+      const unionHoverOutlineBoost = isDarkMode ? 0.16 : 0.08;
       const isUnionHoveredForNode = !!(
           isTopViewActive
           && hoveredMarriageTrait
@@ -1265,7 +1273,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       <Text
                           ref={alwaysOnTop}
                           rotation={[0, 0, -Math.PI / 2]}
-                          fontSize={fs}
+                          fontSize={topNameFontSize}
                           color={textColor}
                           outlineWidth={outlineW}
                           outlineColor={outlineC}
@@ -1318,9 +1326,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                                     <Text
                                         ref={alwaysOnTop}
                                         rotation={[0, 0, -Math.PI / 2]}
-                                        fontSize={(isUnionHoveredForNode ? 1.1 : 1) * (fs * 0.92)}
+                                        fontSize={(isUnionHoveredForNode ? unionHoverScale : 1) * topNameFontSize}
                                         color={textColor}
-                                        outlineWidth={isUnionHoveredForNode ? Math.max(outlineW, 0.08) : outlineW}
+                                        outlineWidth={isUnionHoveredForNode ? (outlineW + unionHoverOutlineBoost) : outlineW}
                                         outlineColor={outlineC}
                                         anchorX={lineSelfPlacement.anchor}
                                         anchorY="middle"
@@ -1354,9 +1362,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                                 <Text
                                     ref={alwaysOnTop}
                                     rotation={[0, 0, -Math.PI / 2]}
-                                    fontSize={(isThisUnionHovered ? 1.1 : 1) * (fs * 0.92)}
+                                    fontSize={(isThisUnionHovered ? unionHoverScale : 1) * topNameFontSize}
                                     color={textColor}
-                                    outlineWidth={isThisUnionHovered ? Math.max(outlineW, 0.08) : outlineW}
+                                    outlineWidth={isThisUnionHovered ? (outlineW + unionHoverOutlineBoost) : outlineW}
                                     outlineColor={outlineC}
                                     anchorX={spousePlacement.anchor}
                                     anchorY="middle"
