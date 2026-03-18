@@ -304,6 +304,9 @@ function App() {
   const webglLastRecoveryAtRef = useRef(0);
   const webglRecoverySuppressedUntilRef = useRef(0);
   const webglRecoveryTimerRef = useRef<number | null>(null);
+  // Anti-storm: track consecutive rapid recoveries to enforce a long backoff.
+  const webglRecoveryCountRef = useRef(0);
+  const webglRecoveryWindowStartRef = useRef(0);
   const bundleToastTimeoutRef = useRef<number | null>(null);
   const syncChunkReceiveTimeoutRef = useRef<number | null>(null);
   const incomingSyncChunksRef = useRef<Record<string, {
@@ -1461,7 +1464,7 @@ function App() {
       if (target !== displayMode) {
         // During intentional view switches, old canvases can emit context-lost
         // while unmounting. Ignore recovery in that short window to prevent flicker.
-        webglRecoverySuppressedUntilRef.current = Date.now() + 1500;
+        webglRecoverySuppressedUntilRef.current = Date.now() + 2500;
       }
 
       const wasIn2D = viewMode === '2D';
@@ -1495,21 +1498,35 @@ function App() {
   const handleWebGLContextLost = useCallback(() => {
     const now = Date.now();
     if (now < webglRecoverySuppressedUntilRef.current) return;
-    // Guard against rapid context-lost storms (notably during HMR/dev updates)
-    // to avoid visible remount flicker loops.
     if (webglRecoveryInFlightRef.current) return;
-    if (now - webglLastRecoveryAtRef.current < 2000) return;
+    // Minimum cooldown between recoveries — long enough to prevent GPU storm loops.
+    if (now - webglLastRecoveryAtRef.current < 4000) return;
+
+    // Anti-storm: count consecutive recoveries within a 10 s window.
+    // If ≥ 3 occur, force a 15 s backoff to prevent endless remount cycles.
+    if (now - webglRecoveryWindowStartRef.current > 10000) {
+      webglRecoveryCountRef.current = 0;
+      webglRecoveryWindowStartRef.current = now;
+    }
+    webglRecoveryCountRef.current += 1;
+    if (webglRecoveryCountRef.current >= 3) {
+      webglRecoverySuppressedUntilRef.current = now + 15000;
+      webglRecoveryCountRef.current = 0;
+      return;
+    }
+
     webglRecoveryInFlightRef.current = true;
     webglLastRecoveryAtRef.current = now;
     if (webglRecoveryTimerRef.current !== null) {
       window.clearTimeout(webglRecoveryTimerRef.current);
       webglRecoveryTimerRef.current = null;
     }
+    // 300 ms delay: give the GPU/driver time to stabilise before remounting.
     webglRecoveryTimerRef.current = window.setTimeout(() => {
       setWebglRecoveryKey((prev) => prev + 1);
       webglRecoveryInFlightRef.current = false;
       webglRecoveryTimerRef.current = null;
-    }, 120);
+    }, 300);
   }, []);
 
   useEffect(() => {

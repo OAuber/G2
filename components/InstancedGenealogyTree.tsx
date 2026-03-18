@@ -53,6 +53,10 @@ const TOP_VIEW_RIBBON_OPACITY = 0.68;
 const DATE_X_FACTOR_TOP = 0.75;
 const DATE_X_FACTOR_SIDE = 0.67;
 const TOP_VIEW_UNION_LINE_SPACING_X = 4; // tweak this for top-view union line spacing
+const CONNECTOR_BASE_OPACITY = 0.5;
+const CONNECTOR_PATH_OPACITY = 0.95;
+const CONNECTOR_BASE_LINEWIDTH = 1;
+const CONNECTOR_PATH_LINEWIDTH = 3;
 
 const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
   nodes, 
@@ -80,6 +84,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const [activeChildSlotKey, setActiveChildSlotKey] = useState<string | null>(null);
   const [activeBirthNodeId, setActiveBirthNodeId] = useState<string | null>(null);
   const [activeChildHoverId, setActiveChildHoverId] = useState<string | null>(null);
+  const [hoveredMarriageTrait, setHoveredMarriageTrait] = useState<{ nodeId: string; spouseId: string } | null>(null);
+  const [hoveredNameId, setHoveredNameId] = useState<string | null>(null);
   const traitMapRef = useRef<TraitInstanceInfo[]>([]);
   const baseTraitColorsRef = useRef<Float32Array | null>(null);
   const hideHoverTimerRef = useRef<number | null>(null);
@@ -89,6 +95,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const activePathRef = useRef<Set<string>>(new Set());
   const baseConnectorColorsRef = useRef<Float32Array | null>(null);
+  // LRU-like cache for findRelationshipPath results keyed by "fromId->toId".
+  const relationshipCacheRef = useRef<Map<string, Set<string>>>(new Map());
+  const REL_CACHE_MAX = 120;
+  // Debounce handle for applyPathColors during hover.
+  const hoverPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevHoveredNameIdRef = useRef<string | null>(null);
+  const prevHoveredPartnerIdsRef = useRef<Set<string>>(new Set());
 
   const isTopLabelVisible = (cam: THREE.Camera): boolean => {
       if (!isTopView) {
@@ -203,8 +216,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const connectorMaterial = useMemo(() => new THREE.LineBasicMaterial({ 
       vertexColors: true,
       transparent: true, 
-      opacity: 0.5,
-      linewidth: 1,
+      opacity: CONNECTOR_BASE_OPACITY,
+      linewidth: CONNECTOR_BASE_LINEWIDTH,
       depthWrite: false // Helps line visibility inside transparent boxes
   }), []);
 
@@ -222,6 +235,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           setActiveChildSlotKey(null);
           setActiveBirthNodeId(null);
           setActiveChildHoverId(null);
+          setHoveredMarriageTrait(null);
       }, 1300);
   };
   useEffect(() => {
@@ -526,16 +540,174 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     return false;
   };
 
+  const computeImplexPathIds = (rootId: string): Set<string> => {
+    const ids = new Set<string>();
+    if (!data?.individuals[rootId]) return ids;
+    const getParents = (id: string): string[] => {
+      const indi = data.individuals[id];
+      if (!indi?.familyChildId) return [];
+      const fam = data.families[indi.familyChildId];
+      if (!fam) return [];
+      return [fam.husbandId, fam.wifeId].filter((p): p is string => !!p && !!data.individuals[p]);
+    };
+
+    const rootParents = getParents(rootId);
+
+    // For each first-level parent branch, track ascendant reachability and one predecessor chain.
+    const reachByBranch = rootParents.map(() => new Set<string>());
+    const prevByBranch = rootParents.map(() => new Map<string, string>());
+
+    rootParents.forEach((parentId, bi) => {
+      const q: string[] = [parentId];
+      reachByBranch[bi].add(parentId);
+      while (q.length > 0) {
+        const cur = q.shift()!;
+        const parents = getParents(cur);
+        for (const p of parents) {
+          if (reachByBranch[bi].has(p)) continue;
+          reachByBranch[bi].add(p);
+          prevByBranch[bi].set(p, cur); // p -> child on this branch
+          q.push(p);
+        }
+      }
+    });
+
+    // Implex ancestors: reached by at least two distinct first-level branches.
+    const allAncestors = new Set<string>();
+    reachByBranch.forEach((s) => s.forEach((id) => allAncestors.add(id)));
+    const implexAncestors: string[] = [];
+    allAncestors.forEach((a) => {
+      let branches = 0;
+      for (let i = 0; i < reachByBranch.length; i++) {
+        if (reachByBranch[i].has(a)) branches++;
+      }
+      if (branches >= 2) implexAncestors.push(a);
+    });
+
+    ids.add(rootId);
+    if (implexAncestors.length > 0) {
+      // Keep only minimal ascendant paths from selected root to implex ancestors,
+      // using two distinct parental branches to avoid lighting the whole ascendance.
+      for (const anc of implexAncestors) {
+        const branchIndexes: number[] = [];
+        for (let i = 0; i < reachByBranch.length; i++) {
+          if (reachByBranch[i].has(anc)) branchIndexes.push(i);
+        }
+        const chosen = branchIndexes.slice(0, 2);
+        for (const bi of chosen) {
+          ids.add(rootParents[bi]);
+          let cur = anc;
+          ids.add(cur);
+          while (cur !== rootParents[bi]) {
+            const child = prevByBranch[bi].get(cur);
+            if (!child) break;
+            ids.add(child);
+            cur = child;
+          }
+        }
+      }
+      if (ids.size > 1) return ids;
+    }
+
+    // Fallback: relaxed implex detection across all ascendant branches
+    // (still path-based), used when strict branch split is too selective.
+    const relaxed = new Set<string>([rootId]);
+    const counts = new Map<string, number>([[rootId, 1]]);
+    const parentToChildren = new Map<string, Set<string>>();
+    const upQ: string[] = [rootId];
+    while (upQ.length > 0) {
+      const childId = upQ.shift()!;
+      const parents = getParents(childId);
+      const childCount = counts.get(childId) ?? 0;
+      for (const p of parents) {
+        let s = parentToChildren.get(p);
+        if (!s) {
+          s = new Set<string>();
+          parentToChildren.set(p, s);
+        }
+        s.add(childId);
+        const prev = counts.get(p) ?? 0;
+        const next = Math.min(2, prev + childCount);
+        if (next > prev) {
+          counts.set(p, next);
+          upQ.push(p);
+        }
+      }
+    }
+    const relaxedImplex = Array.from(counts.entries())
+      .filter(([id, c]) => id !== rootId && c >= 2)
+      .map(([id]) => id);
+    for (const anc of relaxedImplex) {
+      // Shortest descendant path ancestor -> root on the ascendant DAG reverse.
+      const q: string[] = [anc];
+      const prev = new Map<string, string>();
+      const seen = new Set<string>([anc]);
+      let found = false;
+      while (q.length > 0 && !found) {
+        const cur = q.shift()!;
+        if (cur === rootId) {
+          found = true;
+          break;
+        }
+        const children = parentToChildren.get(cur);
+        if (!children) continue;
+        for (const c of children) {
+          if (seen.has(c)) continue;
+          seen.add(c);
+          prev.set(c, cur);
+          q.push(c);
+        }
+      }
+      if (!seen.has(rootId)) continue;
+      let cur = rootId;
+      relaxed.add(cur);
+      while (cur !== anc) {
+        const p = prev.get(cur);
+        if (!p) break;
+        relaxed.add(p);
+        cur = p;
+      }
+    }
+    return relaxed.size > 1 ? relaxed : ids;
+  };
+
+  // Shared scratch Color instances to avoid per-call allocations.
+  const _applyBg = new THREE.Color();
+  const _applyC = new THREE.Color();
+  const _applyPath = new THREE.Color();
+
   const applyPathColors = (pathIds: Set<string>) => {
     const pathMesh = pathMeshRef.current;
     const boxMesh = boxMeshRef.current;
     if (!pathMesh || !boxMesh) return;
 
     const hasPath = pathIds.size > 0;
-    const bg = new THREE.Color(isDarkMode ? '#000000' : '#f0f9ff');
+    const prevPath = activePathRef.current;
+    const prevHasPath = prevPath.size > 0;
     const FADE = 0.93;
+    _applyBg.set(isDarkMode ? '#000000' : '#f0f9ff');
 
-    nodes.forEach((node, i) => {
+    // Incremental update: only rewrite instances whose on-path status changed.
+    // Also force full rewrite when top-view spouse-hover target changes, because
+    // ribbon emphasis depends on hoveredNamePartnerIds rather than path status.
+    const prevHoverPartners = prevHoveredPartnerIdsRef.current;
+    let hoverPartnersChanged = hoveredNamePartnerIds.size !== prevHoverPartners.size;
+    if (!hoverPartnersChanged) {
+      for (const id of hoveredNamePartnerIds) {
+        if (!prevHoverPartners.has(id)) {
+          hoverPartnersChanged = true;
+          break;
+        }
+      }
+    }
+    const hoverChanged = prevHoveredNameIdRef.current !== hoveredNameId || hoverPartnersChanged;
+    const fullRewrite = hasPath !== prevHasPath || (isTopViewActive && hoverChanged);
+
+    let boxDirty = false;
+    let pathDirty = false;
+
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
       const isSelected = node.id === selectedId;
       const hasPathConnector = hasPath && node.traits.some(
         trait => trait.type === 'child'
@@ -544,20 +716,38 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           && isConnectorOnPath(node.id, trait.childId, pathIds),
       );
       const isOnPath = hasPath && (pathIds.has(node.id) || hasPathConnector);
-      let c: THREE.Color;
-      if (isSelected) {
-        c = new THREE.Color(COLORS.select[node.gender] || COLORS.select[Gender.Unknown]);
-      } else if (isOnPath || !hasPath) {
-        c = node.color;
-      } else {
-        c = node.color.clone().lerp(bg, FADE);
-      }
-      boxMesh.setColorAt(i, c);
-      pathMesh.setColorAt(i, c.clone().addScalar(isSelected ? 0.05 : (isOnPath || !hasPath) ? 0.1 : 0.02));
-    });
 
-    if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
-    if (pathMesh.instanceColor) pathMesh.instanceColor.needsUpdate = true;
+      const wasPathConnector = prevHasPath && node.traits.some(
+        trait => trait.type === 'child'
+          && !!trait.childId
+          && nodesMap.has(trait.childId)
+          && isConnectorOnPath(node.id, trait.childId, prevPath),
+      );
+      const wasOnPath = prevHasPath && (prevPath.has(node.id) || wasPathConnector);
+
+      // Skip if no status change and not a full rewrite.
+      if (!fullRewrite && isOnPath === wasOnPath && !isSelected) continue;
+
+      if (isSelected) {
+        _applyC.set(COLORS.select[node.gender] || COLORS.select[Gender.Unknown]);
+      } else if (isOnPath || !hasPath) {
+        _applyC.copy(node.color);
+      } else {
+        _applyC.copy(node.color).lerp(_applyBg, FADE);
+      }
+      // Top-view only: hovering a spouse name makes partner ribbons more transparent.
+      if (isTopViewActive && hoveredNamePartnerIds.has(node.id) && node.id !== hoveredNameId) {
+        _applyC.lerp(_applyBg, 0.85);
+      }
+      boxMesh.setColorAt(i, _applyC);
+      _applyPath.copy(_applyC).addScalar(isSelected ? 0.05 : (isOnPath || !hasPath) ? 0.1 : 0.02);
+      pathMesh.setColorAt(i, _applyPath);
+      boxDirty = true;
+      pathDirty = true;
+    }
+
+    if (boxDirty && boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
+    if (pathDirty && pathMesh.instanceColor) pathMesh.instanceColor.needsUpdate = true;
 
     if (connectorsGeometryRef.current && baseConnectorColorsRef.current) {
       const colorAttr = connectorsGeometryRef.current.getAttribute('color') as THREE.BufferAttribute;
@@ -565,10 +755,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         const base = baseConnectorColorsRef.current;
         const arr = colorAttr.array as Float32Array;
         if (hasPath) {
-          const bgR = bg.r, bgG = bg.g, bgB = bg.b;
+          const bgR = _applyBg.r, bgG = _applyBg.g, bgB = _applyBg.b;
+          const hiR = isDarkMode ? 1.0 : 0.06;
+          const hiG = isDarkMode ? 0.98 : 0.32;
+          const hiB = isDarkMode ? 0.62 : 0.08;
           let ci = 0;
-          nodes.forEach(node => {
-            node.traits.forEach(trait => {
+          for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            for (let ti = 0; ti < node.traits.length; ti++) {
+              const trait = node.traits[ti];
               if (trait.type === 'child' && trait.childId && nodesMap.has(trait.childId)) {
                 const onPathConn = isConnectorOnPath(node.id, trait.childId, pathIds);
                 if (!onPathConn) {
@@ -577,12 +772,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                     arr[ci + k] = base[ci + k] + (bgC - base[ci + k]) * FADE;
                   }
                 } else {
-                  for (let k = 0; k < 6; k++) arr[ci + k] = base[ci + k];
+                  for (let k = 0; k < 6; k += 3) {
+                    const br = base[ci + k];
+                    const bgc = base[ci + k + 1];
+                    const bb = base[ci + k + 2];
+                    arr[ci + k] = br + (hiR - br) * 0.55;
+                    arr[ci + k + 1] = bgc + (hiG - bgc) * 0.55;
+                    arr[ci + k + 2] = bb + (hiB - bb) * 0.55;
+                  }
                 }
                 ci += 6;
               }
-            });
-          });
+            }
+          }
         } else {
           arr.set(base);
         }
@@ -590,13 +792,33 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
     }
 
+    // Emphasize direct links during Ctrl/⌘ hover reveal.
+    // Note: linewidth support depends on platform/driver; opacity+color boost remains effective.
+    connectorMaterial.opacity = hasPath ? CONNECTOR_PATH_OPACITY : CONNECTOR_BASE_OPACITY;
+    connectorMaterial.linewidth = hasPath ? CONNECTOR_PATH_LINEWIDTH : CONNECTOR_BASE_LINEWIDTH;
+    connectorMaterial.needsUpdate = true;
+
     activePathRef.current = pathIds;
+    prevHoveredNameIdRef.current = hoveredNameId;
+    prevHoveredPartnerIdsRef.current = new Set(hoveredNamePartnerIds);
   };
 
   useLayoutEffect(() => {
     if (relationshipRevealEnabled) return;
     applyPathColors(new Set());
   }, [relationshipRevealEnabled]);
+  useEffect(() => {
+    // Re-apply colors when top-view name hover changes partner ribbon emphasis.
+    applyPathColors(activePathRef.current);
+  }, [hoveredNameId, isTopViewActive]);
+  useEffect(() => {
+    if (!isTopViewActive) setHoveredNameId(null);
+  }, [isTopViewActive]);
+
+  // Invalidate relationship path cache when the root context changes.
+  useEffect(() => {
+    relationshipCacheRef.current.clear();
+  }, [selectedId, data]);
 
   useEffect(() => {
     const mesh = traitsMeshRef.current;
@@ -632,6 +854,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const handleBoxClick = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
+      if (isTopViewActive) return;
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
           onNodeClick?.(nodes[e.instanceId].id);
       }
@@ -639,20 +862,37 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const handleBoxHover = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
-      document.body.style.cursor = 'pointer';
-      if (isTopViewActive) {
-          // In top-view, keep labels stable; no hover-injected name variants.
-          return;
-      }
+      document.body.style.cursor = isTopViewActive ? 'auto' : 'pointer';
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
           const node = nodes[e.instanceId];
           if (hoveredNode?.id !== node.id) {
               setHoveredNode(node);
-              if (relationshipRevealEnabled && selectedId && node.id !== selectedId && data) {
-                  try {
-                      const pathIds = findRelationshipPath(data, selectedId, node.id);
-                      applyPathColors(pathIds);
-                  } catch (_e) { /* ignore */ }
+              if (relationshipRevealEnabled && selectedId && data) {
+                  // Debounce: avoid heavy path computation on every pointer-move frame.
+                  if (hoverPathTimerRef.current !== null) clearTimeout(hoverPathTimerRef.current);
+                  const nodeId = node.id;
+                  hoverPathTimerRef.current = setTimeout(() => {
+                      hoverPathTimerRef.current = null;
+                      try {
+                          if (nodeId === selectedId) {
+                              // Inverse reveal: show links toward implex ancestors.
+                              applyPathColors(computeImplexPathIds(selectedId));
+                          } else {
+                              const cacheKey = `${selectedId}->${nodeId}`;
+                              let pathIds = relationshipCacheRef.current.get(cacheKey);
+                              if (!pathIds) {
+                                  pathIds = findRelationshipPath(data, selectedId, nodeId);
+                                  // Evict oldest entry when cache is full.
+                                  if (relationshipCacheRef.current.size >= REL_CACHE_MAX) {
+                                      const firstKey = relationshipCacheRef.current.keys().next().value;
+                                      if (firstKey !== undefined) relationshipCacheRef.current.delete(firstKey);
+                                  }
+                                  relationshipCacheRef.current.set(cacheKey, pathIds);
+                              }
+                              applyPathColors(pathIds);
+                          }
+                      } catch (_e) { /* ignore */ }
+                  }, 60);
               } else {
                   applyPathColors(new Set());
               }
@@ -666,18 +906,45 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       applyPathColors(new Set());
   };
 
+  const resolveClickableChildFromSlot = (info: TraitInstanceInfo): string | null => {
+      if (info.type !== 'child') return null;
+      if (!info.slotKey) return info.relatedId ?? null;
+
+      const slotChildIds = new Set<string>();
+      for (let i = 0; i < childLabelsDataRef.current.length; i++) {
+          const lbl = childLabelsDataRef.current[i];
+          if (lbl.slotKey === info.slotKey) slotChildIds.add(lbl.childId);
+      }
+      const uniqueCount = slotChildIds.size;
+      if (uniqueCount === 0) return null;
+      if (uniqueCount === 1) return slotChildIds.values().next().value ?? null;
+
+      // Multi-child birth dash (twins/triplets...): clickable only after
+      // hovering a specific child label, which sets activeChildHoverId.
+      if (activeChildHoverId && slotChildIds.has(activeChildHoverId)) {
+          return activeChildHoverId;
+      }
+      return null;
+  };
+
   const handleTraitClick = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
       if (e.instanceId !== undefined) {
           const info = traitMapRef.current[e.instanceId];
           if (info) {
-              // Birth dashes (child traits) are hover-only: no click side-effect.
               if (info.type === 'child') {
+                  const childId = resolveClickableChildFromSlot(info);
+                  if (childId) {
+                      onChildLabelClick?.(childId);
+                  }
                   return;
               }
               if (info.type === 'birth') {
                   const motherId = data?.individuals[info.nodeId]?.familyChildId
-                      ? data?.families[data.individuals[info.nodeId].familyChildId!]?.wifeId
+                      ? (
+                          data?.families[data.individuals[info.nodeId].familyChildId!]?.wifeId
+                          ?? data?.families[data.individuals[info.nodeId].familyChildId!]?.husbandId
+                        )
                       : undefined;
                   if (motherId) {
                       onMotherLabelClick?.(motherId);
@@ -703,13 +970,25 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       if (info.type === 'child' && info.slotKey) {
           setActiveChildSlotKey(info.slotKey);
           setActiveBirthNodeId(null);
-          setActiveChildHoverId(null);
+          setHoveredMarriageTrait(null);
       } else if (info.type === 'birth') {
           setActiveBirthNodeId(info.nodeId);
           setActiveChildSlotKey(null);
           setActiveChildHoverId(null);
+          setHoveredMarriageTrait(null);
+      } else if (info.type === 'marriage' && isTopViewActive && info.relatedId) {
+          setActiveBirthNodeId(null);
+          setActiveChildSlotKey(null);
+          setActiveChildHoverId(null);
+          setHoveredMarriageTrait({ nodeId: info.nodeId, spouseId: info.relatedId });
+      } else {
+          setHoveredMarriageTrait(null);
       }
-      document.body.style.cursor = 'pointer';
+      if (info.type === 'child') {
+          document.body.style.cursor = resolveClickableChildFromSlot(info) ? 'pointer' : 'default';
+      } else {
+          document.body.style.cursor = 'pointer';
+      }
   };
 
   const selectedSpouseIds = useMemo<string[]>(() => {
@@ -742,6 +1021,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
       return map;
   }, [data]);
+  const hoveredNamePartnerIds = useMemo(() => {
+      const ids = new Set<string>();
+      if (!isTopViewActive || !data || !hoveredNameId) return ids;
+      const indi = data.individuals[hoveredNameId];
+      if (!indi?.familySpouseIds) return ids;
+      for (const famId of indi.familySpouseIds) {
+          const fam = data.families[famId];
+          if (!fam) continue;
+          const spouseId = fam.husbandId === hoveredNameId ? fam.wifeId : fam.husbandId;
+          if (spouseId && nodesMap.has(spouseId)) ids.add(spouseId);
+      }
+      return ids;
+  }, [isTopViewActive, data, hoveredNameId, nodesMap]);
 
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
@@ -942,12 +1234,22 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               if (mYear === null && bYear) mYear = Math.round(bYear + t.offset);
               return { key: `m-${node.id}-${idx}`, text: mYear ? `${mYear}${mCal ? '\n(CAL)' : ''}` : '?', pos: traitPos(t.offset) };
           });
-      const motherId = indi.familyChildId ? data.families[indi.familyChildId]?.wifeId : undefined;
+      const motherId = indi.familyChildId
+          ? (data.families[indi.familyChildId]?.wifeId ?? data.families[indi.familyChildId]?.husbandId)
+          : undefined;
       const mother = motherId ? data.individuals[motherId] : undefined;
       const motherName = mother ? `${mother.givenName} ${mother.surname}`.trim() : '';
       const motherAnchor: 'left' | 'right' = birthAnchor === 'left' ? 'right' : 'left';
 
       const topBaseY = bottomY - (thickness * 1.1) - labelOffset + topNameJitter;
+      const isUnionHoveredForNode = !!(
+          isTopViewActive
+          && hoveredMarriageTrait
+          && spouseUnionLines.some((s) =>
+              (hoveredMarriageTrait.nodeId === node.id && hoveredMarriageTrait.spouseId === s.spouseId)
+              || (hoveredMarriageTrait.nodeId === s.spouseId && hoveredMarriageTrait.spouseId === node.id),
+          )
+      );
       return (
         <>
           {isTopViewActive ? (
@@ -970,6 +1272,20 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                           anchorX={topSelfPlacement.anchor}
                           anchorY="middle"
                           renderOrder={999}
+                          onClick={(e: ThreeEvent<MouseEvent>) => {
+                              e.stopPropagation();
+                              onNodeClick?.(node.id);
+                          }}
+                          onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                              e.stopPropagation();
+                              setHoveredNameId(node.id);
+                              document.body.style.cursor = 'pointer';
+                          }}
+                          onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                              e.stopPropagation();
+                              setHoveredNameId(null);
+                              document.body.style.cursor = 'auto';
+                          }}
                       >
                           {fullName}
                       </Text>
@@ -978,6 +1294,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                 {hasUnionLines && spouseUnionLines.map((spouseLine, idx) => {
                     const lineSelfPlacement = topNamePlacement(node.gender, multiUnionGroupBounds, true);
                     const spousePlacement = topNamePlacement(spouseLine.spouseGender, multiUnionGroupBounds, true);
+                    const isThisUnionHovered = !!(
+                        isTopViewActive
+                        && hoveredMarriageTrait
+                        && (
+                            (hoveredMarriageTrait.nodeId === node.id && hoveredMarriageTrait.spouseId === spouseLine.spouseId)
+                            || (hoveredMarriageTrait.nodeId === spouseLine.spouseId && hoveredMarriageTrait.spouseId === node.id)
+                        )
+                    );
                     // In top-view, screen vertical axis follows world X (camera up = +X).
                     // Stack union rows on X to display union #2 below union #1.
                     const lineXDelta = idx * TOP_VIEW_UNION_LINE_SPACING_X;
@@ -994,13 +1318,27 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                                     <Text
                                         ref={alwaysOnTop}
                                         rotation={[0, 0, -Math.PI / 2]}
-                                        fontSize={fs * 0.92}
+                                        fontSize={(isUnionHoveredForNode ? 1.1 : 1) * (fs * 0.92)}
                                         color={textColor}
-                                        outlineWidth={outlineW}
+                                        outlineWidth={isUnionHoveredForNode ? Math.max(outlineW, 0.08) : outlineW}
                                         outlineColor={outlineC}
                                         anchorX={lineSelfPlacement.anchor}
                                         anchorY="middle"
                                         renderOrder={999}
+                                        onClick={(e: ThreeEvent<MouseEvent>) => {
+                                            e.stopPropagation();
+                                            onNodeClick?.(node.id);
+                                        }}
+                                        onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                                            e.stopPropagation();
+                                            setHoveredNameId(node.id);
+                                            document.body.style.cursor = 'pointer';
+                                        }}
+                                        onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                                            e.stopPropagation();
+                                            setHoveredNameId(null);
+                                            document.body.style.cursor = 'auto';
+                                        }}
                                     >
                                         {fullName}
                                     </Text>
@@ -1016,13 +1354,27 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                                 <Text
                                     ref={alwaysOnTop}
                                     rotation={[0, 0, -Math.PI / 2]}
-                                    fontSize={fs * 0.92}
+                                    fontSize={(isThisUnionHovered ? 1.1 : 1) * (fs * 0.92)}
                                     color={textColor}
-                                    outlineWidth={outlineW}
+                                    outlineWidth={isThisUnionHovered ? Math.max(outlineW, 0.08) : outlineW}
                                     outlineColor={outlineC}
                                     anchorX={spousePlacement.anchor}
                                     anchorY="middle"
                                     renderOrder={999}
+                                    onClick={(e: ThreeEvent<MouseEvent>) => {
+                                        e.stopPropagation();
+                                        onNodeClick?.(spouseLine.spouseId);
+                                    }}
+                                    onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                                        e.stopPropagation();
+                                        setHoveredNameId(spouseLine.spouseId);
+                                        document.body.style.cursor = 'pointer';
+                                    }}
+                                    onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                                        e.stopPropagation();
+                                        setHoveredNameId(null);
+                                        document.body.style.cursor = 'auto';
+                                    }}
                                 >
                                     {spouseLine.spouseName}
                                 </Text>
@@ -1073,7 +1425,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               </Text>
           </Billboard>
 
-          {/* Mother label on birth trait axis (same principle as 2D), visible on hover in all 3D modes */}
+          {/* Parent label on birth trait axis (mother preferred, father fallback), visible on hover */}
           {activeBirthNodeId === node.id && !!motherId && !!motherName && (
             <Billboard
                 position={motherPos}
@@ -1238,8 +1590,18 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const lastKeyRef = useRef('');
       const DIST = isTopView ? 100000 : 260;
       const MAX = isTopView ? 220 : 40;
+      // Throttle: recalculate at most every LABEL_RECALC_INTERVAL_MS ms.
+      const LABEL_RECALC_INTERVAL_MS = isTopView ? 80 : 50;
+      const lastRecalcTimeRef = useRef(0);
+      // Stable reusable vectors to avoid per-frame allocations.
+      const tmpPRef = useRef(new THREE.Vector3());
+      const tmpSRef = useRef(new THREE.Vector3());
+      const tmpQRef = useRef(new THREE.Quaternion());
+      const tmpNdcRef = useRef(new THREE.Vector3());
+      // Camera state cache to skip recalc when camera has not moved.
+      const lastCamKeyRef = useRef('');
 
-      useFrame(({ camera }) => {
+      useFrame(({ camera, clock }) => {
           const topLabelsEnabled = isTopLabelVisible(camera);
           if (!topLabelsEnabled) {
               if (lastKeyRef.current !== '__hidden__') {
@@ -1248,27 +1610,43 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               }
               return;
           }
+
+          // Throttle: skip recalculation if within the interval.
+          const now = clock.elapsedTime * 1000;
+          if (now - lastRecalcTimeRef.current < LABEL_RECALC_INTERVAL_MS) return;
+
+          // Skip recalc if camera has not meaningfully moved or zoomed.
           const orthoCam = camera as any;
+          const zoom = orthoCam.zoom ?? 1;
+          const camKey = `${camera.position.x.toFixed(2)},${camera.position.y.toFixed(2)},${camera.position.z.toFixed(2)},${zoom.toFixed(4)}`;
+          if (camKey === lastCamKeyRef.current && lastKeyRef.current !== '__hidden__' && lastKeyRef.current !== '') return;
+          lastCamKeyRef.current = camKey;
+          lastRecalcTimeRef.current = now;
+
           const topVisibleZSpan = (isTopViewActive && orthoCam.isOrthographicCamera)
-              ? Math.abs((orthoCam.right - orthoCam.left) / Math.max(orthoCam.zoom, 0.0001))
+              ? Math.abs((orthoCam.right - orthoCam.left) / Math.max(zoom, 0.0001))
               : 0;
           // When zoomed out very wide in top-view, reduce label density to keep fluidity.
           const topIsWideOverview = isTopViewActive && topVisibleZSpan > topViewLabelMaxZSpan;
           const effectiveMax = topIsWideOverview ? 70 : MAX;
           const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
           const nearby: Array<{ id: string; dist: number }> = [];
-          const tmpP = new THREE.Vector3();
-          const tmpS = new THREE.Vector3();
-          const tmpQ = new THREE.Quaternion();
+          const tmpP = tmpPRef.current;
+          const tmpS = tmpSRef.current;
+          const tmpQ = tmpQRef.current;
+          const tmpNdc = tmpNdcRef.current;
 
+          // Frustum culling: only project to NDC if within distance threshold first.
           for (let i = 0; i < nodes.length; i++) {
               const n = nodes[i];
               n.matrix.decompose(tmpP, tmpQ, tmpS);
               const dx = cx - tmpP.x, dy = cy - tmpP.y, dz = cz - tmpP.z;
-              const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-              const ndc = tmpP.clone().project(camera);
-              const inView = ndc.z > -1 && ndc.z < 1 && ndc.x > -1.2 && ndc.x < 1.2 && ndc.y > -1.2 && ndc.y < 1.2;
-              if (dist < DIST && inView) nearby.push({ id: n.id, dist });
+              const dist2 = dx * dx + dy * dy + dz * dz;
+              if (dist2 > DIST * DIST) continue;
+              // Reuse tmpNdc instead of allocating a clone per node.
+              tmpNdc.copy(tmpP).project(camera);
+              const inView = tmpNdc.z > -1 && tmpNdc.z < 1 && tmpNdc.x > -1.2 && tmpNdc.x < 1.2 && tmpNdc.y > -1.2 && tmpNdc.y < 1.2;
+              if (inView) nearby.push({ id: n.id, dist: Math.sqrt(dist2) });
           }
 
           nearby.sort((a, b) => a.dist - b.dist);
@@ -1278,11 +1656,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           // labels of its spouse nodes to avoid duplicate names.
           const hideSpouseIds = new Set<string>();
           if (isTopViewActive) {
-              const visibleNodeIds = new Set(nearby.map((n) => n.id));
-              for (const nodeId of visibleNodeIds) {
-                  const spouses = multiUnionSpouseIdsByNode.get(nodeId);
+              for (let ni = 0; ni < nearby.length; ni++) {
+                  const spouses = multiUnionSpouseIdsByNode.get(nearby[ni].id);
                   if (!spouses) continue;
-                  for (const spouseId of spouses) hideSpouseIds.add(spouseId);
+                  spouses.forEach((spouseId) => hideSpouseIds.add(spouseId));
               }
           }
           const filteredNearby = isTopViewActive
@@ -1298,6 +1675,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           for (const n of filteredNearby) forced.add(n.id);
 
           const ids = Array.from(forced);
+          ids.sort(); // stable sort for reliable key
           const key = ids.join(',');
           if (key !== lastKeyRef.current) {
               lastKeyRef.current = key;
@@ -1342,6 +1720,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
             onPointerOver={handleTraitPointerMove}
             onPointerMove={handleTraitPointerMove}
             onPointerOut={() => {
+                setHoveredMarriageTrait(null);
                 scheduleHoverHide();
                 document.body.style.cursor = 'auto';
             }}

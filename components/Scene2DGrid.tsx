@@ -172,6 +172,8 @@ interface TraitInfo {
   offset: number;
   childId?: string;
   spouseId?: string;
+  // Birth parent shown on the birth trait:
+  // prefer mother, fallback to father if mother is unknown.
   motherId?: string;
   familyId?: string;
   isTwinGroupMarker?: boolean;
@@ -197,7 +199,8 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
     const traits: TraitInfo[] = [];
 
     const birthFamily = data && indi.familyChildId ? data.families[indi.familyChildId] : null;
-    const birthMotherId = birthFamily?.wifeId ?? undefined;
+    // Prefer mother for the birth relation label/click, fallback to father when missing.
+    const birthMotherId = birthFamily?.wifeId ?? birthFamily?.husbandId ?? undefined;
 
     if (indi.birthDate?.year) {
       traits.push({
@@ -454,6 +457,10 @@ const GridContent: React.FC<GridContentProps> = ({
   const hoveredRef = useRef<number>(-1);
   const [hoveredIdx, setHoveredIdx] = useState(-1);
   const pathSetRef = useRef<Set<string>>(new Set());
+  // LRU-like cache for findRelationshipPath and debounce timer.
+  const rel2dCacheRef = useRef<Map<string, Set<string>>>(new Map());
+  const rel2dTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const REL2D_CACHE_MAX = 120;
   const colsRef = useRef(0);
   const [layoutCols, setLayoutCols] = useState(1);
   const initializedRef = useRef(false);
@@ -1098,6 +1105,11 @@ const GridContent: React.FC<GridContentProps> = ({
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [relationshipRevealEnabled, clearPathHighlight]);
 
+  // Invalidate 2D relationship path cache when root context changes.
+  useEffect(() => {
+    rel2dCacheRef.current.clear();
+  }, [selectedId, data]);
+
   const handlePointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
     const mesh = ribbonMeshRef.current;
     if (!mesh) return;
@@ -1141,12 +1153,28 @@ const GridContent: React.FC<GridContentProps> = ({
       }
       document.body.style.cursor = cursor;
 
-      // Compute and highlight relationship path
+      // Compute and highlight relationship path (debounced + cached).
       if (relationshipRevealEnabled && selectedId && data && indi.id !== selectedId) {
-        try {
-          const pathIds = findRelationshipPath(data, selectedId, indi.id);
-          applyPathHighlight(mesh, pathIds);
-        } catch (e) { console.error('[2D Path] error:', e); }
+        if (rel2dTimerRef.current !== null) clearTimeout(rel2dTimerRef.current);
+        const targetId = indi.id;
+        const meshSnap = mesh;
+        rel2dTimerRef.current = setTimeout(() => {
+          rel2dTimerRef.current = null;
+          try {
+            const cacheKey = `${selectedId}->${targetId}`;
+            let pathIds = rel2dCacheRef.current.get(cacheKey);
+            if (!pathIds) {
+              pathIds = findRelationshipPath(data, selectedId, targetId);
+              if (rel2dCacheRef.current.size >= REL2D_CACHE_MAX) {
+                const firstKey = rel2dCacheRef.current.keys().next().value;
+                if (firstKey !== undefined) rel2dCacheRef.current.delete(firstKey);
+              }
+              rel2dCacheRef.current.set(cacheKey, pathIds);
+            }
+            applyPathHighlight(meshSnap, pathIds);
+            if (meshSnap.instanceColor) meshSnap.instanceColor.needsUpdate = true;
+          } catch (e) { console.error('[2D Path] error:', e); }
+        }, 60);
       }
     }
 
