@@ -250,32 +250,28 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
         }
 
         if (fam.childrenIds) {
-          const isFather = indi.gender === Gender.Male;
-          const hasMother = !!fam.wifeId;
-          if (!(isFather && hasMother)) {
-            const childOffsetCounts = new Map<string, number>();
-            const childEntries: { childId: string; cOffset: number }[] = [];
-            for (const childId of fam.childrenIds) {
-              const child = data.individuals[childId];
-              if (child) {
-                const cBirth = child.birthDate?.year ?? (birthYear + 25);
-                const cOffset = Math.min(Math.max(0, cBirth - birthYear), lifespan);
-                childEntries.push({ childId, cOffset });
-                const key = cOffset.toFixed(3);
-                childOffsetCounts.set(key, (childOffsetCounts.get(key) ?? 0) + 1);
-              }
+          const childOffsetCounts = new Map<string, number>();
+          const childEntries: { childId: string; cOffset: number }[] = [];
+          for (const childId of fam.childrenIds) {
+            const child = data.individuals[childId];
+            if (child) {
+              const cBirth = child.birthDate?.year ?? (birthYear + 25);
+              const cOffset = Math.min(Math.max(0, cBirth - birthYear), lifespan);
+              childEntries.push({ childId, cOffset });
+              const key = cOffset.toFixed(3);
+              childOffsetCounts.set(key, (childOffsetCounts.get(key) ?? 0) + 1);
             }
-            for (const entry of childEntries) {
-              const key = entry.cOffset.toFixed(3);
-              const groupSize = childOffsetCounts.get(key) ?? 1;
-              traits.push({
-                type: 'child',
-                offset: entry.cOffset,
-                childId: entry.childId,
-                familyId: famId,
-                isTwinGroupMarker: groupSize > 1,
-              });
-            }
+          }
+          for (const entry of childEntries) {
+            const key = entry.cOffset.toFixed(3);
+            const groupSize = childOffsetCounts.get(key) ?? 1;
+            traits.push({
+              type: 'child',
+              offset: entry.cOffset,
+              childId: entry.childId,
+              familyId: famId,
+              isTwinGroupMarker: groupSize > 1,
+            });
           }
         }
       }
@@ -1303,12 +1299,54 @@ const GridContent: React.FC<GridContentProps> = ({
               : '';
         return {
           key: `${t.type}-${t.offset}-${t.spouseId ?? ''}-${t.motherId ?? ''}`,
-          y,
+          type: t.type,
+          sourceY: y,
+          targetY: y,
           text,
           relationText,
           relationId: t.type === 'birth' ? t.motherId : t.type === 'marriage' ? t.spouseId : undefined,
         };
       });
+    // Space close union labels (spouse names and union dates) and keep links
+    // to their original union traits using thin connectors.
+    const marriageRows = dateTraits
+      .filter((d) => d.type === 'marriage')
+      .sort((a, b) => a.sourceY - b.sourceY);
+    // Stronger and fully visible spacing for close union labels.
+    const marriageMinGap = Math.max(childFs * 2.25, 1.35 * YEAR);
+    const marriageMinY = cy - rH / 2 - (1.2 * YEAR);
+    const marriageMaxY = cy + rH / 2 + (3.4 * YEAR);
+    if (marriageRows.length > 1) {
+      const center = marriageRows.reduce((s, r) => s + r.sourceY, 0) / marriageRows.length;
+      let start = center - ((marriageRows.length - 1) * marriageMinGap) / 2;
+      let end = start + (marriageRows.length - 1) * marriageMinGap;
+      if (start < marriageMinY) {
+        const shift = marriageMinY - start;
+        start += shift;
+        end += shift;
+      }
+      if (end > marriageMaxY) {
+        const shift = end - marriageMaxY;
+        start -= shift;
+      }
+      for (let i = 0; i < marriageRows.length; i++) {
+        marriageRows[i].targetY = start + i * marriageMinGap;
+      }
+    } else if (marriageRows.length === 1) {
+      marriageRows[0].targetY = Math.max(marriageMinY, Math.min(marriageMaxY, marriageRows[0].sourceY));
+    }
+    const marriageByKey = new Map(marriageRows.map((m) => [m.key, m]));
+    const finalDateTraits = dateTraits.map((d) => marriageByKey.get(d.key) ?? d);
+    // If birth date is unknown (no birth trait), still show the birth parent
+    // (mother, or father fallback) at the ribbon's bottom-left.
+    const birthParentId = data && indi.familyChildId
+      ? (data.families[indi.familyChildId]?.wifeId ?? data.families[indi.familyChildId]?.husbandId)
+      : undefined;
+    const birthParent = birthParentId && data ? data.individuals[birthParentId] : null;
+    const unknownBirthRelationText = birthParent
+      ? `${birthParent.givenName} ${birthParent.surname}`.trim()
+      : '';
+    const unknownBirthRelationY = cy - rH / 2;
 
     const childTraitsRaw = rd.traits
       .filter((t) => t.type === 'child' && !!t.childId)
@@ -1432,10 +1470,10 @@ const GridContent: React.FC<GridContentProps> = ({
         >
           {nameText}
         </Text>
-        {dateTraits.map((d) => (
+        {finalDateTraits.map((d) => (
           <group key={d.key}>
             <Text
-              position={[dateX, d.y, 0]}
+              position={[dateX, d.targetY, 0]}
               fontSize={dateFs}
               color={textColor}
               outlineWidth={outlineW}
@@ -1448,7 +1486,7 @@ const GridContent: React.FC<GridContentProps> = ({
             </Text>
             {!!d.relationText && !!d.relationId && (
               <Text
-                position={[dateLeftX, d.y, 0]}
+                position={[dateLeftX, d.targetY, 0]}
                 fontSize={childFs}
                 color={textColor}
                 outlineWidth={outlineW}
@@ -1466,8 +1504,46 @@ const GridContent: React.FC<GridContentProps> = ({
                 {d.relationText}
               </Text>
             )}
+            {d.type === 'marriage' && (
+              <>
+                {renderConnector(
+                  `union-left-connector-${d.key}`,
+                  cx - (TRAIT_W / 2),
+                  d.sourceY,
+                  dateLeftX,
+                  d.targetY,
+                )}
+                {renderConnector(
+                  `union-right-connector-${d.key}`,
+                  cx + (TRAIT_W / 2),
+                  d.sourceY,
+                  dateX,
+                  d.targetY,
+                )}
+              </>
+            )}
           </group>
         ))}
+        {!rd.hasBirthDate && !!unknownBirthRelationText && !!birthParentId && (
+          <Text
+            position={[dateLeftX, unknownBirthRelationY, 0]}
+            fontSize={childFs}
+            color={textColor}
+            outlineWidth={outlineW}
+            outlineColor="#000000"
+            anchorX="right"
+            anchorY="middle"
+            onClick={handleRelationTextClick(birthParentId)}
+            onPointerOver={() => {
+              document.body.style.cursor = 'pointer';
+            }}
+            onPointerOut={() => {
+              document.body.style.cursor = 'default';
+            }}
+          >
+            {unknownBirthRelationText}
+          </Text>
+        )}
         {!hideDocAndChildMarkers && childTraits.map((c) => renderConnector(`connector-${c.key}`, childStartX, c.sourceY, childEndX, c.targetY))}
         {!hideDocAndChildMarkers && childTraits.map((c) => (
           <Text

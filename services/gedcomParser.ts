@@ -1,5 +1,27 @@
 import { GedcomData, Individual, Family, Gender, DateInfo } from '../types';
 
+const decodeLegacyNameMojibake = (value: string): string => {
+  // Some GED files carry ANSEL-like accent markers that appear as mojibake
+  // (e.g., "Jâerâemy" instead of "Jérémy"). Normalize the most common cases.
+  const acuteMap: Record<string, string> = {
+    a: 'á', e: 'é', i: 'í', o: 'ó', u: 'ú', y: 'ý',
+    A: 'Á', E: 'É', I: 'Í', O: 'Ó', U: 'Ú', Y: 'Ý',
+  };
+  const graveMap: Record<string, string> = {
+    a: 'à', e: 'è', i: 'ì', o: 'ò', u: 'ù', y: 'ỳ',
+    A: 'À', E: 'È', I: 'Ì', O: 'Ò', U: 'Ù', Y: 'Ỳ',
+  };
+
+  return value
+    // "âe" => "é", "Dâesirâe" => "Désiré", etc.
+    .replace(/â([aeiouyAEIOUY])/g, (_m, v: string) => acuteMap[v] ?? v)
+    // "áe" => "è" in many imported records.
+    .replace(/á([aeiouyAEIOUY])/g, (_m, v: string) => graveMap[v] ?? v)
+    // Observed legacy single-char substitutions in names.
+    .replace(/•/g, 'ï')
+    .replace(/‘/g, 'ë');
+};
+
 /**
  * Parses a GEDCOM date string into structured data.
  * Returns year (integer) and preciseDate (float).
@@ -152,8 +174,9 @@ export const parseGedcom = (content: string): GedcomData => {
 
         switch (tag) {
           case 'NAME':
-            currentIndi.name = value.replace(/\//g, '');
-            const parts = value.split('/');
+            const decodedNameValue = decodeLegacyNameMojibake(value);
+            currentIndi.name = decodedNameValue.replace(/\//g, '');
+            const parts = decodedNameValue.split('/');
             if (parts.length > 0) currentIndi.givenName = parts[0].trim();
             if (parts.length > 1) currentIndi.surname = parts[1].trim();
             break;
