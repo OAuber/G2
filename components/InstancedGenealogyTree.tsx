@@ -132,15 +132,35 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const traitGeometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
   
   // Materials
-  const boxMaterial = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#ffffff',
-    roughness: 0.5,
-    metalness: 0.1,
-    opacity: 0.5,      
-    transparent: true,
-    depthWrite: true,
-    side: THREE.DoubleSide
-  }), []);
+  const boxMaterial = useMemo(() => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: '#ffffff',
+      roughness: 0.5,
+      metalness: 0.1,
+      opacity: 0.5,
+      transparent: true,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+    });
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = `
+          attribute float aInstanceAlpha;
+          varying float vInstanceAlpha;
+      ` + shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           vInstanceAlpha = aInstanceAlpha;`,
+      );
+      shader.fragmentShader = `
+          varying float vInstanceAlpha;
+      ` + shader.fragmentShader.replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+           diffuseColor.a *= vInstanceAlpha;`,
+      );
+    };
+    return mat;
+  }, []);
 
   // Custom Shader Material for Life Path Gradient
   const pathMaterial = useMemo(() => {
@@ -157,7 +177,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           // Inject attribute and varying
           shader.vertexShader = `
               attribute float aFadingMode;
+              attribute float aInstanceAlpha;
               varying float vFadingMode;
+              varying float vInstanceAlpha;
               varying vec2 vUvCustom;
           ` + shader.vertexShader.replace(
               '#include <uv_vertex>',
@@ -166,12 +188,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           ).replace(
               '#include <begin_vertex>',
               `#include <begin_vertex>
-               vFadingMode = aFadingMode;`
+               vFadingMode = aFadingMode;
+               vInstanceAlpha = aInstanceAlpha;`
           );
 
           // Inject Alpha Logic in Fragment Shader
           shader.fragmentShader = `
               varying float vFadingMode;
+              varying float vInstanceAlpha;
               varying vec2 vUvCustom;
           ` + shader.fragmentShader.replace(
               '#include <color_fragment>',
@@ -197,8 +221,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                    // Mode 3: Fade both ends
                    fade = smoothstep(0.0, 0.4, vUvCustom.y) * smoothstep(1.0, 0.6, vUvCustom.y);
                }
-               
                diffuseColor.a *= fade;
+               diffuseColor.a *= vInstanceAlpha;
               `
           );
       };
@@ -208,8 +232,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   useLayoutEffect(() => {
       if (!pathMaterial) return;
       pathMaterial.opacity = isTopView ? TOP_VIEW_RIBBON_OPACITY : DEFAULT_RIBBON_OPACITY;
+      // In top-view, avoid depth-write veil on transparent ribbons.
+      pathMaterial.depthWrite = !isTopView;
       pathMaterial.needsUpdate = true;
   }, [isTopView, pathMaterial]);
+  useLayoutEffect(() => {
+      boxMaterial.depthWrite = !isTopView;
+      boxMaterial.needsUpdate = true;
+  }, [isTopView, boxMaterial]);
 
   const traitMaterial = useMemo(() => new THREE.MeshBasicMaterial({ color: 0xffffff }), []);
   
@@ -223,6 +253,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const totalTraits = useMemo(() => nodes.reduce((sum, n) => sum + n.traits.length, 0), [nodes]);
   const nodesMap = useMemo(() => new Map(nodes.map(n => [n.id, n])), [nodes]);
+  const hoveredNamePartnerIds = useMemo(() => {
+      const ids = new Set<string>();
+      if (!isTopViewActive || !data || !hoveredNameId) return ids;
+      const indi = data.individuals[hoveredNameId];
+      if (!indi?.familySpouseIds) return ids;
+      for (const famId of indi.familySpouseIds) {
+          const fam = data.families[famId];
+          if (!fam) continue;
+          const spouseId = fam.husbandId === hoveredNameId ? fam.wifeId : fam.husbandId;
+          if (spouseId && nodesMap.has(spouseId)) ids.add(spouseId);
+      }
+      return ids;
+  }, [isTopViewActive, data, hoveredNameId, nodesMap]);
   const cancelHoverHide = () => {
       if (hideHoverTimerRef.current !== null) {
           window.clearTimeout(hideHoverTimerRef.current);
@@ -508,6 +551,9 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     // CRITICAL: Update the Fading Attribute on Geometry
     pathGeometry.setAttribute('aFadingMode', new THREE.InstancedBufferAttribute(fadingData, 1));
     pathGeometry.attributes.aFadingMode.needsUpdate = true;
+    // Per-instance alpha for true ribbon transparency on hover interactions.
+    boxGeometry.setAttribute('aInstanceAlpha', new THREE.InstancedBufferAttribute(new Float32Array(nodes.length).fill(1), 1));
+    pathGeometry.setAttribute('aInstanceAlpha', new THREE.InstancedBufferAttribute(new Float32Array(nodes.length).fill(1), 1));
     
     traitsMesh.count = traitIndex;
     traitsMesh.instanceMatrix.needsUpdate = true;
@@ -521,6 +567,22 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     baseConnectorColorsRef.current = new Float32Array(lineColors);
 
   }, [nodes, totalTraits, showBoxes, pathGeometry, data, selectedId, isTopView]);
+
+  useEffect(() => {
+    const boxAlpha = boxGeometry.getAttribute('aInstanceAlpha') as THREE.InstancedBufferAttribute | null;
+    const pathAlpha = pathGeometry.getAttribute('aInstanceAlpha') as THREE.InstancedBufferAttribute | null;
+    if (!boxAlpha || !pathAlpha) return;
+    const hiddenAlpha = 0.06;
+    for (let i = 0; i < nodes.length; i++) {
+      const id = nodes[i].id;
+      const shouldFade = isTopViewActive && hoveredNamePartnerIds.has(id) && id !== hoveredNameId;
+      const a = shouldFade ? hiddenAlpha : 1;
+      boxAlpha.setX(i, a);
+      pathAlpha.setX(i, a);
+    }
+    boxAlpha.needsUpdate = true;
+    pathAlpha.needsUpdate = true;
+  }, [nodes, boxGeometry, pathGeometry, hoveredNameId, hoveredNamePartnerIds, isTopViewActive]);
 
   const isConnectorOnPath = (parentId: string, childId: string, pathIds: Set<string>) => {
     // Normal case: connector parent <-> child is directly on the node path set
@@ -693,12 +755,11 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     const prevHoverPartners = prevHoveredPartnerIdsRef.current;
     let hoverPartnersChanged = hoveredNamePartnerIds.size !== prevHoverPartners.size;
     if (!hoverPartnersChanged) {
-      for (const id of hoveredNamePartnerIds) {
-        if (!prevHoverPartners.has(id)) {
+      hoveredNamePartnerIds.forEach((id) => {
+        if (!hoverPartnersChanged && !prevHoverPartners.has(id)) {
           hoverPartnersChanged = true;
-          break;
         }
-      }
+      });
     }
     const hoverChanged = prevHoveredNameIdRef.current !== hoveredNameId || hoverPartnersChanged;
     const fullRewrite = hasPath !== prevHasPath || (isTopViewActive && hoverChanged);
@@ -734,10 +795,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
         _applyC.copy(node.color);
       } else {
         _applyC.copy(node.color).lerp(_applyBg, FADE);
-      }
-      // Top-view only: hovering a spouse name makes partner ribbons more transparent.
-      if (isTopViewActive && hoveredNamePartnerIds.has(node.id) && node.id !== hoveredNameId) {
-        _applyC.lerp(_applyBg, 0.85);
       }
       boxMesh.setColorAt(i, _applyC);
       _applyPath.copy(_applyC).addScalar(isSelected ? 0.05 : (isOnPath || !hasPath) ? 0.1 : 0.02);
@@ -1025,20 +1082,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
       return map;
   }, [data]);
-  const hoveredNamePartnerIds = useMemo(() => {
-      const ids = new Set<string>();
-      if (!isTopViewActive || !data || !hoveredNameId) return ids;
-      const indi = data.individuals[hoveredNameId];
-      if (!indi?.familySpouseIds) return ids;
-      for (const famId of indi.familySpouseIds) {
-          const fam = data.families[famId];
-          if (!fam) continue;
-          const spouseId = fam.husbandId === hoveredNameId ? fam.wifeId : fam.husbandId;
-          if (spouseId && nodesMap.has(spouseId)) ids.add(spouseId);
-      }
-      return ids;
-  }, [isTopViewActive, data, hoveredNameId, nodesMap]);
-
   // Label Helper
   const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
       if (!data || !data.individuals[node.id]) return null;
@@ -1190,8 +1233,11 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       };
       const topNamePlacement = (g: Gender, bounds: { minZ: number; maxZ: number }, inCouple: boolean) => {
           if (!inCouple) return { anchor: 'center' as const, z: (bounds.minZ + bounds.maxZ) * 0.5 };
-          if (g === Gender.Female) return { anchor: 'right' as const, z: bounds.maxZ - topRailInset };
-          return { anchor: 'left' as const, z: bounds.minZ + topRailInset };
+          const spanZ = bounds.maxZ - bounds.minZ;
+          // For very narrow couple bounds, push labels outward to avoid overlap.
+          const narrowPairOffset = spanZ < 75 ? 12 : 0;
+          if (g === Gender.Female) return { anchor: 'right' as const, z: (bounds.maxZ - topRailInset) + narrowPairOffset };
+          return { anchor: 'left' as const, z: (bounds.minZ + topRailInset) - narrowPairOffset };
       };
       const primaryBounds = computePairZBounds(spouseUnionLines[0]?.spouseId);
       const multiUnionGroupBounds = computeZBoundsForNodeIds([
