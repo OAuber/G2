@@ -535,9 +535,9 @@ export class GenealogyLayoutEngineB {
         }
 
         let selfWidth = lifespan;
-        if (parentsNodes.length === 0) {
-            selfWidth *= this.cfg.LEAF_WIDTH_RATIO;
-        }
+        // In ancestor layout, keep full ribbon depth as occupied width even for
+        // leaves (no known parents). Shrinking here causes underestimation and
+        // partial overlap of central couples with sparse ancestry.
 
         const parentsWidth = parentsNodes.reduce((s, p) => s + p.width, 0)
             + Math.max(0, parentsNodes.length - 1) * this.cfg.MIN_GAP;
@@ -740,13 +740,21 @@ export class GenealogyLayoutEngineB {
         if (patGPs.length === 0 && matGPs.length === 0) return;
 
         const parentX = x - this.cfg.GENERATION_PITCH;
+        const MISSING_SIDE_SLOT_RATIO = 0.6;
 
         if (matGPs.length === 0) {
-            this.layoutGPGroup(patGPs, parentX, zCenter);
+            // Maternal side missing: keep a ghost slot on -Z side so paternal
+            // ascendants don't collapse to center (avoids overlap with sibling couples).
+            const ghostMatW = (motherEntry ? motherEntry.node.selfWidth : node.selfWidth) * MISSING_SIDE_SLOT_RATIO;
+            const patCenter = zCenter + (ghostMatW / 2) + (this.cfg.MIN_GAP / 2);
+            this.layoutGPGroup(patGPs, parentX, patCenter);
             return;
         }
         if (patGPs.length === 0) {
-            this.layoutGPGroup(matGPs, parentX, zCenter);
+            // Paternal side missing: symmetric ghost slot on +Z side.
+            const ghostPatW = node.selfWidth * MISSING_SIDE_SLOT_RATIO;
+            const matCenter = zCenter - (ghostPatW / 2) - (this.cfg.MIN_GAP / 2);
+            this.layoutGPGroup(matGPs, parentX, matCenter);
             return;
         }
 
@@ -756,12 +764,10 @@ export class GenealogyLayoutEngineB {
         const coupleCenter = (minZ + maxZ) / 2;
         const MG = this.cfg.MIN_GAP;
 
-        // Compact positioning: use geometric mean of selfWidth and full width
-        // so shallow sides stay close to center while deep sides expand outward.
-        const patTopSW = patGPs.length === 1 ? patGPs[0].selfWidth : patW;
-        const matTopSW = matGPs.length === 1 ? matGPs[0].selfWidth : matW;
-        const patEffW = Math.sqrt(patW * patTopSW);
-        const matEffW = Math.sqrt(matW * matTopSW);
+        // Use full group widths to avoid center overlap when one side has sparse
+        // ancestry (0 or 1 known parent).
+        const patEffW = patW;
+        const matEffW = matW;
 
         const patCenter = coupleCenter + matEffW / 2 + MG / 2;
         const matCenter = coupleCenter - patEffW / 2 - MG / 2;

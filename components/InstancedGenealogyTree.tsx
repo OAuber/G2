@@ -1197,6 +1197,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           }
           return unique;
       })();
+      // In top-view, when focused on one branch, hide "other" spouse labels that
+      // have the same sex as the selected individual in the partner's multi-union
+      // block. Keep connectors/traits rendered elsewhere; only label text is filtered.
+      const displayedSpouseUnionLines = (() => {
+          if (!isTopViewActive || !selectedId || !data || spouseUnionLines.length <= 1) return spouseUnionLines;
+          const selected = data.individuals[selectedId];
+          if (!selected) return spouseUnionLines;
+          const selectedGender = selected.gender ?? Gender.Unknown;
+          if (selectedGender === Gender.Unknown) return spouseUnionLines;
+          const selectedInThisBlock = spouseUnionLines.some((s) => s.spouseId === selectedId);
+          if (!selectedInThisBlock) return spouseUnionLines;
+          return spouseUnionLines.filter((s) => s.spouseId === selectedId || s.spouseGender !== selectedGender);
+      })();
       const hasAnyUnion = spouseUnionLines.length >= 1;
       const topRailInset = Math.max(1.5, labelFontSize * 0.35);
       const computeZBoundsForNode = (target: LayoutNode) => {
@@ -1345,7 +1358,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       </Text>
                   </Billboard>
                 )}
-                {hasUnionLines && spouseUnionLines.map((spouseLine, idx) => {
+                {hasUnionLines && displayedSpouseUnionLines.map((spouseLine, idx) => {
                     const lineSelfPlacement = topNamePlacement(node.gender, multiUnionGroupBounds, true);
                     const spousePlacement = topNamePlacement(spouseLine.spouseGender, multiUnionGroupBounds, true);
                     const isThisUnionHovered = !!(
