@@ -36,6 +36,15 @@ export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
 
 export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type P2PMode = 'host' | 'client' | null;
+export type SelfIdentityStatus = 'unidentified' | 'claimed' | 'witnessed';
+
+export interface SelfIdentityPublic {
+  individualId: string;
+  status: SelfIdentityStatus;
+  claimedAt: string;
+  deviceKeyId: string;
+  devicePublicKeyJwk: JsonWebKey;
+}
 
 export interface DateInfo {
   raw: string;

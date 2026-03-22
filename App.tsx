@@ -7,18 +7,27 @@ import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode } from './types';
+import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
 import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
 import { ActivityLogEvent } from './services/p2pDomain';
 import { createLifeThreadBundle, parseLifeThreadBundle } from './services/bundleService';
 import {
+  buildEncryptedIdentityBackup,
+  decryptIdentityBackupPrivateKey,
+  generateIdentityKeyMaterial,
+  isIdentityBackupPayload,
+} from './services/selfIdentityCrypto';
+import {
   IndividualDiffIndexEntry,
   IndividualDiffPotentialMatch,
   IndividualDiffRequestPayload,
   IndividualDiffResponsePayload,
 } from './services/p2pProtocol';
+
+const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
+const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
 
 function App() {
   type P2PSessionUseCase = 'share' | 'compare' | null;
@@ -253,7 +262,7 @@ function App() {
   const [layoutParams, setLayoutParams] = useState<LayoutParams>({ ...DEFAULT_LAYOUT_PARAMS });
   
   // Info Pages State
-  const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | null>(null);
+  const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | 'contact' | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const buildLabel = `${import.meta.env.MODE}:${window.location.host}`;
   const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
@@ -276,6 +285,19 @@ function App() {
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
   const [webglRecoveryKey, setWebglRecoveryKey] = useState(0);
   const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
+  const [selfIdentity, setSelfIdentity] = useState<SelfIdentityPublic | null>(() => {
+    try {
+      const raw = localStorage.getItem(SELF_IDENTITY_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as SelfIdentityPublic;
+      if (!parsed?.individualId || !parsed?.deviceKeyId) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
+  const [isIdentifyingSelf, setIsIdentifyingSelf] = useState(false);
+  const [identityTabSignal, setIdentityTabSignal] = useState(0);
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
@@ -292,6 +314,7 @@ function App() {
     allowDirectEdit: false,
   });
   const [remoteAccessPolicy, setRemoteAccessPolicy] = useState<P2PVisibilitySettings | null>(null);
+  const isIdentified = !!selfIdentity && selfIdentity.status !== 'unidentified';
 
   // Keep ref to data for P2P sync (closure issue)
   const gedcomDataRef = useRef<GedcomData | null>(null);
@@ -326,6 +349,17 @@ function App() {
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
+  useEffect(() => {
+    try {
+      if (selfIdentity) {
+        localStorage.setItem(SELF_IDENTITY_STORAGE_KEY, JSON.stringify(selfIdentity));
+      } else {
+        localStorage.removeItem(SELF_IDENTITY_STORAGE_KEY);
+      }
+    } catch {
+      // no-op
+    }
+  }, [selfIdentity]);
   useEffect(() => {
     return () => {
       if (bundleToastTimeoutRef.current !== null) {
@@ -753,6 +787,10 @@ function App() {
   };
 
   const handleStartCompare = () => {
+    if (!isIdentified) {
+      alert('Claim your identity first before running initial compare.');
+      return;
+    }
     if (p2pStatus !== 'connected') {
       alert('Connect to a peer before running initial compare.');
       return;
@@ -769,6 +807,10 @@ function App() {
   };
 
   const handleStartShare = () => {
+    if (!isIdentified) {
+      alert('Claim your identity first before sharing.');
+      return;
+    }
     if (p2pStatus !== 'connected') {
       alert('Connect to a peer before sharing.');
       return;
@@ -1963,6 +2005,7 @@ function App() {
         databaseName,
         exportedAt: new Date().toISOString(),
         documentsByIndividualId,
+        selfIdentity,
       });
       triggerDownloadBlob(bundleBlob, `${safeName}_${new Date().toISOString().slice(0, 10)}.lifethread.zip`);
       logP2PActivity('tree.bundle.download', 'session', peerId || 'local');
@@ -1984,6 +2027,12 @@ function App() {
       const normalizedDocs = normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>);
       handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.lifethread\.zip$/i, ''));
       setDocumentsByIndividualId(normalizedDocs);
+      if (metadata.selfIdentity && typeof metadata.selfIdentity === 'object') {
+        const maybeIdentity = metadata.selfIdentity as SelfIdentityPublic;
+        if (maybeIdentity.individualId && maybeIdentity.deviceKeyId) {
+          setSelfIdentity(maybeIdentity);
+        }
+      }
       if (p2pStatus === 'connected') sendSessionState();
       logP2PActivity('tree.bundle.import', 'session', peerId || 'local');
       setBundleToast({ kind: 'success', message: 'Bundle importe avec succes.' });
@@ -2066,6 +2115,10 @@ function App() {
     role: 'viewer' | 'contributor' | 'editor',
     expiresAt?: string
   ) => {
+    if (!isIdentified) {
+      alert('Claim your identity first before creating invites.');
+      return;
+    }
     const candidate = livingCandidates.find((c) => c.id === individualId);
     if (!candidate) return;
     const invite: P2PInviteItem = {
@@ -2356,6 +2409,112 @@ function App() {
 
   // --- Creation, Linking & Deletion Logic ---
 
+  const handleInitIdentifySelf = () => {
+    setIsIdentifyingSelf(true);
+    setIsCreating(false);
+    setRightPanelOpen(true);
+    setIdentityTabSignal((prev) => prev + 1);
+  };
+
+  const handleClaimIdentity = async (individualId: string) => {
+    if (!gedcomData?.individuals[individualId]) {
+      alert('Select an existing individual first.');
+      return;
+    }
+    if (selfIdentity && selfIdentity.individualId !== individualId) {
+      const ok = window.confirm(
+        'You already claimed another identity on this device. Replace it with the new one?'
+      );
+      if (!ok) return;
+    }
+
+    try {
+      const { devicePublicKeyJwk, devicePrivateKeyJwk, deviceKeyId } = await generateIdentityKeyMaterial();
+      const claimed: SelfIdentityPublic = {
+        individualId,
+        status: 'claimed',
+        claimedAt: new Date().toISOString(),
+        deviceKeyId,
+        devicePublicKeyJwk,
+      };
+      setSelfIdentity(claimed);
+      localStorage.setItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY, JSON.stringify(devicePrivateKeyJwk));
+      const indi = gedcomData.individuals[individualId];
+      setSelectedIndividual(indi);
+      setRootIndividual(indi);
+      setIsIdentifyingSelf(false);
+      showTransientToast('success', 'Identity claimed successfully.');
+    } catch (error) {
+      console.error('Failed to claim identity', error);
+      showTransientToast('error', 'Identity claim failed.');
+    }
+  };
+
+  const handleRenounceIdentity = () => {
+    const warning =
+      'WARNING: this will remove your current claimed identity from this device, clear local private key material, and disable share actions until you claim again.\n\nContinue?';
+    const ok = window.confirm(warning);
+    if (!ok) return;
+    setSelfIdentity(null);
+    localStorage.removeItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY);
+    showTransientToast('success', 'Identity renounced.');
+  };
+
+  const handleExportIdentityBackup = async (password: string) => {
+    if (!selfIdentity) {
+      alert('No claimed identity to export.');
+      return;
+    }
+    if (!password || password.length < 8) {
+      alert('Backup password must be at least 8 characters.');
+      return;
+    }
+    const privateRaw = localStorage.getItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY);
+    if (!privateRaw) {
+      alert('No private key material found on this device.');
+      return;
+    }
+    try {
+      const privateJwk = JSON.parse(privateRaw) as JsonWebKey;
+      const backup = await buildEncryptedIdentityBackup(selfIdentity, privateJwk, password);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+      const safe = (selfIdentity.deviceKeyId || 'identity').replace(/[^a-z0-9_-]/gi, '_');
+      triggerDownloadBlob(blob, `g2-identity-backup-${safe}.json`);
+      showTransientToast('success', 'Encrypted identity backup exported.');
+    } catch (error) {
+      console.error('Identity backup export failed', error);
+      showTransientToast('error', 'Identity backup export failed.');
+    }
+  };
+
+  const handleImportIdentityBackup = async (file: File, password: string) => {
+    if (!password || password.length < 8) {
+      alert('Backup password must be at least 8 characters.');
+      return;
+    }
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as unknown;
+      if (!isIdentityBackupPayload(parsed)) {
+        throw new Error('Invalid identity backup format');
+      }
+      const privateJwk = await decryptIdentityBackupPrivateKey(parsed, password);
+      const importedIdentity = parsed.identity;
+      setSelfIdentity(importedIdentity);
+      localStorage.setItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY, JSON.stringify(privateJwk));
+      if (gedcomData?.individuals?.[importedIdentity.individualId]) {
+        const indi = gedcomData.individuals[importedIdentity.individualId];
+        setSelectedIndividual(indi);
+        setRootIndividual(indi);
+      }
+      showTransientToast('success', 'Identity backup imported.');
+      setIsIdentifyingSelf(false);
+    } catch (error) {
+      console.error('Identity backup import failed', error);
+      showTransientToast('error', 'Identity backup import failed (wrong password or invalid file).');
+    }
+  };
+
   const handleInitCreation = () => {
     if (!originalGedcomData) {
       setOriginalGedcomData({ individuals: {}, families: {} });
@@ -2596,41 +2755,142 @@ function App() {
   const closeRightPanel = () => { setRightPanelOpen(false); setIsCreating(false); setIsHoveringUI(false); };
   const closeTopPanel = () => { setTopPanelOpen(false); setIsHoveringUI(false); };
   const closeBottomPanel = () => { setBottomPanelOpen(false); setIsHoveringUI(false); };
+  const renderBrandMark = (compact = false) => (
+    <span
+      className={`inline-flex items-start font-black tracking-tight ${compact ? 'text-2xl md:text-3xl' : 'text-3xl md:text-4xl'} ${
+        isDarkMode ? 'text-slate-200' : 'text-slate-800'
+      }`}
+    >
+      G
+      <sup
+        className={`-ml-1 md:-ml-1.5 align-super font-semibold ${compact ? 'text-xs md:text-sm' : 'text-lg md:text-xl'} ${
+          isDarkMode ? 'text-slate-500' : 'text-slate-400'
+        }`}
+      >
+        2
+      </sup>
+    </span>
+  );
 
-  // Render content for About/Contribute pages
+  // Render content for About/Contribute/Contact pages
   const renderInfoPage = () => {
      if (!activeInfoPage) return null;
-     
-     const title = activeInfoPage === 'about' ? 'About LifeThread' : 'Contribute';
+     const contentByPage: Record<'about' | 'contribute' | 'contact', { title: string; body: React.ReactNode }> = {
+       about: {
+         title: 'About',
+         body: (
+           <>
+             <p>
+               G2 (pronounced Gdeux, Getou, or Djeetoo) is built for genealogists who need both depth
+               and scale: create, edit, and explore family trees in 2D and 3D, from small research sets
+               to large collections (tested with 40,000 individuals).
+             </p>
+             <p>
+               Your data stays under your control. No central platform, no locked silo, no dependency
+               on a third-party gatekeeper. Exchanges happen peer to peer, with visibility rules chosen by users.
+             </p>
+             <p>
+               You can publish ancestors with unknown roots. These records can attempt automatic matching
+               across the P2P network, while final investigation and validation remain a genealogist decision.
+             </p>
+             <p>
+               G2 does not aim to build a universal genealogy tree. Its ambition is a Web of Trust (WoT)
+               connecting genealogists and the people represented in their databases, inspired by the G1 free-currency WoT.
+               If this WoT proves robust and viral enough over time, it could eventually support
+               the creation of a G2 free currency.
+             </p>
+             <p>
+               G2 is free software. Its concept is also a free artwork, in continuity with the Arbre project
+               initiated by Olivier Auber in the early 2000s.
+             </p>
+           </>
+         ),
+       },
+       contribute: {
+         title: 'Contribute',
+         body: (
+           <>
+             <p>
+               G2 is in active development. If the app helps your research and the vision resonates,
+               there are many concrete ways to contribute.
+             </p>
+             <p>
+               We welcome genealogy feedback, real-world dataset testing, documentation, bug reports,
+               feature proposals, translations, and code contributions.
+             </p>
+             <p>
+               The GitHub repository is private for now and will be opened at public launch.
+               Until then, strategic discussions and high-value feedback are especially useful.
+             </p>
+             <p>
+               During development, people who find the app useful can also support the work through
+               voluntary donations to the author.
+             </p>
+           </>
+         ),
+       },
+       contact: {
+         title: 'Contact',
+         body: (
+           <>
+             <p>
+               For any question, please use the channel that best matches your topic:
+             </p>
+             <p>
+               Technical questions:{' '}
+               <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.app">
+                 contact@getou.app
+               </a>
+             </p>
+             <p>
+               Practical questions:{' '}
+               <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.info">
+                 contact@getou.info
+               </a>
+             </p>
+             <p>
+               Governance questions:{' '}
+               <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.org">
+                 contact@getou.org
+               </a>
+             </p>
+           </>
+         ),
+       },
+     };
+     const page = contentByPage[activeInfoPage];
      
      return (
-        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-10 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'} animate-in fade-in duration-300`}>
+       <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-[300] ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'} animate-in fade-in duration-300`}>
              <button 
                 onClick={() => setActiveInfoPage(null)}
-                className={`absolute top-24 right-8 p-2 rounded-full hover:bg-opacity-20 transition-colors ${isDarkMode ? 'hover:bg-white text-white' : 'hover:bg-black text-black'}`}
+                className={`fixed top-4 right-4 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[320] hover:bg-opacity-20 transition-colors ${
+                  isDarkMode
+                    ? 'border-slate-700 bg-black/80 hover:bg-white text-white'
+                    : 'border-slate-300 bg-white/90 hover:bg-black text-black'
+                }`}
                 title="Close"
              >
                 <X className="w-8 h-8" />
              </button>
 
-             <h2 className="text-3xl font-bold mb-6 tracking-tight uppercase">{title}</h2>
+             <button
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                className={`fixed top-4 left-4 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[320] transition-colors ${
+                  isDarkMode
+                    ? 'border-slate-700 bg-black/80 text-slate-200 hover:bg-neutral-900'
+                    : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+                }`}
+                title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+             >
+                {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+             </button>
+
+             <div className="mb-5 opacity-90">{renderBrandMark(true)}</div>
+             <h2 className="text-3xl font-bold mb-6 tracking-tight uppercase">{page.title}</h2>
              <div className="max-w-2xl text-justify text-base font-light leading-relaxed opacity-80 space-y-4 overflow-y-auto max-h-[60vh] px-4 custom-scrollbar">
-                <p>
-                   Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
-                   Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
-                   Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. 
-                   Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-                </p>
-                <p>
-                   Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, 
-                   eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo. 
-                   Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos 
-                   qui ratione voluptatem sequi nesciunt.
-                </p>
-                <p>
-                   Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit, sed quia non numquam 
-                   eius modi tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem.
-                </p>
+                {page.body}
              </div>
         </div>
      );
@@ -2851,24 +3111,27 @@ function App() {
             {activeInfoPage ? renderInfoPage() : (
               <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
                 <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 text-center">
-                    <h1 className="text-3xl md:text-4xl font-bold mb-2 tracking-tight pt-10 md:pt-0">LifeThread</h1>
-                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">Distributed memory, connected lives</h2>
+                    <h1 className="mb-2 tracking-tight pt-10 md:pt-0">{renderBrandMark()}</h1>
+                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">Distributed genealogy, owned by genealogists</h2>
                     
                     <div className="max-w-2xl text-sm md:text-lg font-light leading-relaxed opacity-70 mb-8 md:mb-12">
-                        LifeThread is free and belongs to no one. No ads, no data selling, no algorithm deciding what you should see or forget.
-                        It's just a tool I built because I believe our collective memory shouldn't depend on the goodwill of a corporation, a state, or a church.
-                        You use LifeThread for free. If it helps you, if it feels useful, you can contribute to keep it alive. No obligation, no premium account, no features locked behind a paywall.
-                        Just you, your stories, and the threads that connect you.
+                        Create, edit, and visualize trees of any size in 2D and 3D (tested with 40K individuals),
+                        enriched with photos and documents.
+                        Publish unknown-root ancestors, discover potential P2P matches, and keep full control
+                        over what you share, what you validate, and what remains private.
                     </div>
                     
                     <div className="flex flex-col items-center gap-6 font-bold text-xs tracking-widest uppercase opacity-80 z-10 pb-10">
+                        <button onClick={handleInitIdentifySelf} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
+                            IDENTIFY YOURSELF
+                        </button>
                         <div className="flex gap-2 items-center">
                             <button onClick={() => setLeftPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                Import FAMILY
+                                IMPORT FAMILY
                             </button>
                             <span className="opacity-50">or</span>
                             <button onClick={handleInitCreation} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                Create INDIVIDUALS
+                                CREATE INDIVIDUALS
                             </button>
                         </div>
                         
@@ -2888,8 +3151,23 @@ function App() {
                         <button onClick={() => setIsHelpOpen(true)} className="hover:opacity-100 hover:text-blue-500 transition-colors">Help</button>
                         <span>-</span>
                         <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contribute</button>
+                        <span>-</span>
+                        <button onClick={() => setActiveInfoPage('contact')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contact</button>
                         </div>
                     </div>
+
+                    <button
+                      onClick={() => setIsDarkMode(!isDarkMode)}
+                      className={`fixed bottom-5 right-5 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[240] opacity-80 hover:opacity-100 transition-colors ${
+                        isDarkMode
+                          ? 'border-slate-700 bg-black/75 text-slate-300 hover:bg-neutral-900'
+                          : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+                      }`}
+                      title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                      aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                    >
+                      {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                    </button>
                 </div>
               </div>
             )}
@@ -2929,6 +3207,14 @@ function App() {
         onReviewBulkDecision={handleReviewBulkDecision}
         onReviewGlobalDecision={handleReviewGlobalDecision}
         reviewFocusSignal={reviewFocusSignal}
+        selfIdentity={selfIdentity}
+        isIdentifyingSelf={isIdentifyingSelf}
+        identityTabSignal={identityTabSignal}
+        livingCandidates={livingCandidates}
+        onClaimIdentity={handleClaimIdentity}
+        onExportIdentityBackup={handleExportIdentityBackup}
+        onImportIdentityBackup={handleImportIdentityBackup}
+        onRenounceIdentity={handleRenounceIdentity}
       />
 
       {/* --- Top Panel (Share) --- */}

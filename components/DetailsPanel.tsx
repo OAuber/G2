@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { User, Plus, Trash2, Edit, Link2, X } from 'lucide-react';
-import { Individual, GedcomData, Family, Gender } from '../types';
+import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
 
 export interface NewPersonData {
@@ -99,6 +99,14 @@ interface DetailsPanelProps {
   onReviewBulkDecision?: (proposalId: string, fields: Array<keyof Individual>, decision: 'accept' | 'reject') => void;
   onReviewGlobalDecision?: (proposalId: string, decision: 'fuse' | 'reject') => void;
   reviewFocusSignal?: number;
+  selfIdentity: SelfIdentityPublic | null;
+  isIdentifyingSelf: boolean;
+  identityTabSignal?: number;
+  livingCandidates: Array<{ id: string; label: string }>;
+  onClaimIdentity: (individualId: string) => Promise<void> | void;
+  onExportIdentityBackup: (password: string) => Promise<void> | void;
+  onImportIdentityBackup: (file: File, password: string) => Promise<void> | void;
+  onRenounceIdentity: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,6 +288,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onReviewBulkDecision,
   onReviewGlobalDecision,
   reviewFocusSignal = 0,
+  selfIdentity,
+  isIdentifyingSelf,
+  identityTabSignal = 0,
+  livingCandidates,
+  onClaimIdentity,
+  onExportIdentityBackup,
+  onImportIdentityBackup,
+  onRenounceIdentity,
 }) => {
   const [formData, setFormData] = useState<NewPersonData>({
     givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', birthPlace: '', deathPlace: '', notes: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
@@ -288,7 +304,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [selectedReviewFields, setSelectedReviewFields] = useState<string[]>([]);
-  const [activeTab, setActiveTab] = useState<'records' | 'documents' | 'review'>('records');
+  const [activeTab, setActiveTab] = useState<'records' | 'documents' | 'review' | 'identity'>('records');
   const [docForm, setDocForm] = useState<{
     title: string;
     url: string;
@@ -307,6 +323,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [editingDocTitle, setEditingDocTitle] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
+  const [identityCandidateId, setIdentityCandidateId] = useState('');
+  const [exportPassword, setExportPassword] = useState('');
+  const [importPassword, setImportPassword] = useState('');
+  const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
 
   useEffect(() => {
     if (isCreating) {
@@ -360,6 +380,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   useEffect(() => {
     if (isCreating || isEditing) setActiveTab('records');
   }, [isCreating, isEditing]);
+
+  useEffect(() => {
+    if (!isIdentifyingSelf) return;
+    setActiveTab('identity');
+    if (selfIdentity?.individualId) {
+      setIdentityCandidateId(selfIdentity.individualId);
+    }
+  }, [isIdentifyingSelf, selfIdentity?.individualId, identityTabSignal]);
 
   const allIndividuals = useMemo(() =>
     data ? (Object.values(data.individuals) as Individual[]).sort((a, b) =>
@@ -505,6 +533,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     () => documents.find((d) => (d.kind === 'photo' || d.url.startsWith('data:image/')) && d.isPrimaryPhoto),
     [documents]
   );
+  const selectedIndividualId = individual?.id || null;
+  const isSelectedSelf = !!selfIdentity && !!selectedIndividualId && selfIdentity.individualId === selectedIndividualId;
+  const showClaimBlock = !selfIdentity || isIdentifyingSelf;
+  const showSelfIdentityData = !!selfIdentity && isSelectedSelf;
+  const showEmptyIdentityForSelectedOther = !!selfIdentity && !!selectedIndividualId && !isSelectedSelf;
 
   return (
     <div 
@@ -548,19 +581,27 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
             Selected individual
           </div>
-          <div className={`text-sm font-semibold mt-1 ${textClass}`}>
-            {isCreating
-              ? 'New individual'
-              : individual
-              ? `${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id
-              : 'No individual selected'}
+          <div className={`text-sm font-semibold mt-1 ${textClass} flex items-center gap-2`}>
+            <span>
+              {isCreating
+                ? 'New individual'
+                : individual
+                ? `${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id
+                : 'No individual selected'}
+            </span>
+            {!isCreating && individual && selfIdentity?.individualId === individual.id && (
+              <span className="inline-flex items-center rounded-full border border-emerald-500/60 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
+                You
+              </span>
+            )}
           </div>
         </div>
 
-        <div className={`rounded border p-1 grid grid-cols-3 gap-1 ${inputBg}`}>
+        <div className={`rounded border p-1 grid grid-cols-4 gap-1 ${inputBg}`}>
           <button type="button" onClick={() => setActiveTab('records')} className={`py-1 text-xs font-bold rounded ${activeTab === 'records' ? 'bg-blue-600 text-white' : ''}`}>Records</button>
           <button type="button" onClick={() => setActiveTab('documents')} className={`py-1 text-xs font-bold rounded ${activeTab === 'documents' ? 'bg-blue-600 text-white' : ''}`}>Documents</button>
           <button type="button" onClick={() => setActiveTab('review')} className={`py-1 text-xs font-bold rounded ${activeTab === 'review' ? 'bg-blue-600 text-white' : ''}`}>Review</button>
+          <button type="button" onClick={() => setActiveTab('identity')} className={`py-1 text-xs font-bold rounded ${activeTab === 'identity' ? 'bg-blue-600 text-white' : ''}`}>Identity</button>
         </div>
 
         {(isCreating || isEditing) ? (
@@ -1042,6 +1083,135 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   </button>
                 </div>
               </div>
+            )}
+          </div>
+        ) : activeTab === 'identity' ? (
+          <div className="space-y-4">
+            {showClaimBlock && (
+              <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity claim</div>
+                <p className={`text-xs ${subTextClass}`}>
+                  Link yourself to a living person in this GEDCOM and generate your device keypair.
+                </p>
+
+                <label className={`block text-[10px] ${subTextClass}`}>I am this person</label>
+                <SearchSelect
+                  value={identityCandidateId}
+                  onChange={setIdentityCandidateId}
+                  options={livingCandidates
+                    .map((candidate) => (data?.individuals[candidate.id] ? data.individuals[candidate.id] : null))
+                    .filter((v): v is Individual => !!v)}
+                  placeholder="Search yourself..."
+                  inputBg={inputBg}
+                  textClass={textClass}
+                  subTextClass={subTextClass}
+                />
+
+                <button
+                  type="button"
+                  disabled={!identityCandidateId}
+                  className={`w-full py-2 rounded text-sm font-bold ${actionBtnClass} disabled:opacity-50`}
+                  onClick={() => onClaimIdentity(identityCandidateId)}
+                >
+                  Claim that identity
+                </button>
+
+                <button
+                  type="button"
+                  className={`w-full py-2 rounded text-xs font-bold ${inputBg}`}
+                  onClick={onCreateNew}
+                >
+                  I am not in tree yet - create me first
+                </button>
+              </div>
+            )}
+
+            {showEmptyIdentityForSelectedOther && (
+              <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity</div>
+                <p className={`text-xs ${subTextClass}`}>
+                  No identity or certification information exists for this selected individual yet.
+                </p>
+              </div>
+            )}
+
+            {showSelfIdentityData && (
+              <div className={`${cardBg} rounded-lg p-2.5 space-y-1`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Claimed identity</div>
+                <div className={`text-xs ${textClass}`}>Individual: {selfIdentity.individualId}</div>
+                <div className={`text-xs ${textClass}`}>Device key: {selfIdentity.deviceKeyId}</div>
+                <div className={`text-[11px] ${subTextClass}`}>
+                  Claimed at {new Date(selfIdentity.claimedAt).toLocaleString()}
+                </div>
+                <div className={`text-[11px] ${subTextClass}`}>
+                  To claim another identity, renounce this one first.
+                </div>
+              </div>
+            )}
+
+            {showSelfIdentityData && (
+              <>
+                <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
+                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Certification history</div>
+                  <p className={`text-xs ${subTextClass}`}>
+                    No certifications recorded yet for your identity.
+                  </p>
+                </div>
+
+                <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
+                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity backup (separate)</div>
+                  <input
+                    type="password"
+                    value={exportPassword}
+                    onChange={(e) => setExportPassword(e.target.value)}
+                    placeholder="Export password (min 8 chars)"
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                  />
+                  <button
+                    type="button"
+                    className={`w-full py-2 rounded text-xs font-bold ${actionBtnClass}`}
+                    onClick={() => onExportIdentityBackup(exportPassword)}
+                  >
+                    Export encrypted identity backup
+                  </button>
+
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                    onChange={(e) => setIdentityBackupFile(e.target.files?.[0] || null)}
+                  />
+                  <input
+                    type="password"
+                    value={importPassword}
+                    onChange={(e) => setImportPassword(e.target.value)}
+                    placeholder="Import password"
+                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                  />
+                  <button
+                    type="button"
+                    disabled={!identityBackupFile}
+                    className={`w-full py-2 rounded text-xs font-bold ${actionBtnClass} disabled:opacity-50`}
+                    onClick={() => identityBackupFile && onImportIdentityBackup(identityBackupFile, importPassword)}
+                  >
+                    Import encrypted identity backup
+                  </button>
+                </div>
+
+                <div className="rounded-lg border border-rose-500/60 bg-rose-500/10 p-3 space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-rose-500">Danger zone</div>
+                  <p className="text-xs text-rose-400">
+                    WARNING: renouncing this identity removes your local claimed identity and private key on this device.
+                  </p>
+                  <button
+                    type="button"
+                    className="w-full rounded bg-rose-600 py-2 text-xs font-bold text-white hover:bg-rose-500"
+                    onClick={onRenounceIdentity}
+                  >
+                    Renounce this identity
+                  </button>
+                </div>
+              </>
             )}
           </div>
         ) : (!individual) ? (

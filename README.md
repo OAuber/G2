@@ -1,10 +1,12 @@
 <div align="center">
 
-# 🧬 **LifeThread** — Le Fil de la Vie
+<h1>
+  🧬 <strong>Ğ<sup><span style="color:#9CA3AF;">2</span></sup></strong> — Free Peer-to-Peer Genealogy
+</h1>
 
-### Visualisez votre généalogie comme un fil dans le temps et l'espace
+### Create, edit, and visualize genealogical trees in 2D and 3D
 
-*Each life is a thread — woven through time and space.*
+*Distributed genealogy, owned by genealogists.*
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
@@ -13,117 +15,116 @@
 [![PWA](https://img.shields.io/badge/PWA-5A0FC8?logo=pwa&logoColor=white)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#licence)
 
-<!-- TODO: Ajouter des captures d'écran du projet
-<img src="docs/screenshots/hero.png" alt="LifeThread - Vue 3D" width="800" />
--->
-
 </div>
 
 ---
 
-## Concept / Vision
+## Vision
 
-**LifeThread** est une application web de visualisation généalogique basée sur le concept du **Time-Space Cube** : chaque individu est représenté par un fil coloré dont la longueur correspond à sa durée de vie, disposé dans un espace tridimensionnel où le temps s'écoule verticalement.
+**Ğ2** (pronounced Gdeux, Getou, or Djeetoo) is a genealogy app designed for serious research and collaborative investigation. It enables genealogists to:
 
-Imaginez un cube dans lequel chaque fil représente une vie humaine — sa naissance, sa mort, ses liens familiaux — le tout visualisé simultanément sur des centaines d'années et des dizaines de milliers d'individus.
+- create and edit individuals and family links;
+- visualize trees in **2D** and **3D**;
+- work with large datasets (**tested with 40K individuals**);
+- attach multimedia data (photos, documents);
+- exchange data **peer to peer**, with no central platform.
 
-> **La métaphore** : Chaque personne est un fil. Les fils s'entrelacent pour former le tissu d'une famille, d'une lignée, d'une histoire.
-
----
-
-## Fonctionnalités principales
-
-### Visualisation 3D
-- **Cube temps-espace** : axe vertical = temps, plan horizontal = espace familial
-- **Rendu GPU** via `InstancedMesh` — un seul draw call pour 40 000+ individus
-- **Vues multiples** : perspective libre, vue de dessus, vue isométrique
-- **Navigation** : rotation, zoom, pan avec la souris
-
-### Timeline 2D
-- **Frise chronologique interactive** avec grille temporelle
-- **Marqueurs d'événements** : naissances, décès, mariages
-- **Pan/zoom fluide** pour explorer les différentes époques
-
-### Import / Export GEDCOM
-- Support des encodages **ANSI et UTF-8**
-- Parsing robuste des fichiers `.ged` standard
-- Export des données traitées
-
-### Normalisation des dates
-- **Calcul statistique** des dates manquantes (naissance/décès)
-- Estimation intelligente basée sur les relations familiales
-- Comparaison données originales vs normalisées
-
-### Compaction intelligente
-- Algorithme d'**optimisation spatiale** réduisant l'espace de 25 à 35 %
-- **Nesting** intelligent des branches pour un rendu plus dense
-- **10 presets configurables** (compact max, équilibré, aéré, etc.)
-
-### Synchronisation P2P
-- **Partage en temps réel** via WebRTC (PeerJS)
-- Aucun serveur nécessaire — communication directe entre navigateurs
-- Synchronisation de l'arbre, de la sélection et de la caméra
-
-### PWA (Progressive Web App)
-- Application **installable** sur desktop et mobile
-- Utilisable **hors ligne** après la première visite
-
-### Thème clair / sombre
-- Détection automatique des **préférences système**
-- Basculement manuel possible
+The goal is not to build a universal genealogy tree, but a **Web of Trust** connecting genealogists and the people represented in their databases.
 
 ---
 
-## Captures d'écran
+## Positioning and Principles
 
-<!-- TODO: Remplacer les placeholders ci-dessous par de vraies captures d'écran
-
-### Vue 3D — Arbre déployé
-<img src="docs/screenshots/3d-view.png" alt="Vue 3D" width="700" />
-
-### Timeline 2D
-<img src="docs/screenshots/2d-timeline.png" alt="Timeline 2D" width="700" />
-
-### Panneau de détails
-<img src="docs/screenshots/details-panel.png" alt="Panneau de détails" width="700" />
-
-### Mode sombre
-<img src="docs/screenshots/dark-mode.png" alt="Mode sombre" width="700" />
-
--->
-
-*Captures d'écran à venir.*
+- **Data sovereignty**: each genealogist controls their data and visibility settings.
+- **Platformless federation**: direct exchanges through P2P (WebRTC/PeerJS).
+- **Selective publication**: publish unknown-root ancestors to encourage network matching.
+- **Human validation**: automatic matches are leads, not truth; investigation and validation stay in genealogists' hands.
+- **Ğ1 inspiration**: the conceptual framework is inspired by the Ğ1 free-currency Web of Trust, without claiming to be a currency at this stage.
 
 ---
 
-## Stack technique
+## Current Capabilities
 
-| Technologie | Rôle |
+### Visualization
+- 3D view (R3F/Three.js) with GPU rendering for large volumes.
+- 2D views (grid and individual mode) for detailed exploration.
+- Navigation, selection, focus, and visual comparison tools.
+
+### Genealogical Data
+- GEDCOM import/export.
+- Missing-date normalization.
+- Sorting, filtering, and relationship exploration.
+
+### Multimedia Data
+- Add photos and documents per individual.
+- Primary photo per person.
+- Media synchronization according to visibility rules.
+
+### Peer-to-Peer and Identity
+- P2P sharing sessions.
+- Change proposal workflow.
+- Invites and access profiles (`viewer`/`contributor`/`editor`).
+- Signed local identity and encrypted private-key backup.
+
+---
+
+## Conceptual Alignment with Ğ1
+
+The project reuses key lessons analyzed in [docs/p2p/DUNITER_PRINCIPLES_ANALYSIS.md](docs/p2p/DUNITER_PRINCIPLES_ANALYSIS.md):
+
+- importance of identity and distributed trust;
+- distinction between identity, action rights, and governance;
+- role of explicit rules (validity, quotas, review, anti-spam);
+- robustness of a living social graph rather than a single central truth.
+
+Long-term hypothesis: if the Ğ2 Web of Trust becomes robust and viral enough, it could eventually support the creation of a Ğ2 free currency. This is a strategic trajectory, not a current feature.
+
+---
+
+## Project Status
+
+- The GitHub repository is **private for now**.
+- It will be **opened at launch**.
+- The project is in active development and strategic framing.
+
+---
+
+## Project Origins
+
+The G2 concept continues the **Arbre** project initiated by Olivier Auber in the 2000s.
+
+- Arbre project history: [PetiteHistoire](http://arbre.km2.net/wakka.php?wiki=PetiteHistoire)
+- The historical wiki is currently unavailable, but the conceptual lineage remains central.
+
+The software is free/open source, and its concept is framed as a free artwork.
+
+---
+
+## Tech Stack
+
+| Technology | Role |
 |---|---|
-| **React 18** + **TypeScript** | Interface utilisateur et typage |
-| **Three.js** + **React Three Fiber** + **Drei** | Rendu 3D et scène WebGL |
-| **Vite** | Build et dev server ultra-rapide |
-| **Tailwind CSS** | Styles utilitaires |
-| **PeerJS** (WebRTC) | Synchronisation pair-à-pair |
-| **Vite Plugin PWA** | Support hors-ligne et installation |
-| **Lucide React** | Icônes |
+| **React 18** + **TypeScript** | Interface and app logic |
+| **Three.js** + **React Three Fiber** + **Drei** | 3D WebGL rendering |
+| **Vite** | Build and development server |
+| **Tailwind CSS** | Utility-first styling |
+| **PeerJS** (WebRTC) | Peer-to-peer communication |
+| **Vite Plugin PWA** | Installability and offline mode |
 
 ---
 
-## Démarrage rapide
+## Quick Start
 
-**Prérequis** : [Node.js](https://nodejs.org/) (v18+)
+**Prerequisite**: [Node.js](https://nodejs.org/) (v18+)
 
 ```bash
-git clone https://github.com/<votre-utilisateur>/lifethread.git
-cd lifethread
 npm install
 npm run dev
 ```
 
-L'application sera accessible sur `http://localhost:5173`.
+App available at `http://localhost:5173`.
 
-### Build de production
+### Production build
 
 ```bash
 npm run build
@@ -132,125 +133,29 @@ npm run preview
 
 ---
 
-## Utilisation
+## Contact
 
-1. **Importer un fichier GEDCOM** : cliquez sur le bouton d'import et sélectionnez un fichier `.ged`
-2. **Naviguer en 2D/3D** : basculez entre les vues via les boutons en haut de l'écran
-3. **Explorer l'arbre** :
-   - Cliquez sur un individu pour voir ses détails
-   - Utilisez les flèches `<` (ancêtres) et `>` (descendants) pour explorer la lignée
-4. **Normaliser les dates** : activez la normalisation pour combler les dates manquantes
-5. **Partager en P2P** : générez un identifiant de session et partagez-le pour collaborer en temps réel
+- Technical questions: [contact@getou.app](mailto:contact@getou.app)
+- Practical questions: [contact@getou.info](mailto:contact@getou.info)
+- Governance questions: [contact@getou.org](mailto:contact@getou.org)
 
 ---
 
-## Architecture
+## Contribution and Support
 
-```mermaid
-graph TD
-    A[Fichier GEDCOM] -->|Import| B[gedcomParser.ts]
-    B -->|Parsing| C[Données brutes]
-    C -->|Normalisation| D[normalizationService.ts]
-    D -->|Layout| E[layoutEngine.ts]
-    E -->|Géométrie| F[geometryService.ts]
-    F --> G[Scene3D.tsx]
-    F --> H[Scene2DGrid.tsx / Scene2DIndividual.tsx]
-    
-    I[App.tsx] -->|État global| G
-    I --> H
-    I --> J[Sidebar.tsx]
-    I --> K[DetailsPanel.tsx]
-    I --> L[TopPanel.tsx]
-    I --> M[BottomPanel.tsx]
-    
-    N[p2p.ts] <-->|WebRTC| I
-```
+Feedback, testing, genealogical analysis, documentation work, and code contributions are welcome.
 
-### Fichiers clés
-
-| Fichier | Description |
-|---|---|
-| [`App.tsx`](App.tsx) | Composant principal, gestion d'état et orchestration |
-| [`components/Scene3D.tsx`](components/Scene3D.tsx) | Visualisation 3D (Three.js / R3F) |
-| [`components/Scene2DGrid.tsx`](components/Scene2DGrid.tsx) | Vue 2D moderne (grid + photo/ruban + interactions) |
-| [`components/Scene2DIndividual.tsx`](components/Scene2DIndividual.tsx) | Façade de la vue 2D individual (pipeline `Scene2DGrid`) |
-| [`components/Scene2DTimeline.tsx`](components/Scene2DTimeline.tsx) | Frise chronologique détaillée |
-| [`components/InstancedGenealogyTree.tsx`](components/InstancedGenealogyTree.tsx) | Rendu GPU instancié pour la 3D |
-| [`services/gedcomParser.ts`](services/gedcomParser.ts) | Parsing des fichiers GEDCOM |
-| [`services/layoutEngine.ts`](services/layoutEngine.ts) | Algorithme de layout et compaction |
-| [`services/normalizationService.ts`](services/normalizationService.ts) | Normalisation statistique des dates |
-| [`services/geometryService.ts`](services/geometryService.ts) | Calcul des géométries 3D |
-| [`services/p2p.ts`](services/p2p.ts) | Service de synchronisation P2P (PeerJS) |
-| [`types.ts`](types.ts) | Modèle de données TypeScript |
+During development, people who find the app useful and the initiative meaningful can also support the author with voluntary donations.
 
 ---
 
-## Algorithme de compaction
+## References
 
-LifeThread intègre un algorithme de compaction spatial unique :
-
-- **Réduction de 25 à 35 %** de l'espace horizontal occupé
-- **Nesting intelligent** : les branches courtes sont imbriquées dans les espaces laissés par les branches longues
-- **10 presets configurables** : de la compacité maximale à l'affichage aéré, chaque preset ajuste la densité, les gaps et le facteur de nesting
-
-```
-Preset 1 — Compact Max    : gain ~35-40%, lisibilité ⭐⭐⭐
-Preset 2 — Équilibré      : gain ~25-30%, lisibilité ⭐⭐⭐⭐   (recommandé)
-Preset 3 — Aéré           : gain ~15-20%, lisibilité ⭐⭐⭐⭐⭐
-...
-```
+- About the Ğ1 free currency: [monnaie-libre.fr](https://monnaie-libre.fr/)
+- Internal Duniter/Ğ1 analysis: [docs/p2p/DUNITER_PRINCIPLES_ANALYSIS.md](docs/p2p/DUNITER_PRINCIPLES_ANALYSIS.md)
 
 ---
 
-## Performances
+## License
 
-| Taille de la base | Vue 2D (DOM) | Vue 3D (WebGL) |
-|---|---|---|
-| < 1 000 individus | Fluide | Fluide |
-| 1 000 – 5 000 | Correct | Fluide |
-| 5 000 – 40 000+ | Non recommandé | Fluide (InstancedMesh) |
-
-- **Petites bases** (< 5 000) : la vue 2D DOM offre une expérience interactive riche
-- **Grandes bases** (5 000+) : le rendu 3D via `InstancedMesh` permet d'afficher 40 000+ individus en un seul draw call GPU
-
----
-
-## Roadmap
-
-- [ ] Synchronisation incrémentale P2P avec CRDTs
-- [ ] Web Workers pour le parsing et le layout
-- [ ] Import depuis d'autres formats (Gramps XML, JSON)
-- [ ] Annotations et médias sur les individus
-- [ ] Scene 2D Canvas pour les très grandes bases
-- [ ] Basculement automatique DOM / Canvas selon la taille
-- [ ] Spatial indexing (Quadtree) pour le culling
-
----
-
-## Contribuer
-
-Les contributions sont les bienvenues ! N'hésitez pas à :
-
-1. **Fork** le projet
-2. Créer une **branche** pour votre fonctionnalité (`git checkout -b feature/ma-feature`)
-3. **Commit** vos changements (`git commit -m "feat: description"`)
-4. **Push** vers votre branche (`git push origin feature/ma-feature`)
-5. Ouvrir une **Pull Request**
-
-Consultez les [issues](https://github.com/<votre-utilisateur>/lifethread/issues) pour voir les améliorations prévues.
-
----
-
-## Licence
-
-Ce projet est distribué sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
-
----
-
-<div align="center">
-
-*Chaque vie est un fil — tissé à travers le temps et l'espace.*
-
-**LifeThread** — Le Fil de la Vie
-
-</div>
+This project is distributed under the **MIT** license. See [LICENSE](LICENSE).

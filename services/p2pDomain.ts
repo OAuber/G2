@@ -1,4 +1,4 @@
-import { Family, Individual } from '../types';
+import { Family, Individual, SelfIdentityPublic } from '../types';
 
 export type P2PRole = 'viewer' | 'contributor' | 'editor';
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'merged';
@@ -85,6 +85,7 @@ export interface PublicIndividualRecord {
 
 export interface AppMetadataStore {
   session: ShareSession | null;
+  selfIdentity?: SelfIdentityPublic | null;
   accessProfiles: Record<string, AccessProfile>;
   invites: Record<string, InviteRecord>;
   revisionsByIndividualId: Record<string, IndividualRevision[]>;
