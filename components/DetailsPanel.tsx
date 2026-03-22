@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { User, Plus, Trash2, Edit, Link2, X } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
+import { useI18n } from '../i18n';
 
 export interface NewPersonData {
   givenName: string;
@@ -128,6 +129,7 @@ interface SearchSelectProps {
 const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
   value, onChange, options, placeholder, inputBg, textClass, subTextClass,
 }) => {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -170,7 +172,7 @@ const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
           <div
             className={`px-2 py-1 text-xs italic cursor-pointer hover:bg-blue-500/20 ${subTextClass}`}
             onMouseDown={e => { e.preventDefault(); onChange(''); setOpen(false); }}
-          >— None —</div>
+          >{t('details.none')}</div>
           {filtered.map(p => (
             <div
               key={p.id}
@@ -182,7 +184,7 @@ const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
             </div>
           ))}
           {filtered.length === 0 && (
-            <div className={`px-2 py-1 text-xs italic ${subTextClass}`}>No match</div>
+            <div className={`px-2 py-1 text-xs italic ${subTextClass}`}>{t('details.noMatch')}</div>
           )}
         </div>
       )}
@@ -205,6 +207,7 @@ interface SearchMultiSelectProps {
 const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
   values, onChange, options, inputBg, textClass, subTextClass,
 }) => {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
@@ -228,13 +231,13 @@ const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
     <div>
       <input
         className={`w-full rounded px-2 py-1 text-sm border outline-none mb-1 ${inputBg}`}
-        placeholder="Search children…"
+        placeholder={t('details.childrenSearch')}
         value={query}
         onChange={e => setQuery(e.target.value)}
       />
       <div className={`max-h-32 overflow-y-auto rounded border ${inputBg} p-1.5 space-y-0.5`}>
         {filtered.length === 0 ? (
-          <p className={`text-xs italic px-1 ${subTextClass}`}>No match</p>
+          <p className={`text-xs italic px-1 ${subTextClass}`}>{t('details.noMatch')}</p>
         ) : filtered.map(p => (
           <label
             key={p.id}
@@ -297,6 +300,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onImportIdentityBackup,
   onRenounceIdentity,
 }) => {
+  const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
     givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', birthPlace: '', deathPlace: '', notes: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
   });
@@ -436,7 +440,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       <div className="flex justify-between items-center">
           <span className={subTextClass}>{label}</span>
           <div className="flex items-center gap-2">
-            <span className={`${textClass} font-mono`}>{date?.year || 'Unknown'}</span>
+            <span className={`${textClass} font-mono`}>{date?.year || t('details.unknown')}</span>
             {date?.isCalculated && (
                 <span className="text-[9px] px-1 bg-yellow-500/20 text-yellow-500 rounded font-bold border border-yellow-500/50">CAL</span>
             )}
@@ -464,14 +468,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const formatFieldLabel = (field: string): string => {
     const map: Record<string, string> = {
-      givenName: 'Given name',
-      surname: 'Surname',
-      birthDate: 'Birth date',
-      deathDate: 'Death date',
-      birthPlace: 'Birth place',
-      deathPlace: 'Death place',
-      familyChildId: 'Parents family',
-      familySpouseIds: 'Spouse families',
+      givenName: t('details.givenName'),
+      surname: t('details.surname'),
+      birthDate: t('details.birth'),
+      deathDate: t('details.death'),
+      birthPlace: t('details.birthPlace'),
+      deathPlace: t('details.deathPlace'),
+      familyChildId: t('details.parents'),
+      familySpouseIds: t('details.familyUnions'),
     };
     return map[field] || field;
   };
@@ -554,7 +558,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
          className={`absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 origin-right py-8 px-3 rounded-l-xl border-y border-l border-r-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] text-xs font-bold uppercase tracking-widest whitespace-nowrap">
-            Individuals
+            {t('details.handle')}
         </span>
       </button>
 
@@ -563,12 +567,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         {!isCreating && (
             <button onClick={onCreateNew} className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg}`}>
                 <Plus className="w-4 h-4 mr-2" />
-                <span className={`text-sm font-medium ${textClass}`}>Create New</span>
+                <span className={`text-sm font-medium ${textClass}`}>{t('details.createNew')}</span>
             </button>
         )}
         {isCreating && (
             <div className={`text-sm font-bold uppercase tracking-wider text-center ${subTextClass}`}>
-                New Record
+                {t('details.newRecord')}
             </div>
         )}
       </div>
@@ -579,100 +583,100 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       >
         <div className={`${cardBg} rounded-lg p-2.5 border ${isDarkMode ? 'border-slate-700' : 'border-slate-200'}`}>
           <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
-            Selected individual
+            {t('details.selectedIndividual')}
           </div>
           <div className={`text-sm font-semibold mt-1 ${textClass} flex items-center gap-2`}>
             <span>
               {isCreating
-                ? 'New individual'
+                ? t('details.newIndividual')
                 : individual
                 ? `${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id
-                : 'No individual selected'}
+                : t('details.noIndividualSelected')}
             </span>
             {!isCreating && individual && selfIdentity?.individualId === individual.id && (
               <span className="inline-flex items-center rounded-full border border-emerald-500/60 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
-                You
+                {t('details.you')}
               </span>
             )}
           </div>
         </div>
 
         <div className={`rounded border p-1 grid grid-cols-4 gap-1 ${inputBg}`}>
-          <button type="button" onClick={() => setActiveTab('records')} className={`py-1 text-xs font-bold rounded ${activeTab === 'records' ? 'bg-blue-600 text-white' : ''}`}>Records</button>
-          <button type="button" onClick={() => setActiveTab('documents')} className={`py-1 text-xs font-bold rounded ${activeTab === 'documents' ? 'bg-blue-600 text-white' : ''}`}>Documents</button>
-          <button type="button" onClick={() => setActiveTab('review')} className={`py-1 text-xs font-bold rounded ${activeTab === 'review' ? 'bg-blue-600 text-white' : ''}`}>Review</button>
-          <button type="button" onClick={() => setActiveTab('identity')} className={`py-1 text-xs font-bold rounded ${activeTab === 'identity' ? 'bg-blue-600 text-white' : ''}`}>Identity</button>
+          <button type="button" onClick={() => setActiveTab('records')} className={`py-1 text-xs font-bold rounded ${activeTab === 'records' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabRecords')}</button>
+          <button type="button" onClick={() => setActiveTab('documents')} className={`py-1 text-xs font-bold rounded ${activeTab === 'documents' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabDocuments')}</button>
+          <button type="button" onClick={() => setActiveTab('review')} className={`py-1 text-xs font-bold rounded ${activeTab === 'review' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabReview')}</button>
+          <button type="button" onClick={() => setActiveTab('identity')} className={`py-1 text-xs font-bold rounded ${activeTab === 'identity' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabIdentity')}</button>
         </div>
 
         {(isCreating || isEditing) ? (
           <form onSubmit={(e) => {e.preventDefault(); isCreating ? onCreateIndividual(formData) : handleSaveEdit()}} className="space-y-3">
              <div className="flex justify-between items-center">
-                 <h3 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{isCreating ? 'New Individual' : 'Edit Individual'}</h3>
-                 {isEditing && <button type="button" onClick={() => setIsEditing(false)} className="text-xs text-red-500">Cancel</button>}
+                 <h3 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{isCreating ? t('details.newIndividualTitle') : t('details.editIndividualTitle')}</h3>
+                 {isEditing && <button type="button" onClick={() => setIsEditing(false)} className="text-xs text-red-500">{t('details.cancel')}</button>}
              </div>
 
              <div className="space-y-3">
-               <label className={`block text-xs ${subTextClass}`}>Given Name</label>
-               <input required placeholder="Given Name" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.givenName} onChange={e => setFormData({...formData, givenName: e.target.value})} />
-               <label className={`block text-xs ${subTextClass}`}>Surname</label>
-               <input required placeholder="Surname" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.surname} onChange={e => setFormData({...formData, surname: e.target.value.toUpperCase()})} />
+               <label className={`block text-xs ${subTextClass}`}>{t('details.givenName')}</label>
+               <input required placeholder={t('details.givenName')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.givenName} onChange={e => setFormData({...formData, givenName: e.target.value})} />
+               <label className={`block text-xs ${subTextClass}`}>{t('details.surname')}</label>
+               <input required placeholder={t('details.surname')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.surname} onChange={e => setFormData({...formData, surname: e.target.value.toUpperCase()})} />
              </div>
              
              <div className="flex gap-2">
-                 {['Male', 'Female'].map(g => (
-                     <button type="button" key={g} onClick={() => setFormData({...formData, gender: g === 'Male' ? Gender.Male : Gender.Female})}
-                        className={`flex-1 py-1 rounded text-sm border ${formData.gender === (g === 'Male' ? Gender.Male : Gender.Female) ? 'bg-blue-600 text-white' : inputBg}`}>
+                 {[t('details.male'), t('details.female')].map(g => (
+                     <button type="button" key={g} onClick={() => setFormData({...formData, gender: g === t('details.male') ? Gender.Male : Gender.Female})}
+                       className={`flex-1 py-1 rounded text-sm border ${formData.gender === (g === t('details.male') ? Gender.Male : Gender.Female) ? 'bg-blue-600 text-white' : inputBg}`}>
                         {g}
                      </button>
                  ))}
              </div>
              
              <div className="grid grid-cols-2 gap-2">
-                <input placeholder="Birth Year" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthDate} onChange={e => setFormData({...formData, birthDate: e.target.value})} />
-                <input placeholder="Death Year" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathDate} onChange={e => setFormData({...formData, deathDate: e.target.value})} />
+               <input placeholder={t('details.birthYear')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthDate} onChange={e => setFormData({...formData, birthDate: e.target.value})} />
+               <input placeholder={t('details.deathYear')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathDate} onChange={e => setFormData({...formData, deathDate: e.target.value})} />
              </div>
              <div className="grid grid-cols-1 gap-2">
-                <input placeholder="Birth Place" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthPlace} onChange={e => setFormData({...formData, birthPlace: e.target.value})} />
-                <input placeholder="Death Place" className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathPlace} onChange={e => setFormData({...formData, deathPlace: e.target.value})} />
-                <textarea placeholder="Notes" className={`w-full rounded px-2 py-1 text-sm border outline-none min-h-[80px] ${inputBg}`} value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
+               <input placeholder={t('details.birthPlace')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthPlace} onChange={e => setFormData({...formData, birthPlace: e.target.value})} />
+               <input placeholder={t('details.deathPlace')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathPlace} onChange={e => setFormData({...formData, deathPlace: e.target.value})} />
+               <textarea placeholder={t('details.notes')} className={`w-full rounded px-2 py-1 text-sm border outline-none min-h-[80px] ${inputBg}`} value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
              </div>
 
              {/* Relationships — searchable dropdowns */}
              <div className="space-y-3 pt-2">
-                <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Relationships</label>
+               <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.relationships')}</label>
                 
-                <label className={`block text-[10px] ${subTextClass}`}>Father</label>
+               <label className={`block text-[10px] ${subTextClass}`}>{t('details.father')}</label>
                 <SearchSelect
                   value={formData.fatherId}
                   onChange={id => setFormData({...formData, fatherId: id})}
                   options={availableMen}
-                  placeholder="Search father…"
+                  placeholder={t('details.searchFather')}
                   inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
                 />
 
-                <label className={`block text-[10px] ${subTextClass}`}>Mother</label>
+               <label className={`block text-[10px] ${subTextClass}`}>{t('details.mother')}</label>
                 <SearchSelect
                   value={formData.motherId}
                   onChange={id => setFormData({...formData, motherId: id})}
                   options={availableWomen}
-                  placeholder="Search mother…"
+                  placeholder={t('details.searchMother')}
                   inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
                 />
 
-                <label className={`block text-[10px] ${subTextClass}`}>Spouse</label>
+               <label className={`block text-[10px] ${subTextClass}`}>{t('details.spouse')}</label>
                 <SearchSelect
                   value={formData.spouseId}
                   onChange={id => setFormData({...formData, spouseId: id})}
                   options={allIndividuals}
-                  placeholder="Search spouse…"
+                  placeholder={t('details.searchSpouse')}
                   inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
                 />
                 
                 {formData.spouseId && (
                   <div>
-                    <label className={`block text-xs ${subTextClass} mb-1`}>Marriage Year</label>
+                    <label className={`block text-xs ${subTextClass} mb-1`}>{t('details.marriageYear')}</label>
                     <input 
-                      placeholder="Marriage Year (optional)" 
+                      placeholder={t('details.marriageYearOptional')} 
                       className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} 
                       value={formData.marriageDate} 
                       onChange={e => setFormData({...formData, marriageDate: e.target.value})} 
@@ -683,7 +687,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 {/* Children — searchable multi-select */}
                 <div>
                   <label className={`block text-xs font-bold ${subTextClass} mb-2`}>
-                    Children ({formData.childrenIds.length} selected)
+                    {t('details.children')} ({formData.childrenIds.length} {t('details.selected')})
                   </label>
                   <SearchMultiSelect
                     values={formData.childrenIds}
@@ -701,29 +705,29 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)' }}
              >
                 <div className="flex gap-2">
-                  <button type="submit" className={`flex-1 py-2 rounded text-sm font-bold ${actionBtnClass}`}>{isCreating ? 'Create' : 'Save Changes'}</button>
-                  {isCreating && <button type="button" onClick={onCancelCreate} className={`flex-1 py-2 rounded text-sm font-bold ${inputBg}`}>Cancel</button>}
+                  <button type="submit" className={`flex-1 py-2 rounded text-sm font-bold ${actionBtnClass}`}>{isCreating ? t('details.create') : t('details.saveChanges')}</button>
+                  {isCreating && <button type="button" onClick={onCancelCreate} className={`flex-1 py-2 rounded text-sm font-bold ${inputBg}`}>{t('details.cancel')}</button>}
                 </div>
              </div>
           </form>
         ) : activeTab === 'documents' ? (
           !individual ? (
             <div className={`h-full flex flex-col items-center justify-center ${subTextClass} space-y-3 opacity-60`}>
-              <p className="text-sm">Select an individual first</p>
+              <p className="text-sm">{t('details.selectIndividualFirst')}</p>
             </div>
           ) : (
             <div className="space-y-4">
               {primaryPhoto && (
                 <div className={`${cardBg} rounded-lg p-3`}>
-                  <div className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Primary photo</div>
+                  <div className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>{t('details.primaryPhoto')}</div>
                   <img src={primaryPhoto.url} alt={primaryPhoto.title} className="w-full h-40 object-cover rounded border border-slate-600/30" />
                 </div>
               )}
 
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Add document</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.addDocument')}</div>
                 <input
-                  placeholder="Title"
+                  placeholder={t('details.title')}
                   className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                   value={docForm.title}
                   onChange={(e) => setDocForm((prev) => ({ ...prev, title: e.target.value }))}
@@ -734,21 +738,21 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     value={docForm.source}
                     onChange={(e) => setDocForm((prev) => ({ ...prev, source: e.target.value as 'local' | 'online', url: '', file: null }))}
                   >
-                    <option value="local">Offline (Local)</option>
-                    <option value="online">Online</option>
+                    <option value="local">{t('details.offlineLocal')}</option>
+                    <option value="online">{t('details.online')}</option>
                   </select>
                   <select
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     value={docForm.kind}
                     onChange={(e) => setDocForm((prev) => ({ ...prev, kind: e.target.value as 'photo' | 'document' }))}
                   >
-                    <option value="photo">Photo</option>
-                    <option value="document">Document</option>
+                    <option value="photo">{t('details.photo')}</option>
+                    <option value="document">{t('details.document')}</option>
                   </select>
                 </div>
                 {docForm.source === 'online' ? (
                   <input
-                    placeholder="https://..."
+                    placeholder={t('details.webUrlPlaceholder')}
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     value={docForm.url}
                     onChange={(e) => setDocForm((prev) => ({ ...prev, url: e.target.value }))}
@@ -804,14 +808,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', file: null });
                   }}
                 >
-                  Add document
+                  {t('details.addDocumentAction')}
                 </button>
               </div>
 
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Document list</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.documentList')}</div>
                 {documents.length === 0 ? (
-                  <p className={`text-xs ${subTextClass}`}>No documents yet.</p>
+                  <p className={`text-xs ${subTextClass}`}>{t('details.noDocumentsYet')}</p>
                 ) : documents.map((doc) => (
                   <div key={doc.id} className={`rounded border p-2 ${inputBg}`}>
                     <div className="flex items-center justify-between gap-2">
@@ -824,7 +828,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                           <div className="mt-2 space-y-2">
                             <input
                               type="text"
-                              placeholder="Document name"
+                              placeholder={t('details.documentName')}
                               className={`w-full rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
                               value={editingDocTitle}
                               onChange={(e) => setEditingDocTitle(e.target.value)}
@@ -850,7 +854,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                               }}
                               className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
                             >
-                              Save
+                              {t('details.save')}
                             </button>
                             <button
                               type="button"
@@ -861,7 +865,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                               }}
                               className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
                             >
-                              Cancel
+                              {t('details.cancel')}
                             </button>
                             </div>
                           </div>
@@ -883,7 +887,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                           }}
                           className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
                         >
-                          {editingDocId === doc.id ? 'Close' : 'Edit'}
+                          {editingDocId === doc.id ? t('details.close') : t('details.edit')}
                         </button>
                         {(doc.kind === 'photo' || doc.url.startsWith('data:image/')) && (
                           <button
@@ -891,7 +895,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                             onClick={() => individual && onSetPrimaryPhoto?.(individual.id, doc.id)}
                             className={`px-2 py-1 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
                           >
-                            {doc.isPrimaryPhoto ? 'Primary' : 'Set primary'}
+                            {doc.isPrimaryPhoto ? t('details.primary') : t('details.setPrimary')}
                           </button>
                         )}
                         <button
@@ -899,7 +903,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                           onClick={() => individual && onRemoveDocument?.(individual.id, doc.id)}
                           className="px-2 py-1 rounded text-[10px] font-bold bg-rose-600 text-white"
                         >
-                          Delete
+                          {t('details.delete')}
                         </button>
                       </div>
                     </div>
@@ -912,9 +916,9 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           <div className="space-y-4">
             {!reviewProposal && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Review</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.reviewIntro')}</div>
                 <p className={`text-xs ${subTextClass}`}>
-                  Select a proposal from the top panel to review and validate it here.
+                  {t('details.reviewIntroText')}
                 </p>
               </div>
             )}
@@ -926,7 +930,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   onClick={() => onOpenReviewProposal?.(nextPendingProposalId)}
                   className="w-full py-2 rounded text-sm font-bold bg-violet-600 text-white hover:bg-violet-500"
                 >
-                  Next pending review
+                  {t('details.nextPendingReview')}
                 </button>
               </div>
             )}
@@ -935,7 +939,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2.5 border border-rose-500/40`}>
                 <div className="flex items-center justify-between">
                   <h4 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
-                    Review P2P Deletion
+                    {t('details.reviewDeletionTitle')}
                   </h4>
                   <span className="text-[10px] text-rose-500 font-mono">{reviewProposal.proposalId}</span>
                 </div>
@@ -943,7 +947,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   From: {reviewProposal.authorPeerId} | {new Date(reviewProposal.proposedAt).toLocaleString()}
                 </div>
                 <p className="text-xs text-rose-400">
-                  This proposal requests deletion of this individual and related family links.
+                  {t('details.deletionRequestText')}
                 </p>
                 <div className="flex gap-2">
                   <button
@@ -951,14 +955,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'fuse')}
                     className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500"
                   >
-                    Accept deletion
+                    {t('details.acceptDeletion')}
                   </button>
                   <button
                     type="button"
                     onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'reject')}
                     className="flex-1 py-2 rounded text-sm font-bold bg-slate-600 text-white hover:bg-slate-500"
                   >
-                    Reject
+                    {t('details.reject')}
                   </button>
                 </div>
               </div>
@@ -972,12 +976,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2.5 border border-blue-500/40`}>
                 <div className="flex items-start justify-between gap-2">
                   <h4 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
-                    Review P2P Proposal
+                    {t('details.reviewProposalTitle')}
                   </h4>
                   <div className="flex items-center gap-1">
                     {reviewProposal.retryAfterReject && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded border border-rose-500/50 text-rose-500">
-                        after reject
+                        {t('details.afterReject')}
                       </span>
                     )}
                     {reviewProposal.matchConfidence && (
@@ -988,15 +992,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   </div>
                 </div>
                 <div className={`text-[10px] ${subTextClass} flex flex-wrap gap-1`}>
-                  {reviewProposal.source === 'initial_compare' && <span className="px-1 rounded border border-blue-500/50">Initial compare</span>}
+                  {reviewProposal.source === 'initial_compare' && <span className="px-1 rounded border border-blue-500/50">{t('details.initialCompare')}</span>}
                   <span>{new Date(reviewProposal.proposedAt).toLocaleString()}</span>
                 </div>
 
                 <div className={`rounded border p-2 ${inputBg}`}>
                   <div className={`grid grid-cols-[1fr_1fr_1fr] gap-2 text-[11px] font-bold mb-1 ${subTextClass}`}>
-                    <span>Field</span>
-                    <span>Original</span>
-                    <span>Proposal</span>
+                    <span>{t('details.field')}</span>
+                    <span>{t('details.original')}</span>
+                    <span>{t('details.proposal')}</span>
                   </div>
                   <div className="space-y-1 text-xs">
                     {reviewFields.map((field) => (
@@ -1010,7 +1014,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 </div>
 
                 <div className={`rounded border p-2 ${inputBg}`}>
-                  <div className="text-xs font-semibold mb-2">Modified fields</div>
+                  <div className="text-xs font-semibold mb-2">{t('details.modifiedFields')}</div>
                   <div className="space-y-1">
                     {reviewFields.map((field) => {
                       const fieldKey = String(field);
@@ -1048,7 +1052,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     }
                     className="flex-1 py-2 rounded text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
                   >
-                    Apply checked
+                    {t('details.applyChecked')}
                   </button>
                   <button
                     type="button"
@@ -1062,7 +1066,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     }
                     className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500 disabled:opacity-50"
                   >
-                    Reject checked
+                    {t('details.rejectChecked')}
                   </button>
                 </div>
 
@@ -1072,14 +1076,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'fuse')}
                     className="flex-1 py-2 rounded text-sm font-bold bg-blue-600 text-white hover:bg-blue-500"
                   >
-                    Fuse global
+                    {t('details.fuseGlobal')}
                   </button>
                   <button
                     type="button"
                     onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'reject')}
                     className="flex-1 py-2 rounded text-sm font-bold bg-rose-600 text-white hover:bg-rose-500"
                   >
-                    Reject global
+                    {t('details.rejectGlobal')}
                   </button>
                 </div>
               </div>
@@ -1089,19 +1093,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           <div className="space-y-4">
             {showClaimBlock && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity claim</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identityClaim')}</div>
                 <p className={`text-xs ${subTextClass}`}>
-                  Link yourself to a living person in this GEDCOM and generate your device keypair.
+                  {t('details.identityClaimText')}
                 </p>
 
-                <label className={`block text-[10px] ${subTextClass}`}>I am this person</label>
+                <label className={`block text-[10px] ${subTextClass}`}>{t('details.iAmThisPerson')}</label>
                 <SearchSelect
                   value={identityCandidateId}
                   onChange={setIdentityCandidateId}
                   options={livingCandidates
                     .map((candidate) => (data?.individuals[candidate.id] ? data.individuals[candidate.id] : null))
                     .filter((v): v is Individual => !!v)}
-                  placeholder="Search yourself..."
+                  placeholder={t('details.searchYourself')}
                   inputBg={inputBg}
                   textClass={textClass}
                   subTextClass={subTextClass}
@@ -1113,7 +1117,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className={`w-full py-2 rounded text-sm font-bold ${actionBtnClass} disabled:opacity-50`}
                   onClick={() => onClaimIdentity(identityCandidateId)}
                 >
-                  Claim that identity
+                  {t('details.claimIdentity')}
                 </button>
 
                 <button
@@ -1121,30 +1125,30 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   className={`w-full py-2 rounded text-xs font-bold ${inputBg}`}
                   onClick={onCreateNew}
                 >
-                  I am not in tree yet - create me first
+                  {t('details.createMeFirst')}
                 </button>
               </div>
             )}
 
             {showEmptyIdentityForSelectedOther && (
               <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identity')}</div>
                 <p className={`text-xs ${subTextClass}`}>
-                  No identity or certification information exists for this selected individual yet.
+                  {t('details.noIdentityForSelected')}
                 </p>
               </div>
             )}
 
             {showSelfIdentityData && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-1`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Claimed identity</div>
-                <div className={`text-xs ${textClass}`}>Individual: {selfIdentity.individualId}</div>
-                <div className={`text-xs ${textClass}`}>Device key: {selfIdentity.deviceKeyId}</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.claimedIdentity')}</div>
+                <div className={`text-xs ${textClass}`}>{t('details.individualLabel')}: {selfIdentity.individualId}</div>
+                <div className={`text-xs ${textClass}`}>{t('details.deviceKey')}: {selfIdentity.deviceKeyId}</div>
                 <div className={`text-[11px] ${subTextClass}`}>
-                  Claimed at {new Date(selfIdentity.claimedAt).toLocaleString()}
+                  {t('details.claimedAt')} {new Date(selfIdentity.claimedAt).toLocaleString()}
                 </div>
                 <div className={`text-[11px] ${subTextClass}`}>
-                  To claim another identity, renounce this one first.
+                  {t('details.renounceFirst')}
                 </div>
               </div>
             )}
@@ -1152,19 +1156,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             {showSelfIdentityData && (
               <>
                 <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Certification history</div>
+                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.certificationHistory')}</div>
                   <p className={`text-xs ${subTextClass}`}>
-                    No certifications recorded yet for your identity.
+                    {t('details.noCertsYet')}
                   </p>
                 </div>
 
                 <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Identity backup (separate)</div>
+                  <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identityBackup')}</div>
                   <input
                     type="password"
                     value={exportPassword}
                     onChange={(e) => setExportPassword(e.target.value)}
-                    placeholder="Export password (min 8 chars)"
+                    placeholder={t('details.exportPasswordPlaceholder')}
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                   />
                   <button
@@ -1172,7 +1176,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     className={`w-full py-2 rounded text-xs font-bold ${actionBtnClass}`}
                     onClick={() => onExportIdentityBackup(exportPassword)}
                   >
-                    Export encrypted identity backup
+                    {t('details.exportBackup')}
                   </button>
 
                   <input
@@ -1185,7 +1189,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     type="password"
                     value={importPassword}
                     onChange={(e) => setImportPassword(e.target.value)}
-                    placeholder="Import password"
+                    placeholder={t('details.importPasswordPlaceholder')}
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                   />
                   <button
@@ -1194,21 +1198,21 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     className={`w-full py-2 rounded text-xs font-bold ${actionBtnClass} disabled:opacity-50`}
                     onClick={() => identityBackupFile && onImportIdentityBackup(identityBackupFile, importPassword)}
                   >
-                    Import encrypted identity backup
+                    {t('details.importBackup')}
                   </button>
                 </div>
 
                 <div className="rounded-lg border border-rose-500/60 bg-rose-500/10 p-3 space-y-2">
-                  <div className="text-xs font-bold uppercase tracking-wider text-rose-500">Danger zone</div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-rose-500">{t('details.dangerZone')}</div>
                   <p className="text-xs text-rose-400">
-                    WARNING: renouncing this identity removes your local claimed identity and private key on this device.
+                    {t('details.renounceWarning')}
                   </p>
                   <button
                     type="button"
                     className="w-full rounded bg-rose-600 py-2 text-xs font-bold text-white hover:bg-rose-500"
                     onClick={onRenounceIdentity}
                   >
-                    Renounce this identity
+                    {t('details.renounceIdentity')}
                   </button>
                 </div>
               </>
@@ -1216,7 +1220,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </div>
         ) : (!individual) ? (
            <div className={`h-full flex flex-col items-center justify-center ${subTextClass} space-y-3 opacity-60`}>
-             <p className="text-sm">No individual created nor selected</p>
+             <p className="text-sm">{t('details.noIndividualCreatedOrSelected')}</p>
            </div>
         ) : (
           <div className="space-y-6">
@@ -1237,29 +1241,29 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold ${inputBg} hover:text-blue-500`}
               >
                  <Edit className="w-3.5 h-3.5" />
-                 Edit
+                 {t('details.edit')}
               </button>
             </div>
 
             {/* Vital Stats */}
             <div className={`${cardBg} rounded-lg p-3 space-y-2 text-sm`}>
-               <DateDisplay label="Birth" date={individual.birthDate} />
-               <DateDisplay label="Death" date={individual.deathDate} />
+               <DateDisplay label={t('details.birth')} date={individual.birthDate} />
+               <DateDisplay label={t('details.death')} date={individual.deathDate} />
                {individual.birthPlace && (
                  <div className="flex justify-between items-start gap-2">
-                   <span className={subTextClass}>Birth place</span>
+                  <span className={subTextClass}>{t('details.birthPlace')}</span>
                    <span className={`${textClass} text-right`}>{individual.birthPlace}</span>
                  </div>
                )}
                {individual.deathPlace && (
                  <div className="flex justify-between items-start gap-2">
-                   <span className={subTextClass}>Death place</span>
+                  <span className={subTextClass}>{t('details.deathPlace')}</span>
                    <span className={`${textClass} text-right`}>{individual.deathPlace}</span>
                  </div>
                )}
                
                <div className="flex justify-between">
-                  <span className={subTextClass}>Age</span>
+                 <span className={subTextClass}>{t('details.age')}</span>
                   <span className={`${textClass} font-mono`}>
                       {individual.birthDate?.year && individual.deathDate?.year 
                          ? individual.deathDate.year - individual.birthDate.year 
@@ -1269,7 +1273,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             </div>
             {individual.notes && (
               <div className={`${cardBg} rounded-lg p-3 space-y-2 text-sm`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>Notes</div>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.notes')}</div>
                 <p className={`${textClass} whitespace-pre-wrap text-xs leading-relaxed`}>{individual.notes}</p>
               </div>
             )}
@@ -1277,7 +1281,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             {/* Relationships Display */}
             <div className="space-y-4">
                 <div>
-                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Parents</h4>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>{t('details.parents')}</h4>
                     {parentFamily ? (
                         <div className="space-y-1">
                             {fatherId && (
@@ -1293,11 +1297,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                 </button>
                             )}
                         </div>
-                    ) : <div className={`text-xs italic ${subTextClass}`}>No parents recorded.</div>}
+                    ) : <div className={`text-xs italic ${subTextClass}`}>{t('details.noParentsRecorded')}</div>}
                 </div>
 
                 <div>
-                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>Family Unions</h4>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>{t('details.familyUnions')}</h4>
                     {individual.familySpouseIds && individual.familySpouseIds.length > 0 ? (
                         individual.familySpouseIds.map(famId => {
                             const fam = data?.families[famId];
@@ -1312,12 +1316,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                           </button>
                                           {fam.marriageDate?.year && (
                                             <div className={`text-[10px] ${subTextClass} ml-6 mb-2`}>
-                                              Married: {fam.marriageDate.year}
-                                              {fam.marriageDate.isCalculated && <span className="ml-1 text-yellow-500">(calc)</span>}
+                                              {t('details.married')}: {fam.marriageDate.year}
+                                              {fam.marriageDate.isCalculated && <span className="ml-1 text-yellow-500">({t('details.calc')})</span>}
                                             </div>
                                           )}
                                         </>
-                                    ) : <div className={`text-xs italic mb-2 ${subTextClass}`}>Unknown Spouse</div>}
+                                    ) : <div className={`text-xs italic mb-2 ${subTextClass}`}>{t('details.unknownSpouse')}</div>}
                                     
                                     <div className="pl-4 border-l-2 border-slate-700 space-y-1 mt-2">
                                         {fam.childrenIds && fam.childrenIds.length > 0 ? (
@@ -1326,12 +1330,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                                     ↳ {getName(childId)}
                                                 </button>
                                             ))
-                                        ) : <span className={`text-[10px] ${subTextClass}`}>No children</span>}
+                                        ) : <span className={`text-[10px] ${subTextClass}`}>{t('details.noChildren')}</span>}
                                     </div>
                                 </div>
                             );
                         })
-                    ) : <div className={`text-xs italic ${subTextClass}`}>No unions recorded.</div>}
+                    ) : <div className={`text-xs italic ${subTextClass}`}>{t('details.noUnionsRecorded')}</div>}
                 </div>
             </div>
             
@@ -1339,15 +1343,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
              <div className="mt-8 pt-6 border-t border-slate-600/30">
               {showDeleteConfirm ? (
                 <div className="bg-red-500/10 border border-red-500/50 rounded p-3 text-center">
-                  <p className="text-xs text-red-500 mb-2">Confirm deletion?</p>
+                  <p className="text-xs text-red-500 mb-2">{t('details.confirmDeletion')}</p>
                   <div className="flex gap-2">
-                    <button onClick={() => {onDeleteIndividual(individual.id); setShowDeleteConfirm(false)}} className="flex-1 py-1 bg-red-600 text-white rounded text-xs">Yes</button>
-                    <button onClick={() => setShowDeleteConfirm(false)} className={`flex-1 py-1 rounded text-xs ${inputBg}`}>Cancel</button>
+                    <button onClick={() => {onDeleteIndividual(individual.id); setShowDeleteConfirm(false)}} className="flex-1 py-1 bg-red-600 text-white rounded text-xs">{t('details.yes')}</button>
+                    <button onClick={() => setShowDeleteConfirm(false)} className={`flex-1 py-1 rounded text-xs ${inputBg}`}>{t('details.cancel')}</button>
                   </div>
                 </div>
               ) : (
                 <button onClick={() => setShowDeleteConfirm(true)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/30 text-red-500 rounded hover:bg-red-500/20 transition-colors text-sm font-bold">
-                  <Trash2 className="w-4 h-4" /> Delete Individual
+                  <Trash2 className="w-4 h-4" /> {t('details.deleteIndividual')}
                 </button>
               )}
             </div>

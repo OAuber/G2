@@ -19,6 +19,7 @@ import {
   generateIdentityKeyMaterial,
   isIdentityBackupPayload,
 } from './services/selfIdentityCrypto';
+import { useI18n } from './i18n';
 import {
   IndividualDiffIndexEntry,
   IndividualDiffPotentialMatch,
@@ -30,6 +31,7 @@ const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
 const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
 
 function App() {
+  const { language, toggleLanguage, t } = useI18n();
   type P2PSessionUseCase = 'share' | 'compare' | null;
   type P2PVisibilitySettings = {
     exposeIdentity: boolean;
@@ -788,43 +790,43 @@ function App() {
 
   const handleStartCompare = () => {
     if (!isIdentified) {
-      alert('Claim your identity first before running initial compare.');
+      alert(t('app.alerts.claimIdentityBeforeCompare'));
       return;
     }
     if (p2pStatus !== 'connected') {
-      alert('Connect to a peer before running initial compare.');
+      alert(t('app.alerts.connectBeforeCompare'));
       return;
     }
     if (!gedcomDataRef.current || remotePeerHasData === false) {
-      alert('Compare requires GEDCOM loaded on both peers.');
+      alert(t('app.alerts.compareNeedsBothGedcom'));
       return;
     }
     setP2PSessionUseCase('compare');
     p2pSessionUseCaseRef.current = 'compare';
     if (!startInitialCompareExchange()) {
-      alert('Load a GEDCOM file before running initial compare.');
+      alert(t('app.alerts.loadGedcomBeforeCompare'));
     }
   };
 
   const handleStartShare = () => {
     if (!isIdentified) {
-      alert('Claim your identity first before sharing.');
+      alert(t('app.alerts.claimIdentityBeforeShare'));
       return;
     }
     if (p2pStatus !== 'connected') {
-      alert('Connect to a peer before sharing.');
+      alert(t('app.alerts.connectBeforeShare'));
       return;
     }
     if (p2pModeRef.current !== 'host') {
-      alert('Share action is available on host side.');
+      alert(t('app.alerts.shareHostOnly'));
       return;
     }
     if (!gedcomDataRef.current) {
-      alert('Load a GEDCOM file before sharing.');
+      alert(t('app.alerts.loadGedcomBeforeShare'));
       return;
     }
     if (remotePeerHasData === true) {
-      alert('Share is available only when remote peer has no loaded GEDCOM.');
+      alert(t('app.alerts.shareRemoteMustBeEmpty'));
       return;
     }
     setP2PSessionUseCase('share');
@@ -1021,7 +1023,7 @@ function App() {
                   setP2PSyncStatusText('done');
                   window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                   logP2PActivity('sync.received', 'session', 'remote');
-                  alert("Synchronized with Peer!");
+                  alert(t('app.alerts.synchronizedWithPeer'));
               }
               if (data.type === 'SYNC_GEDCOM_CHUNK' && data.payload) {
                   if (p2pSessionUseCaseRef.current === 'compare') {
@@ -1088,12 +1090,12 @@ function App() {
                       setP2PSyncStatusText('done');
                       window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                       logP2PActivity('sync.received', 'session', 'remote');
-                      alert("Synchronized with Peer!");
+                      alert(t('app.alerts.synchronizedWithPeer'));
                     } catch (error) {
                       console.error('Failed to parse chunked GEDCOM sync', error);
                       logP2PActivity('sync.parse.error', 'session', 'remote');
                       setP2PSyncStatusText('parse error');
-                      alert('Failed to synchronize large GEDCOM payload.');
+                      alert(t('app.alerts.syncFailedLargeGedcom'));
                     }
                   }
               }
@@ -1483,7 +1485,7 @@ function App() {
   const handleConnectP2P = (hostId: string) => {
       const targetHostId = hostId.trim();
       if (!targetHostId) {
-        alert('Please enter a valid Peer ID.');
+        alert(t('app.alerts.invalidPeerId'));
         return;
       }
       setP2pMode('client');
@@ -1913,7 +1915,7 @@ function App() {
           ? (remoteAccessPolicy?.allowProposal ?? true)
           : true;
       if (!allowProposal) {
-        alert('Proposals are disabled by host policy.');
+        alert(t('app.alerts.proposalsDisabledByPolicy'));
         return;
       }
       const changeSet = buildIndividualChangeSet(previousIndi, newData.individuals[updatedIndi.id]);
@@ -1950,7 +1952,7 @@ function App() {
         ? (remoteAccessPolicy?.allowDownload ?? true)
         : p2pVisibilitySettings.allowDownload;
     if (!effectiveAllowDownload) {
-      alert('Download disabled by current P2P access policy.');
+      alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
     }
     const gedcomString = generateGedcom(gedcomData);
@@ -1994,7 +1996,7 @@ function App() {
         ? (remoteAccessPolicy?.allowDownload ?? true)
         : p2pVisibilitySettings.allowDownload;
     if (!effectiveAllowDownload) {
-      alert('Download disabled by current P2P access policy.');
+      alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
     }
     try {
@@ -2116,7 +2118,7 @@ function App() {
     expiresAt?: string
   ) => {
     if (!isIdentified) {
-      alert('Claim your identity first before creating invites.');
+      alert(t('app.alerts.claimIdentityBeforeInvites'));
       return;
     }
     const candidate = livingCandidates.find((c) => c.id === individualId);
@@ -2206,9 +2208,9 @@ function App() {
         setOriginalGedcomData(mergedData);
         refreshFocusedIndividualsFromData(mergedData);
         setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
-        showTransientToast('success', 'Fusion appliquee et fiche Records mise a jour.');
+        showTransientToast('success', t('app.toasts.proposalApplied'));
       } else {
-        showTransientToast('error', 'Proposition rejetee.', 1800);
+        showTransientToast('error', t('app.toasts.proposalRejected'), 1800);
       }
 
       logP2PActivity(`proposal.${decision}`, 'proposal', proposalId, peerId || 'host');
@@ -2240,7 +2242,7 @@ function App() {
       setSelectedIndividual(proposal.proposedIndividual);
       setDisplayMode('2d-individual');
     } else {
-      alert('Cannot review this proposal: base individual is not available yet.');
+      alert(t('app.alerts.reviewBaseMissing'));
       return;
     }
     setRightPanelOpen(true);
@@ -2418,13 +2420,11 @@ function App() {
 
   const handleClaimIdentity = async (individualId: string) => {
     if (!gedcomData?.individuals[individualId]) {
-      alert('Select an existing individual first.');
+      alert(t('app.alerts.selectExistingIndividual'));
       return;
     }
     if (selfIdentity && selfIdentity.individualId !== individualId) {
-      const ok = window.confirm(
-        'You already claimed another identity on this device. Replace it with the new one?'
-      );
+      const ok = window.confirm(t('app.confirm.replaceIdentityClaim'));
       if (!ok) return;
     }
 
@@ -2443,35 +2443,33 @@ function App() {
       setSelectedIndividual(indi);
       setRootIndividual(indi);
       setIsIdentifyingSelf(false);
-      showTransientToast('success', 'Identity claimed successfully.');
+      showTransientToast('success', t('app.toasts.identityClaimed'));
     } catch (error) {
       console.error('Failed to claim identity', error);
-      showTransientToast('error', 'Identity claim failed.');
+      showTransientToast('error', t('app.toasts.identityClaimFailed'));
     }
   };
 
   const handleRenounceIdentity = () => {
-    const warning =
-      'WARNING: this will remove your current claimed identity from this device, clear local private key material, and disable share actions until you claim again.\n\nContinue?';
-    const ok = window.confirm(warning);
+    const ok = window.confirm(t('app.confirm.renounceIdentity'));
     if (!ok) return;
     setSelfIdentity(null);
     localStorage.removeItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY);
-    showTransientToast('success', 'Identity renounced.');
+    showTransientToast('success', t('app.toasts.identityRenounced'));
   };
 
   const handleExportIdentityBackup = async (password: string) => {
     if (!selfIdentity) {
-      alert('No claimed identity to export.');
+      alert(t('app.alerts.noClaimedIdentity'));
       return;
     }
     if (!password || password.length < 8) {
-      alert('Backup password must be at least 8 characters.');
+      alert(t('app.alerts.backupPasswordMinLength'));
       return;
     }
     const privateRaw = localStorage.getItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY);
     if (!privateRaw) {
-      alert('No private key material found on this device.');
+      alert(t('app.alerts.missingPrivateKeyMaterial'));
       return;
     }
     try {
@@ -2480,23 +2478,23 @@ function App() {
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
       const safe = (selfIdentity.deviceKeyId || 'identity').replace(/[^a-z0-9_-]/gi, '_');
       triggerDownloadBlob(blob, `g2-identity-backup-${safe}.json`);
-      showTransientToast('success', 'Encrypted identity backup exported.');
+      showTransientToast('success', t('app.toasts.identityBackupExported'));
     } catch (error) {
       console.error('Identity backup export failed', error);
-      showTransientToast('error', 'Identity backup export failed.');
+      showTransientToast('error', t('app.toasts.identityBackupExportFailed'));
     }
   };
 
   const handleImportIdentityBackup = async (file: File, password: string) => {
     if (!password || password.length < 8) {
-      alert('Backup password must be at least 8 characters.');
+      alert(t('app.alerts.backupPasswordMinLength'));
       return;
     }
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;
       if (!isIdentityBackupPayload(parsed)) {
-        throw new Error('Invalid identity backup format');
+        throw new Error(t('app.errors.invalidIdentityBackupFormat'));
       }
       const privateJwk = await decryptIdentityBackupPrivateKey(parsed, password);
       const importedIdentity = parsed.identity;
@@ -2507,11 +2505,11 @@ function App() {
         setSelectedIndividual(indi);
         setRootIndividual(indi);
       }
-      showTransientToast('success', 'Identity backup imported.');
+      showTransientToast('success', t('app.toasts.identityBackupImported'));
       setIsIdentifyingSelf(false);
     } catch (error) {
       console.error('Identity backup import failed', error);
-      showTransientToast('error', 'Identity backup import failed (wrong password or invalid file).');
+      showTransientToast('error', t('app.toasts.identityBackupImportFailed'));
     }
   };
 
@@ -2777,79 +2775,47 @@ function App() {
      if (!activeInfoPage) return null;
      const contentByPage: Record<'about' | 'contribute' | 'contact', { title: string; body: React.ReactNode }> = {
        about: {
-         title: 'About',
+        title: t('info.about.title'),
          body: (
            <>
-             <p>
-               G2 (pronounced Gdeux, Getou, or Djeetoo) is built for genealogists who need both depth
-               and scale: create, edit, and explore family trees in 2D and 3D, from small research sets
-               to large collections (tested with 40,000 individuals).
-             </p>
-             <p>
-               Your data stays under your control. No central platform, no locked silo, no dependency
-               on a third-party gatekeeper. Exchanges happen peer to peer, with visibility rules chosen by users.
-             </p>
-             <p>
-               You can publish ancestors with unknown roots. These records can attempt automatic matching
-               across the P2P network, while final investigation and validation remain a genealogist decision.
-             </p>
-             <p>
-               G2 does not aim to build a universal genealogy tree. Its ambition is a Web of Trust (WoT)
-               connecting genealogists and the people represented in their databases, inspired by the G1 free-currency WoT.
-               If this WoT proves robust and viral enough over time, it could eventually support
-               the creation of a G2 free currency.
-             </p>
-             <p>
-               G2 is free software. Its concept is also a free artwork, in continuity with the Arbre project
-               initiated by Olivier Auber in the early 2000s.
-             </p>
+            <p>{t('info.about.p1')}</p>
+            <p>{t('info.about.p2')}</p>
+            <p>{t('info.about.p3')}</p>
+            <p>{t('info.about.p4')}</p>
+            <p>{t('info.about.p5')}</p>
            </>
          ),
        },
        contribute: {
-         title: 'Contribute',
+        title: t('info.contribute.title'),
          body: (
            <>
-             <p>
-               G2 is in active development. If the app helps your research and the vision resonates,
-               there are many concrete ways to contribute.
-             </p>
-             <p>
-               We welcome genealogy feedback, real-world dataset testing, documentation, bug reports,
-               feature proposals, translations, and code contributions.
-             </p>
-             <p>
-               The GitHub repository is private for now and will be opened at public launch.
-               Until then, strategic discussions and high-value feedback are especially useful.
-             </p>
-             <p>
-               During development, people who find the app useful can also support the work through
-               voluntary donations to the author.
-             </p>
+            <p>{t('info.contribute.p1')}</p>
+            <p>{t('info.contribute.p2')}</p>
+            <p>{t('info.contribute.p3')}</p>
+            <p>{t('info.contribute.p4')}</p>
            </>
          ),
        },
        contact: {
-         title: 'Contact',
+        title: t('info.contact.title'),
          body: (
            <>
+            <p>{t('info.contact.intro')}</p>
              <p>
-               For any question, please use the channel that best matches your topic:
-             </p>
-             <p>
-               Technical questions:{' '}
+              {t('info.contact.technical')}{' '}
                <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.app">
                  contact@getou.app
                </a>
              </p>
              <p>
-               Practical questions:{' '}
+              {t('info.contact.practical')}{' '}
                <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.info">
                  contact@getou.info
                </a>
              </p>
              <p>
-               Governance questions:{' '}
+              {t('info.contact.governance')}{' '}
                <a className="underline hover:text-blue-500 transition-colors" href="mailto:contact@getou.org">
                  contact@getou.org
                </a>
@@ -2869,9 +2835,22 @@ function App() {
                     ? 'border-slate-700 bg-black/80 hover:bg-white text-white'
                     : 'border-slate-300 bg-white/90 hover:bg-black text-black'
                 }`}
-                title="Close"
+                title={t('info.close')}
              >
                 <X className="w-8 h-8" />
+             </button>
+
+             <button
+                onClick={toggleLanguage}
+                className={`fixed top-4 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full border shadow-lg backdrop-blur-sm z-[320] text-xs font-bold tracking-wider transition-colors ${
+                  isDarkMode
+                    ? 'border-slate-700 bg-black/80 text-slate-200 hover:bg-neutral-900'
+                    : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+                }`}
+                title={t('app.language.switchTo')}
+                aria-label={t('app.language.switchTo')}
+             >
+                {language.toUpperCase()}
              </button>
 
              <button
@@ -2881,8 +2860,8 @@ function App() {
                     ? 'border-slate-700 bg-black/80 text-slate-200 hover:bg-neutral-900'
                     : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
                 }`}
-                title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                title={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+                aria-label={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
              >
                 {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
              </button>
@@ -2904,7 +2883,7 @@ function App() {
         <button
           onClick={() => setIsHelpOpen(false)}
           className={`absolute top-6 right-6 p-2 rounded-full hover:bg-opacity-20 transition-colors ${isDarkMode ? 'hover:bg-white text-white' : 'hover:bg-black text-black'}`}
-          title="Close Help"
+          title={t('help.close')}
         >
           <X className="w-7 h-7" />
         </button>
@@ -2913,14 +2892,14 @@ function App() {
           <div className="max-w-3xl mx-auto">
             <h2 className="text-3xl font-bold tracking-tight uppercase flex items-center gap-2">
               <HelpCircle className="w-7 h-7" />
-              Help
+              {t('help.title')}
             </h2>
             <p className={`mt-3 text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-              Keyboard shortcuts (English) and mobile emulation.
+              {t('help.subtitle')}
             </p>
 
             <div className={`mt-6 rounded-xl border p-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-300 bg-white'}`}>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">Shortcuts</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">{t('help.shortcuts')}</h3>
               <div className="space-y-3 text-sm">
                 <label className="flex items-start gap-3">
                   <input
@@ -2929,7 +2908,7 @@ function App() {
                     onChange={(e) => setEmulateRevealShortcut(e.target.checked)}
                     className="mt-0.5"
                   />
-                  <span><strong>Ctrl/⌘ + Hover</strong> — reveal relationship links between selected and hovered individuals.</span>
+                  <span>{t('help.shortcutReveal')}</span>
                 </label>
 
                 <label className="flex items-start gap-3">
@@ -2939,13 +2918,13 @@ function App() {
                     onChange={(e) => setShowBoxes(e.target.checked)}
                     className="mt-0.5"
                   />
-                  <span><strong>Ctrl/⌘ + B</strong> — toggle individual boxes in 3D view.</span>
+                  <span>{t('help.shortcutBoxes')}</span>
                 </label>
               </div>
             </div>
 
             <div className={`mt-4 rounded-xl border p-4 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-300 bg-white'}`}>
-              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">Appearance</h3>
+              <h3 className="text-xs font-bold uppercase tracking-wider mb-3">{t('help.appearance')}</h3>
               <button
                 onClick={() => setIsDarkMode(!isDarkMode)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200 hover:bg-neutral-900' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
@@ -2957,7 +2936,7 @@ function App() {
               <div className="mt-4 space-y-4 text-sm">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-semibold">Top labels appear at max visible years (Z)</span>
+                    <span className="font-semibold">{t('help.topLabels')}</span>
                     <span className="font-mono">{topViewLabelMaxZSpan}</span>
                   </div>
                   <input
@@ -2973,7 +2952,7 @@ function App() {
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-semibold">3D label font size</span>
+                    <span className="font-semibold">{t('help.labelFontSize')}</span>
                     <span className="font-mono">{labelFontSize.toFixed(1)}</span>
                   </div>
                   <input
@@ -3100,7 +3079,7 @@ function App() {
           <div className={`absolute inset-0 flex items-center justify-center backdrop-blur-sm z-50 ${isDarkMode ? 'bg-black/80' : 'bg-sky-50/80'}`}>
              <div className={`p-8 rounded-xl border shadow-2xl flex flex-col items-center gap-4 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-300'}`}>
                 <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
-                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Processing...</span>
+                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{t('help.processing')}</span>
              </div>
           </div>
         )}
@@ -3112,49 +3091,59 @@ function App() {
               <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
                 <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 text-center">
                     <h1 className="mb-2 tracking-tight pt-10 md:pt-0">{renderBrandMark()}</h1>
-                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">Distributed genealogy, owned by genealogists</h2>
+                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">{t('landing.subtitle')}</h2>
                     
                     <div className="max-w-2xl text-sm md:text-lg font-light leading-relaxed opacity-70 mb-8 md:mb-12">
-                        Create, edit, and visualize trees of any size in 2D and 3D (tested with 40K individuals),
-                        enriched with photos and documents.
-                        Publish unknown-root ancestors, discover potential P2P matches, and keep full control
-                        over what you share, what you validate, and what remains private.
+                        {t('landing.intro')}
                     </div>
                     
                     <div className="flex flex-col items-center gap-6 font-bold text-xs tracking-widest uppercase opacity-80 z-10 pb-10">
                         <button onClick={handleInitIdentifySelf} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                            IDENTIFY YOURSELF
+                            {t('landing.actions.identify')}
                         </button>
                         <div className="flex gap-2 items-center">
                             <button onClick={() => setLeftPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                IMPORT FAMILY
+                                {t('landing.actions.importFamily')}
                             </button>
-                            <span className="opacity-50">or</span>
+                            <span className="opacity-50">{t('landing.actions.or')}</span>
                             <button onClick={handleInitCreation} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                CREATE INDIVIDUALS
+                                {t('landing.actions.createIndividuals')}
                             </button>
                         </div>
                         
                         <div className="flex gap-2 items-center">
                             <button onClick={() => setBottomPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                VISUALIZE
+                                {t('landing.actions.visualize')}
                             </button>
-                            <span className="opacity-50">and</span>
+                            <span className="opacity-50">{t('landing.actions.and')}</span>
                             <button onClick={() => setTopPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                SHARE
+                                {t('landing.actions.share')}
                             </button>
                         </div>
 
                         <div className="mt-8 flex gap-4 opacity-70">
-                        <button onClick={() => setActiveInfoPage('about')} className="hover:opacity-100 hover:text-blue-500 transition-colors">About</button>
+                        <button onClick={() => setActiveInfoPage('about')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.about')}</button>
                         <span>-</span>
-                        <button onClick={() => setIsHelpOpen(true)} className="hover:opacity-100 hover:text-blue-500 transition-colors">Help</button>
+                        <button onClick={() => setIsHelpOpen(true)} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.help')}</button>
                         <span>-</span>
-                        <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contribute</button>
+                        <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.contribute')}</button>
                         <span>-</span>
-                        <button onClick={() => setActiveInfoPage('contact')} className="hover:opacity-100 hover:text-blue-500 transition-colors">Contact</button>
+                        <button onClick={() => setActiveInfoPage('contact')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.contact')}</button>
                         </div>
                     </div>
+
+                    <button
+                      onClick={toggleLanguage}
+                      className={`fixed top-5 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full border shadow-lg backdrop-blur-sm z-[240] text-xs font-bold tracking-wider opacity-85 hover:opacity-100 transition-colors ${
+                        isDarkMode
+                          ? 'border-slate-700 bg-black/75 text-slate-300 hover:bg-neutral-900'
+                          : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+                      }`}
+                      title={t('app.language.switchTo')}
+                      aria-label={t('app.language.switchTo')}
+                    >
+                      {language.toUpperCase()}
+                    </button>
 
                     <button
                       onClick={() => setIsDarkMode(!isDarkMode)}
@@ -3163,8 +3152,8 @@ function App() {
                           ? 'border-slate-700 bg-black/75 text-slate-300 hover:bg-neutral-900'
                           : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
                       }`}
-                      title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                      aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+                      title={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+                      aria-label={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
                     >
                       {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
                     </button>

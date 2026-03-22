@@ -4,6 +4,7 @@ import { OrthographicCamera, Text, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { matchesFilters, applySortMode } from './Sidebar';
+import { useI18n } from '../i18n';
 
 type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
 
@@ -448,6 +449,7 @@ const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
 const GridContent: React.FC<GridContentProps> = ({
   individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, onPhotoOverlayChange, onIndividualDefaultZoomChange,
 }) => {
+  const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
@@ -1665,7 +1667,7 @@ const GridContent: React.FC<GridContentProps> = ({
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
-                title="Play"
+                title={t('scene2d.play')}
               >
                 <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
                   <polygon points="8,6 19,12 8,18" fill="currentColor" />
@@ -1694,7 +1696,7 @@ const GridContent: React.FC<GridContentProps> = ({
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
-                title="Next"
+                title={t('scene2d.next')}
               >
                 <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
                   <line x1="5" y1="9" x2="19" y2="9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1721,7 +1723,7 @@ const GridContent: React.FC<GridContentProps> = ({
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
-                title="Pause"
+                title={t('scene2d.pause')}
               >
                 <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
                   <rect x="7" y="6" width="3" height="12" rx="1" fill="currentColor" />

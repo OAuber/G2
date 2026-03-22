@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { HelpCircle } from 'lucide-react';
 import { DisplayMode, LayoutParams, DEFAULT_LAYOUT_PARAMS } from '../types';
+import { useI18n } from '../i18n';
 
 const PINK = '#f9a8d4';
 const BLUE = '#93c5fd';
@@ -114,6 +115,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   onSetLayoutParams,
   isAnimating = false,
 }) => {
+  const { t } = useI18n();
   const bgClass = isDarkMode ? 'bg-black/95 border-slate-800' : 'bg-white/95 border-slate-300';
   const handleBg = isDarkMode
     ? 'bg-black text-slate-400 border-slate-800 hover:bg-neutral-900'
@@ -178,7 +180,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
           style={{ touchAction: 'manipulation' }}
           className={`pointer-events-auto ${handleBg} rounded-t-xl px-10 py-3 border-t border-x shadow-md flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-widest transition-colors cursor-pointer`}
         >
-          Visualize
+          {t('bottomPanel.visualize')}
         </button>
       </div>
 
@@ -213,10 +215,10 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                 <div className={`w-px h-6 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`} />
 
                 {/* Buttons 6-7: ancestor/descendant toggles */}
-                <button onClick={toggleAsc} disabled={isAnimating} title="Ascendants" className={ascClass}>
+                <button onClick={toggleAsc} disabled={isAnimating} title={t('bottomPanel.ascendants')} className={ascClass}>
                   <IconAsc />
                 </button>
-                <button onClick={toggleDesc} disabled={isAnimating} title="Descendants" className={descClass}>
+                <button onClick={toggleDesc} disabled={isAnimating} title={t('bottomPanel.descendants')} className={descClass}>
                   <IconDesc />
                 </button>
 
@@ -226,11 +228,11 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
 
             <button
               onClick={onOpenHelp}
-              title="Help"
+              title={t('bottomPanel.help')}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200 hover:bg-neutral-900' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
             >
               <HelpCircle className="w-3.5 h-3.5" />
-              <span className="text-xs font-bold">Help</span>
+              <span className="text-xs font-bold">{t('bottomPanel.help')}</span>
             </button>
           </div>
 
@@ -259,7 +261,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                 <button onClick={handleReset}
                   className={`text-[10px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500' : 'border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400'}`}
                 >
-                  Reset
+                  {t('bottomPanel.reset')}
                 </button>
               )}
             </div>

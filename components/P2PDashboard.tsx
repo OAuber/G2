@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { ActivityLogEvent } from '../services/p2pDomain';
+import { useI18n } from '../i18n';
 
 interface P2PVisibilitySettings {
   exposeIdentity: boolean;
@@ -61,6 +62,7 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
   onRevokeInvite,
   onDecideProposal,
 }) => {
+  const { t } = useI18n();
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
@@ -87,24 +89,24 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
         <div className={`max-w-5xl mx-auto rounded-2xl border shadow-2xl ${panelClass}`}>
           <div className="flex items-center justify-between px-5 py-4 border-b border-inherit">
           <div>
-            <h2 className="text-lg font-bold uppercase tracking-wide">P2P Dashboard</h2>
+            <h2 className="text-lg font-bold uppercase tracking-wide">{t('p2pDashboard.title')}</h2>
             <p className={`text-xs ${mutedClass}`}>
-              Status: <span className="font-semibold">{p2pStatus}</span> {peerId ? `| Peer ID: ${peerId}` : ''}
+              {t('p2pDashboard.status')}: <span className="font-semibold">{p2pStatus}</span> {peerId ? `| ${t('p2pDashboard.peerId')}: ${peerId}` : ''}
             </p>
           </div>
           <button onClick={onClose} className={`px-3 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-200 hover:bg-slate-300'}`}>
-            Close
+            {t('p2pDashboard.close')}
           </button>
         </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-5">
             <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
               <h3 className="text-sm font-bold uppercase tracking-wide mb-3">
-                Proposals {proposals.length > 0 ? `(${proposals.length})` : ''}
+                {t('topPanel.proposals')} {proposals.length > 0 ? `(${proposals.length})` : ''}
               </h3>
               <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
                 {proposals.length === 0 ? (
-                  <p className={`text-sm ${mutedClass}`}>No proposals yet.</p>
+                  <p className={`text-sm ${mutedClass}`}>{t('topPanel.noProposals')}</p>
                 ) : (
                   proposals.map((proposal) => (
                     <div key={proposal.proposalId} className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
@@ -112,11 +114,11 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                         {proposal.individualLabel} ({proposal.individualId})
                       </div>
                       <div className={mutedClass}>
-                        From: {proposal.authorPeerId} | Status: {proposal.status} | At: {new Date(proposal.proposedAt).toLocaleString()}
+                        {t('p2pDashboard.from')}: {proposal.authorPeerId} | {t('p2pDashboard.status')}: {proposal.status} | {t('p2pDashboard.at')}: {new Date(proposal.proposedAt).toLocaleString()}
                       </div>
                       <div className="mt-1">
-                        <span className={`${mutedClass}`}>Changes: </span>
-                        {Object.keys(proposal.changeSet || {}).join(', ') || 'none'}
+                        <span className={`${mutedClass}`}>{t('p2pDashboard.changes')}: </span>
+                        {Object.keys(proposal.changeSet || {}).join(', ') || t('p2pDashboard.none')}
                       </div>
                       {proposal.status === 'pending' && (
                         <div className="mt-2 flex gap-2">
@@ -124,13 +126,13 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                             onClick={() => onDecideProposal(proposal.proposalId, 'accepted')}
                             className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
                           >
-                            Accept
+                            {t('p2pDashboard.accept')}
                           </button>
                           <button
                             onClick={() => onDecideProposal(proposal.proposalId, 'rejected')}
                             className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
                           >
-                            Reject
+                            {t('p2pDashboard.reject')}
                           </button>
                         </div>
                       )}
@@ -141,16 +143,16 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
             </section>
 
           <section className={`md:col-span-2 rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">Activity</h3>
+            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.activity')}</h3>
             <div className="grid grid-cols-3 gap-2 mb-4">
-              <StatCard label="Views" value={activitySummary.view} isDarkMode={isDarkMode} />
-              <StatCard label="Downloads" value={activitySummary.download} isDarkMode={isDarkMode} />
-              <StatCard label="Proposals" value={activitySummary.proposal} isDarkMode={isDarkMode} />
+              <StatCard label={t('topPanel.views')} value={activitySummary.view} isDarkMode={isDarkMode} />
+              <StatCard label={t('topPanel.downloads')} value={activitySummary.download} isDarkMode={isDarkMode} />
+              <StatCard label={t('topPanel.proposals')} value={activitySummary.proposal} isDarkMode={isDarkMode} />
             </div>
 
             <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
               {activityEvents.length === 0 ? (
-                <p className={`text-sm ${mutedClass}`}>No activity yet.</p>
+                <p className={`text-sm ${mutedClass}`}>{t('topPanel.noActivity')}</p>
               ) : (
                 activityEvents
                   .slice()
@@ -159,7 +161,7 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                     <div key={event.eventId} className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
                       <div className="font-semibold">{event.eventType}</div>
                       <div className={mutedClass}>
-                        Actor: {event.actorPeerId} | Target: {event.targetType}:{event.targetId}
+                        {t('topPanel.actor')}: {event.actorPeerId} | {t('topPanel.target')}: {event.targetType}:{event.targetId}
                       </div>
                       <div className={mutedClass}>{new Date(event.timestamp).toLocaleString()}</div>
                     </div>
@@ -169,40 +171,40 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
           </section>
 
           <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">Access Controls</h3>
+            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.accessControls')}</h3>
             <div className="space-y-2 text-sm">
               <ToggleRow
-                label="Expose identity"
+                label={t('topPanel.exposeIdentity')}
                 checked={visibilitySettings.exposeIdentity}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeIdentity: checked })}
               />
               <ToggleRow
-                label="Expose dates"
+                label={t('topPanel.exposeDates')}
                 checked={visibilitySettings.exposeDates}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })}
               />
               <ToggleRow
-                label="Expose places"
+                label={t('topPanel.exposePlaces')}
                 checked={visibilitySettings.exposePlaces}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposePlaces: checked })}
               />
               <ToggleRow
-                label="Expose notes"
+                label={t('topPanel.exposeNotes')}
                 checked={visibilitySettings.exposeNotes}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeNotes: checked })}
               />
               <ToggleRow
-                label="Allow download"
+                label={t('topPanel.allowDownload')}
                 checked={visibilitySettings.allowDownload}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDownload: checked })}
               />
               <ToggleRow
-                label="Allow proposals"
+                label={t('topPanel.allowProposals')}
                 checked={visibilitySettings.allowProposal}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })}
               />
               <ToggleRow
-                label="Allow direct edits"
+                label={t('topPanel.allowDirectEdits')}
                 checked={visibilitySettings.allowDirectEdit}
                 onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })}
               />
@@ -210,14 +212,14 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
           </section>
 
             <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">Invitations</h3>
+            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.connectionProfiles')}</h3>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
               <select
                 value={newInviteIndividualId}
                 onChange={(e) => setNewInviteIndividualId(e.target.value)}
                 className={`text-sm rounded border px-2 py-1 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-300'}`}
               >
-                <option value="">Select living member</option>
+                <option value="">{t('topPanel.selectLivingMember')}</option>
                 {livingCandidates.map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
                     {candidate.label}
@@ -229,9 +231,9 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                 onChange={(e) => setNewInviteRole(e.target.value as 'viewer' | 'contributor' | 'editor')}
                 className={`text-sm rounded border px-2 py-1 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-300'}`}
               >
-                <option value="viewer">viewer</option>
-                <option value="contributor">contributor</option>
-                <option value="editor">editor</option>
+                <option value="viewer">{t('topPanel.roleViewer')}</option>
+                <option value="contributor">{t('topPanel.roleContributor')}</option>
+                <option value="editor">{t('topPanel.roleEditor')}</option>
               </select>
               <input
                 type="date"
@@ -253,23 +255,23 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                 }}
                 className={`text-sm rounded px-3 py-1.5 font-semibold ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
               >
-                Create invite
+                {t('topPanel.createInvite')}
               </button>
             </div>
 
             <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
               {invites.length === 0 ? (
-                <p className={`text-sm ${mutedClass}`}>No invites yet.</p>
+                <p className={`text-sm ${mutedClass}`}>{t('topPanel.noInvites')}</p>
               ) : (
                 invites.map((invite) => (
                   <div key={invite.inviteId} className={`rounded border p-2 text-xs flex items-center justify-between gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
                     <div>
                       <div className="font-semibold">
-                        {invite.individualName} ({invite.role})
+                        {invite.individualName} ({invite.role === 'viewer' ? t('topPanel.roleViewer') : invite.role === 'contributor' ? t('topPanel.roleContributor') : t('topPanel.roleEditor')})
                       </div>
                       <div className={mutedClass}>
-                        {invite.personalizedDefault ? 'Default living-member invite' : 'Manual invite'} | Status: {invite.status}
-                        {invite.expiresAt ? ` | Expires: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
+                        {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')} | {t('topPanel.status')}: {invite.status}
+                        {invite.expiresAt ? ` | ${t('topPanel.expires')}: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
                       </div>
                     </div>
                     {invite.status === 'active' && (
@@ -277,7 +279,7 @@ const P2PDashboard: React.FC<P2PDashboardProps> = ({
                         onClick={() => onRevokeInvite(invite.inviteId)}
                         className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
                       >
-                        Revoke
+                        {t('topPanel.revoke')}
                       </button>
                     )}
                   </div>

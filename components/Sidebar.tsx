@@ -3,28 +3,29 @@ import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { parseGedcom } from '../services/gedcomParser';
 import { getDemoGedcom } from '../services/demoData';
+import { useI18n } from '../i18n';
 
 /* ------------------------------------------------------------------ */
 /*  Sort & Filter definitions                                          */
 /* ------------------------------------------------------------------ */
-const SORT_OPTIONS: { value: SortMode; label: string }[] = [
-  { value: 'birth-desc', label: 'Birth ↓' },
-  { value: 'birth-asc',  label: 'Birth ↑' },
-  { value: 'death-desc', label: 'Death ↓' },
-  { value: 'death-asc',  label: 'Death ↑' },
-  { value: 'lifespan',   label: 'Lifespan ↓' },
-  { value: 'name',       label: 'Name A→Z' },
+const SORT_OPTIONS: { value: SortMode; key: string }[] = [
+  { value: 'birth-desc', key: 'sidebar.sort.birthDesc' },
+  { value: 'birth-asc',  key: 'sidebar.sort.birthAsc' },
+  { value: 'death-desc', key: 'sidebar.sort.deathDesc' },
+  { value: 'death-asc',  key: 'sidebar.sort.deathAsc' },
+  { value: 'lifespan',   key: 'sidebar.sort.lifespan' },
+  { value: 'name',       key: 'sidebar.sort.name' },
 ];
 
-const FILTER_OPTIONS: { value: FilterTag; label: string; color: string }[] = [
-  { value: 'manual',          label: 'Manually created', color: 'text-green-400' },
-  { value: 'male',            label: 'Male',             color: 'text-blue-400' },
-  { value: 'female',          label: 'Female',           color: 'text-pink-400' },
-  { value: 'unknown-gender',  label: 'Unknown gender',   color: 'text-slate-400' },
-  { value: 'unknown-dates',   label: 'Unknown dates',    color: 'text-amber-400' },
-  { value: 'calculated-dates',label: 'Calculated dates', color: 'text-yellow-400' },
-  { value: 'no-parents',      label: 'No parents',       color: 'text-orange-400' },
-  { value: 'no-spouse',       label: 'No spouse',        color: 'text-violet-400' },
+const FILTER_OPTIONS: { value: FilterTag; key: string; color: string }[] = [
+  { value: 'manual',          key: 'sidebar.filters.manual',          color: 'text-green-400' },
+  { value: 'male',            key: 'sidebar.filters.male',            color: 'text-blue-400' },
+  { value: 'female',          key: 'sidebar.filters.female',          color: 'text-pink-400' },
+  { value: 'unknown-gender',  key: 'sidebar.filters.unknownGender',   color: 'text-slate-400' },
+  { value: 'unknown-dates',   key: 'sidebar.filters.unknownDates',    color: 'text-amber-400' },
+  { value: 'calculated-dates',key: 'sidebar.filters.calculatedDates', color: 'text-yellow-400' },
+  { value: 'no-parents',      key: 'sidebar.filters.noParents',       color: 'text-orange-400' },
+  { value: 'no-spouse',       key: 'sidebar.filters.noSpouse',        color: 'text-violet-400' },
 ];
 
 export function matchesFilters(indi: Individual, filters: Set<FilterTag>): boolean {
@@ -121,6 +122,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isNormalized,
   onToggleNormalization,
 }) => {
+  const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -176,7 +178,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         onDataLoaded(parseGedcom(text), fileName);
       } catch (err) {
         console.error(err);
-        alert("Error reading file.");
+        alert(t('sidebar.labels.importReadError'));
       } finally {
         onLoading(false);
         event.target.value = '';
@@ -206,7 +208,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       await onImportBundle(file);
     } catch (err) {
       console.error(err);
-      alert('Error importing bundle.');
+      alert(t('sidebar.labels.importBundleError'));
     } finally {
       onLoading(false);
       event.target.value = '';
@@ -253,9 +255,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   const menuItemHover = isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100';
 
   const getSourceIcon = (source?: string) => {
-      if (source === 'manual') return <span title="Manual Entry"><UserIcon className="w-3 h-3 text-green-500" /></span>;
-      if (source === 'p2p') return <span title="P2P Network"><Globe className="w-3 h-3 text-purple-500" /></span>;
-      return <span title="Imported GEDCOM"><FileText className="w-3 h-3 text-slate-500" /></span>;
+      if (source === 'manual') return <span title={t('sidebar.labels.sourceManual')}><UserIcon className="w-3 h-3 text-green-500" /></span>;
+      if (source === 'p2p') return <span title={t('sidebar.labels.sourceP2P')}><Globe className="w-3 h-3 text-purple-500" /></span>;
+      return <span title={t('sidebar.labels.sourceImported')}><FileText className="w-3 h-3 text-slate-500" /></span>;
   };
 
   const safeYear = (y?: number | null) => {
@@ -269,7 +271,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
   ` : '';
 
-  const activeSortLabel = SORT_OPTIONS.find(o => o.value === sortMode)?.label ?? 'Birth ↓';
+  const activeSortLabel = (() => {
+    const active = SORT_OPTIONS.find(o => o.value === sortMode);
+    return active ? t(active.key) : t('sidebar.sort.fallback');
+  })();
 
   return (
     <div 
@@ -287,7 +292,7 @@ const Sidebar: React.FC<SidebarProps> = ({
          className={`absolute top-1/2 right-0 translate-x-full -translate-y-1/2 origin-left py-8 px-3 rounded-r-xl border-y border-r border-l-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-bold uppercase tracking-widest whitespace-nowrap">
-            Families
+            {t('sidebar.labels.families')}
         </span>
       </button>
 
@@ -297,14 +302,14 @@ const Sidebar: React.FC<SidebarProps> = ({
           <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
             {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
             <span className={`text-xs font-medium ${textClass}`}>
-              {isLoading ? 'Importing...' : 'Import GEDCOM'}
+              {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importGedcom')}
             </span>
             <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
           </label>
           <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
             {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
             <span className={`text-xs font-medium ${textClass}`}>
-              {isLoading ? 'Importing...' : 'Import Bundle'}
+              {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importBundle')}
             </span>
             <input
               type="file"
@@ -324,12 +329,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                     ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-500' 
                     : `${isDarkMode ? 'bg-neutral-900 border-slate-700 text-slate-400' : 'bg-white border-slate-300 text-slate-500'}`
                 }`}
-                title={isNormalized ? "View Original Data" : "Calculate Missing Dates"}
+                title={isNormalized ? t('sidebar.labels.viewOriginalData') : t('sidebar.labels.calculateMissingDates')}
             >
                 <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4" />
                     <span className="text-xs font-bold uppercase tracking-wider">
-                        {isNormalized ? "Normalized (CAL)" : "Original Data"}
+                        {isNormalized ? t('sidebar.labels.normalized') : t('sidebar.labels.originalData')}
                     </span>
                 </div>
                 <div className={`w-8 h-4 rounded-full p-0.5 flex transition-colors ${isNormalized ? 'bg-yellow-500' : 'bg-slate-600'}`}>
@@ -348,7 +353,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
                   type="text" 
-                  placeholder="Search individuals..." 
+                  placeholder={t('sidebar.labels.searchIndividuals')}
                   className={`w-full rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-slate-500 border ${inputBg} ${textClass}`}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -376,14 +381,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] opacity-60">Sort & Filters</span>
+                    <span className="text-[10px] opacity-60">{t('sidebar.sort.menu')}</span>
                   </button>
 
                   {menuOpen && (
                     <div className={`absolute z-50 left-0 right-0 mt-1 rounded-lg border shadow-xl overflow-hidden ${menuBg}`}>
                       {/* Sort section */}
                       <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} ${isDarkMode ? 'bg-black/40' : 'bg-slate-50'}`}>
-                        Sort
+                        {t('sidebar.sort.title')}
                       </div>
                       {SORT_OPTIONS.map(opt => (
                         <button
@@ -393,14 +398,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                             sortMode === opt.value ? (isDarkMode ? 'text-white bg-slate-800' : 'text-slate-900 bg-slate-100 font-bold') : textClass
                           }`}
                         >
-                          <span>{opt.label}</span>
+                          <span>{t(opt.key)}</span>
                           {sortMode === opt.value && <Check className="w-3 h-3 text-blue-500" />}
                         </button>
                       ))}
 
                       {/* Filter section */}
                       <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'bg-black/40 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-                        Filters (union)
+                        {t('sidebar.filters.title')}
                       </div>
                       {FILTER_OPTIONS.map(opt => {
                         const active = activeFilters.has(opt.value);
@@ -412,7 +417,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                               active ? (isDarkMode ? 'bg-slate-800' : 'bg-slate-100') : ''
                             } ${textClass}`}
                           >
-                            <span className={active ? opt.color : ''}>{opt.label}</span>
+                            <span className={active ? opt.color : ''}>{t(opt.key)}</span>
                             {active && <Check className={`w-3 h-3 ${opt.color}`} />}
                           </button>
                         );
@@ -425,14 +430,14 @@ const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Header for Records & Selection */}
             <div className={`px-4 py-2 bg-opacity-50 ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'} flex justify-between items-center text-xs font-semibold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-                <span>Records ({Object.keys(data.individuals).length})</span>
+                <span>{t('sidebar.labels.records')} ({Object.keys(data.individuals).length})</span>
                 <div className="flex items-center gap-2">
-                  <span title="Visible in 2D View">
+                  <span title={t('sidebar.labels.visibleIn2D')}>
                     2D: {selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__') 
                       ? `${selectedIdsFor2D.size}/${Object.keys(data.individuals).length}` 
                       : selectedIdsFor2D?.has('__NONE__') 
                         ? `0/${Object.keys(data.individuals).length}`
-                        : `All (${Object.keys(data.individuals).length})`}
+                        : `${t('sidebar.labels.all')} (${Object.keys(data.individuals).length})`}
                   </span>
                   {onClear2DSelection && onToggle2DSelection && data && (
                       <button 
@@ -450,17 +455,17 @@ const Sidebar: React.FC<SidebarProps> = ({
                             }
                           }}
                           className={`transition-colors flex items-center gap-1 hover:text-blue-500`}
-                          title={selectedIdsFor2D?.has('__NONE__') ? "Show All" : "Hide All"}
+                          title={selectedIdsFor2D?.has('__NONE__') ? t('sidebar.labels.showAll') : t('sidebar.labels.hideAll')}
                       >
                           {selectedIdsFor2D?.has('__NONE__') ? (
                             <>
                               <EyeOff className="w-3 h-3 text-red-500" />
-                              <span className="hidden sm:inline text-[9px] text-red-500">None</span>
+                              <span className="hidden sm:inline text-[9px] text-red-500">{t('sidebar.labels.none')}</span>
                             </>
                           ) : (
                             <>
                               <Eye className="w-3 h-3 text-blue-500" />
-                              <span className="hidden sm:inline text-[9px] text-blue-500">All</span>
+                              <span className="hidden sm:inline text-[9px] text-blue-500">{t('sidebar.labels.all')}</span>
                             </>
                           )}
                       </button>
@@ -474,15 +479,15 @@ const Sidebar: React.FC<SidebarProps> = ({
       <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
         {!data ? (
           <div className={`flex-1 flex flex-col items-center justify-center text-sm ${subTextClass}`}>
-            <p>No database loaded.</p>
+            <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
             <div className="mt-4 flex flex-col items-center gap-1">
-                 <span className="opacity-70 text-xs">No GEDCOM?</span>
+                 <span className="opacity-70 text-xs">{t('sidebar.labels.noGedcom')}</span>
                  <button 
                     onClick={handleLoadDemo} 
                     className="text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
                     disabled={isLoading}
                  >
-                    try a demo
+                    {t('sidebar.labels.tryDemo')}
                  </button>
             </div>
           </div>
@@ -509,7 +514,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       indi.gender === 'F' ? 'bg-pink-500 text-pink-500' : 'bg-blue-500 text-blue-500'
                     }`}>
                       {indi.givenName?.[0]}{indi.surname?.[0]}
-                      {isCal && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm" title="Contains Calculated Dates" />}
+                      {isCal && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm" title={t('sidebar.labels.containsCalculatedDates')} />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
