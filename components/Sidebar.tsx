@@ -8,23 +8,23 @@ import { getDemoGedcom } from '../services/demoData';
 /*  Sort & Filter definitions                                          */
 /* ------------------------------------------------------------------ */
 const SORT_OPTIONS: { value: SortMode; label: string }[] = [
-  { value: 'birth-desc', label: 'Naissance ↓' },
-  { value: 'birth-asc',  label: 'Naissance ↑' },
-  { value: 'death-desc', label: 'Décès ↓' },
-  { value: 'death-asc',  label: 'Décès ↑' },
-  { value: 'lifespan',   label: 'Durée de vie ↓' },
-  { value: 'name',        label: 'Nom A→Z' },
+  { value: 'birth-desc', label: 'Birth ↓' },
+  { value: 'birth-asc',  label: 'Birth ↑' },
+  { value: 'death-desc', label: 'Death ↓' },
+  { value: 'death-asc',  label: 'Death ↑' },
+  { value: 'lifespan',   label: 'Lifespan ↓' },
+  { value: 'name',       label: 'Name A→Z' },
 ];
 
 const FILTER_OPTIONS: { value: FilterTag; label: string; color: string }[] = [
-  { value: 'manual',          label: 'Créés manuellement', color: 'text-green-400' },
-  { value: 'male',            label: 'Hommes',             color: 'text-blue-400' },
-  { value: 'female',          label: 'Femmes',             color: 'text-pink-400' },
-  { value: 'unknown-gender',  label: 'Genre inconnu',      color: 'text-slate-400' },
-  { value: 'unknown-dates',   label: 'Dates inconnues',    color: 'text-amber-400' },
-  { value: 'calculated-dates',label: 'Dates calculées',    color: 'text-yellow-400' },
-  { value: 'no-parents',      label: 'Sans parents',       color: 'text-orange-400' },
-  { value: 'no-spouse',       label: 'Sans conjoint',      color: 'text-violet-400' },
+  { value: 'manual',          label: 'Manually created', color: 'text-green-400' },
+  { value: 'male',            label: 'Male',             color: 'text-blue-400' },
+  { value: 'female',          label: 'Female',           color: 'text-pink-400' },
+  { value: 'unknown-gender',  label: 'Unknown gender',   color: 'text-slate-400' },
+  { value: 'unknown-dates',   label: 'Unknown dates',    color: 'text-amber-400' },
+  { value: 'calculated-dates',label: 'Calculated dates', color: 'text-yellow-400' },
+  { value: 'no-parents',      label: 'No parents',       color: 'text-orange-400' },
+  { value: 'no-spouse',       label: 'No spouse',        color: 'text-violet-400' },
 ];
 
 export function matchesFilters(indi: Individual, filters: Set<FilterTag>): boolean {
@@ -269,7 +269,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
   ` : '';
 
-  const activeSortLabel = SORT_OPTIONS.find(o => o.value === sortMode)?.label ?? 'Naissance ↓';
+  const activeSortLabel = SORT_OPTIONS.find(o => o.value === sortMode)?.label ?? 'Birth ↓';
 
   return (
     <div 
@@ -376,14 +376,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] opacity-60">Tri & Filtres</span>
+                    <span className="text-[10px] opacity-60">Sort & Filters</span>
                   </button>
 
                   {menuOpen && (
                     <div className={`absolute z-50 left-0 right-0 mt-1 rounded-lg border shadow-xl overflow-hidden ${menuBg}`}>
                       {/* Sort section */}
                       <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} ${isDarkMode ? 'bg-black/40' : 'bg-slate-50'}`}>
-                        Tri
+                        Sort
                       </div>
                       {SORT_OPTIONS.map(opt => (
                         <button
@@ -400,7 +400,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                       {/* Filter section */}
                       <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'bg-black/40 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-                        Filtres (union)
+                        Filters (union)
                       </div>
                       {FILTER_OPTIONS.map(opt => {
                         const active = activeFilters.has(opt.value);
