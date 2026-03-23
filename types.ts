@@ -21,7 +21,9 @@ export type FilterTag =
   | 'unknown-dates'
   | 'calculated-dates'
   | 'no-parents'
-  | 'no-spouse';
+  | 'no-spouse'
+  | 'selected-ancestors'
+  | 'selected-descendants';
 export interface LayoutParams {
   generationPitch: number;
   minGap: number;

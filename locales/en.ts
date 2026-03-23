@@ -192,6 +192,8 @@ const en = {
       calculatedDates: 'Calculated dates',
       noParents: 'No parents',
       noSpouse: 'No spouse',
+      selectedAncestors: 'Ancestors of selection',
+      selectedDescendants: 'Descendants of selection',
     },
   },
   topPanel: {

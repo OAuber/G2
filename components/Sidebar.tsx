@@ -17,7 +17,7 @@ const SORT_OPTIONS: { value: SortMode; key: string }[] = [
   { value: 'name',       key: 'sidebar.sort.name' },
 ];
 
-const FILTER_OPTIONS: { value: FilterTag; key: string; color: string }[] = [
+const FILTER_OPTIONS: { value: FilterTag; key: string; color: string; requiresSelected?: boolean }[] = [
   { value: 'manual',          key: 'sidebar.filters.manual',          color: 'text-green-400' },
   { value: 'male',            key: 'sidebar.filters.male',            color: 'text-blue-400' },
   { value: 'female',          key: 'sidebar.filters.female',          color: 'text-pink-400' },
@@ -26,9 +26,81 @@ const FILTER_OPTIONS: { value: FilterTag; key: string; color: string }[] = [
   { value: 'calculated-dates',key: 'sidebar.filters.calculatedDates', color: 'text-yellow-400' },
   { value: 'no-parents',      key: 'sidebar.filters.noParents',       color: 'text-orange-400' },
   { value: 'no-spouse',       key: 'sidebar.filters.noSpouse',        color: 'text-violet-400' },
+  { value: 'selected-ancestors',   key: 'sidebar.filters.selectedAncestors',   color: 'text-cyan-400', requiresSelected: true },
+  { value: 'selected-descendants', key: 'sidebar.filters.selectedDescendants', color: 'text-lime-400', requiresSelected: true },
 ];
 
-export function matchesFilters(indi: Individual, filters: Set<FilterTag>): boolean {
+export function computeLineageFilterSets(
+  data: GedcomData | null,
+  selectedId: string | null | undefined,
+): { ancestors: Set<string>; descendants: Set<string> } {
+  const ancestors = new Set<string>();
+  const descendants = new Set<string>();
+  if (!data || !selectedId || !data.individuals[selectedId]) return { ancestors, descendants };
+
+  const includeSelectedAndSpouses = () => {
+    ancestors.add(selectedId);
+    descendants.add(selectedId);
+    const selected = data.individuals[selectedId];
+    const spouseFamilies = selected.familySpouseIds ?? [];
+    for (const familyId of spouseFamilies) {
+      const family = data.families[familyId];
+      if (!family) continue;
+      const spouseId = family.husbandId === selectedId ? family.wifeId : family.husbandId;
+      if (spouseId) {
+        ancestors.add(spouseId);
+        descendants.add(spouseId);
+      }
+    }
+  };
+  includeSelectedAndSpouses();
+
+  const ancestorStack = [selectedId];
+  const ancestorVisited = new Set<string>([selectedId]);
+  while (ancestorStack.length > 0) {
+    const currentId = ancestorStack.pop()!;
+    const indi = data.individuals[currentId];
+    if (!indi?.familyChildId) continue;
+    const family = data.families[indi.familyChildId];
+    if (!family) continue;
+    const parents = [family.husbandId, family.wifeId].filter(Boolean) as string[];
+    for (const parentId of parents) {
+      if (ancestorVisited.has(parentId)) continue;
+      ancestorVisited.add(parentId);
+      ancestors.add(parentId);
+      ancestorStack.push(parentId);
+    }
+  }
+
+  const descendantStack = [selectedId];
+  const descendantVisited = new Set<string>([selectedId]);
+  while (descendantStack.length > 0) {
+    const currentId = descendantStack.pop()!;
+    const indi = data.individuals[currentId];
+    const spouseFamilies = indi?.familySpouseIds ?? [];
+    for (const familyId of spouseFamilies) {
+      const family = data.families[familyId];
+      if (!family?.childrenIds) continue;
+      for (const childId of family.childrenIds) {
+        if (descendantVisited.has(childId)) continue;
+        descendantVisited.add(childId);
+        descendants.add(childId);
+        descendantStack.push(childId);
+      }
+    }
+  }
+
+  return { ancestors, descendants };
+}
+
+export function matchesFilters(
+  indi: Individual,
+  filters: Set<FilterTag>,
+  context?: {
+    selectedId?: string | null;
+    lineageSets?: { ancestors: Set<string>; descendants: Set<string> };
+  },
+): boolean {
   if (filters.size === 0) return true;
   for (const f of filters) {
     switch (f) {
@@ -40,6 +112,12 @@ export function matchesFilters(indi: Individual, filters: Set<FilterTag>): boole
       case 'calculated-dates': if (indi.birthDate?.isCalculated || indi.deathDate?.isCalculated) return true; break;
       case 'no-parents':       if (!indi.familyChildId) return true; break;
       case 'no-spouse':        if (!indi.familySpouseIds?.length) return true; break;
+      case 'selected-ancestors':
+        if (context?.selectedId && context.lineageSets?.ancestors.has(indi.id)) return true;
+        break;
+      case 'selected-descendants':
+        if (context?.selectedId && context.lineageSets?.descendants.has(indi.id)) return true;
+        break;
     }
   }
   return false;
@@ -247,9 +325,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   const filteredList = useMemo(() => {
     if (!data) return [];
     let list = Object.values(data.individuals) as Individual[];
+    const lineageSets = computeLineageFilterSets(data, selectedId);
 
     if (activeFilters.size > 0) {
-      list = list.filter(p => matchesFilters(p, activeFilters));
+      list = list.filter(p => matchesFilters(p, activeFilters, { selectedId, lineageSets }));
     }
 
     const sorted = applySortMode(list, sortMode || 'birth-asc');
@@ -556,13 +635,18 @@ const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                       {FILTER_OPTIONS.map(opt => {
                         const active = activeFilters.has(opt.value);
+                        const disabled = !!opt.requiresSelected && !selectedId;
                         return (
                           <button
                             key={opt.value}
-                            onClick={() => onToggleFilter(opt.value)}
+                            onClick={() => {
+                              if (disabled) return;
+                              onToggleFilter(opt.value);
+                            }}
+                            disabled={disabled}
                             className={`w-full flex items-center justify-between px-3 py-1.5 text-xs ${menuItemHover} ${
                               active ? (isDarkMode ? 'bg-slate-800' : 'bg-slate-100') : ''
-                            } ${textClass}`}
+                            } ${textClass} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
                           >
                             <span className={active ? opt.color : ''}>{t(opt.key)}</span>
                             {active && <Check className={`w-3 h-3 ${opt.color}`} />}

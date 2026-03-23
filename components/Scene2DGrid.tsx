@@ -1,9 +1,9 @@
 import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrthographicCamera, Text, Html } from '@react-three/drei';
+import { OrthographicCamera, Text, Html, Image as DreiImage } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
-import { matchesFilters, applySortMode } from './Sidebar';
+import { matchesFilters, applySortMode, computeLineageFilterSets } from './Sidebar';
 import { useI18n } from '../i18n';
 
 type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
@@ -132,6 +132,11 @@ const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
 const GRID_TO_INDIVIDUAL_SWITCH_ZOOM = GRID_DEFAULT_ZOOM * 1.2;
+const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
+const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1; // from applyZoomDelta with a standard wheel notch (~deltaY=-100)
+const GRID_REVEAL_START_ZOOM =
+  GRID_TO_INDIVIDUAL_SWITCH_ZOOM / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
+const GRID_REVEAL_START_OPACITY = 1;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
 const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
 const SINGLE_VIEW_ZOOM_OUT_FACTOR = 0.95;
@@ -476,6 +481,11 @@ const GridContent: React.FC<GridContentProps> = ({
   const [slideshowIndex, setSlideshowIndex] = useState(0);
   const projectVecARef = useRef(new THREE.Vector3());
   const projectVecBRef = useRef(new THREE.Vector3());
+  const revealOpacityDataRef = useRef<Float32Array | null>(null);
+  const revealOpacityAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null);
+  const prevRevealIndicesRef = useRef<Set<number>>(new Set());
+  const prevGridPhotoSigRef = useRef<string>('');
+  const [gridPhotoPlanes, setGridPhotoPlanes] = useState<Array<{ key: string; url: string; cx: number; cy: number; h: number }>>([]);
   const [hoveredDocId, setHoveredDocId] = useState<string | null>(null);
   const [windowPhotoOverrideUrl, setWindowPhotoOverrideUrl] = useState<string | null>(null);
   const singleFitRef = useRef<{
@@ -508,6 +518,66 @@ const GridContent: React.FC<GridContentProps> = ({
   );
 
   const selectedPhotoUrl = windowPhotoOverrideUrl || (selectedId ? primaryPhotoUrlById?.[selectedId] : undefined);
+  const applyRevealOpacityToIndices = useCallback((indices: number[], opacity: number) => {
+    const data = revealOpacityDataRef.current;
+    const attr = revealOpacityAttrRef.current;
+    if (!data || !attr) return;
+    const next = new Set<number>();
+    for (const idx of indices) {
+      if (idx >= 0 && idx < data.length) next.add(idx);
+    }
+    const clamped = Math.max(0, Math.min(1, opacity));
+    let changed = false;
+    for (const idx of prevRevealIndicesRef.current) {
+      if (!next.has(idx) && idx >= 0 && idx < data.length && Math.abs(data[idx] - 1) > 1e-6) {
+        data[idx] = 1;
+        changed = true;
+      }
+    }
+    for (const idx of next) {
+      if (Math.abs(data[idx] - clamped) > 1e-6) {
+        data[idx] = clamped;
+        changed = true;
+      }
+    }
+    prevRevealIndicesRef.current = next;
+    if (changed) attr.needsUpdate = true;
+  }, []);
+  const clearSelectedRevealOpacity = useCallback(() => {
+    applyRevealOpacityToIndices([], 1);
+  }, [applyRevealOpacityToIndices]);
+  const getRevealRamp = useCallback((zoom: number) => {
+    return Math.max(
+      0,
+      Math.min(
+        1,
+        (zoom - GRID_REVEAL_START_ZOOM) / Math.max(1e-6, GRID_TO_INDIVIDUAL_SWITCH_ZOOM - GRID_REVEAL_START_ZOOM),
+      ),
+    );
+  }, []);
+  const getRevealOpacity = useCallback((widthProgressRaw: number, blendToReveal: number) => {
+    const clampedWidthProgress = Math.max(0, Math.min(1, widthProgressRaw));
+    const baseOpacity = clampedWidthProgress >= 0.97
+      ? 0
+      : Math.max(0, Math.pow(1 - clampedWidthProgress, 1.6) * 0.65);
+    const blend = Math.max(0, Math.min(1, blendToReveal));
+    return GRID_REVEAL_START_OPACITY - (GRID_REVEAL_START_OPACITY - baseOpacity) * blend;
+  }, []);
+  const photoUrlByIndividualId = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const rd of ribbonData) {
+      const id = rd.individual.id;
+      const primary = primaryPhotoUrlById?.[id];
+      if (primary) {
+        map[id] = primary;
+        continue;
+      }
+      const docs = documentsByIndividualId?.[id] ?? [];
+      const firstImage = docs.find((d) => !!d.url && isImageLikeUrl(d.url));
+      if (firstImage?.url) map[id] = firstImage.url;
+    }
+    return map;
+  }, [ribbonData, primaryPhotoUrlById, documentsByIndividualId]);
   const selectedImageDocs = useMemo(() => {
     if (!selectedId) return [] as RibbonDocument[];
     const docs = (documentsByIndividualId?.[selectedId] ?? []).filter((d) => !!d.url && isImageLikeUrl(d.url));
@@ -572,6 +642,12 @@ const GridContent: React.FC<GridContentProps> = ({
       'aFadingMode',
       new THREE.InstancedBufferAttribute(new Float32Array(count), 1),
     );
+    const revealOpacityData = new Float32Array(count);
+    revealOpacityData.fill(1);
+    g.setAttribute(
+      'aRevealOpacity',
+      new THREE.InstancedBufferAttribute(revealOpacityData, 1),
+    );
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
     return g;
   }, [individuals.length]);
@@ -595,7 +671,9 @@ const GridContent: React.FC<GridContentProps> = ({
     mat.onBeforeCompile = (shader) => {
       shader.vertexShader =
         `attribute float aFadingMode;
+         attribute float aRevealOpacity;
          varying float vFadingMode;
+         varying float vRevealOpacity;
          varying vec2 vUvCustom;\n` +
         shader.vertexShader
           .replace(
@@ -606,11 +684,13 @@ const GridContent: React.FC<GridContentProps> = ({
           .replace(
             '#include <begin_vertex>',
             `#include <begin_vertex>
-             vFadingMode = aFadingMode;`,
+             vFadingMode = aFadingMode;
+             vRevealOpacity = aRevealOpacity;`,
           );
 
       shader.fragmentShader =
         `varying float vFadingMode;
+         varying float vRevealOpacity;
          varying vec2 vUvCustom;\n` +
         shader.fragmentShader.replace(
           '#include <color_fragment>',
@@ -626,7 +706,7 @@ const GridContent: React.FC<GridContentProps> = ({
            } else if (vFadingMode > 2.5) {
              fade = smoothstep(0.0, 0.4, vUvCustom.y) * smoothstep(1.0, 0.6, vUvCustom.y);
            }
-           diffuseColor.a *= fade;`,
+           diffuseColor.a *= fade * vRevealOpacity;`,
         );
     };
 
@@ -700,6 +780,13 @@ const GridContent: React.FC<GridContentProps> = ({
       'aFadingMode',
       new THREE.InstancedBufferAttribute(fadingData, 1),
     );
+    const revealOpacityData = new Float32Array(ribbonData.length);
+    revealOpacityData.fill(1);
+    const revealAttr = new THREE.InstancedBufferAttribute(revealOpacityData, 1);
+    ribbonGeometry.setAttribute('aRevealOpacity', revealAttr);
+    revealOpacityDataRef.current = revealOpacityData;
+    revealOpacityAttrRef.current = revealAttr;
+    prevRevealIndicesRef.current = new Set();
   }, [ribbonData, selectedId, ribbonGeometry]);
 
   /* ---- Layout: responsive grid (runs every frame) ---- */
@@ -1023,19 +1110,17 @@ const GridContent: React.FC<GridContentProps> = ({
 
           // Keep ribbons globally opaque, but fade them only during the
           // photo-reveal zoom transition in 2D individual mode.
-          const revealOpacity = widthProgressRaw >= 0.97
-            ? 0
-            : Math.max(0, Math.pow(1 - widthProgressRaw, 1.6) * 0.65);
-          ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY * revealOpacity;
+          const revealOpacity = getRevealOpacity(widthProgressRaw, 1);
+          applyRevealOpacityToIndices([selectedIdx], revealOpacity);
         } else {
           onPhotoOverlayChange?.(null);
-          ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+          clearSelectedRevealOpacity();
           if (isAtZoomLimit) setIsAtZoomLimit(false);
         }
       } else if (photoReveal !== 0) {
         setPhotoReveal(0);
         onPhotoOverlayChange?.(null);
-        ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
+        clearSelectedRevealOpacity();
         if (isAtZoomLimit) setIsAtZoomLimit(false);
       }
       initializedRef.current = true;
@@ -1043,7 +1128,6 @@ const GridContent: React.FC<GridContentProps> = ({
     } else {
       if (photoReveal !== 0) setPhotoReveal(0);
       onPhotoOverlayChange?.(null);
-      ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;
       if (isAtZoomLimit) setIsAtZoomLimit(false);
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
@@ -1067,6 +1151,63 @@ const GridContent: React.FC<GridContentProps> = ({
           const newRow = Math.floor(anchorIndex / cols);
           // Preserve user free horizontal pan in grid mode.
           ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
+        }
+      }
+
+      const gridRevealRamp = getRevealRamp(ortho.zoom);
+      if (gridRevealRamp > 0 && cols > 0) {
+        const viewLeft = ortho.position.x - visW / 2;
+        const viewRight = ortho.position.x + visW / 2;
+        const viewTop = ortho.position.y + visH / 2;
+        const viewBottom = ortho.position.y - visH / 2;
+        const halfW = RIBBON_W / 2;
+        const visiblePhotoIndices: number[] = [];
+        const nextPlanes: Array<{ key: string; url: string; cx: number; cy: number; h: number }> = [];
+        for (let idx = 0; idx < ribbonData.length; idx += 1) {
+          const rd = ribbonData[idx];
+          const url = photoUrlByIndividualId[rd.individual.id];
+          if (!url) continue;
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          const cx = col * STEP_X;
+          const cy = -row * STEP_Y;
+          const h = Math.max(1e-6, (rd.lifespan / maxLifespan) * CELL_H);
+          const halfH = h / 2;
+          const intersectsView =
+            (cx + halfW >= viewLeft) &&
+            (cx - halfW <= viewRight) &&
+            (cy + halfH >= viewBottom) &&
+            (cy - halfH <= viewTop);
+          if (!intersectsView) continue;
+          visiblePhotoIndices.push(idx);
+          if (nextPlanes.length < 10) {
+            nextPlanes.push({
+              key: rd.individual.id,
+              url,
+              cx,
+              cy,
+              h,
+            });
+          }
+        }
+        ortho.updateMatrixWorld();
+        const a = projectVecARef.current.set(-halfW, 0, 0).project(ortho);
+        const b = projectVecBRef.current.set(halfW, 0, 0).project(ortho);
+        const projectedW = Math.max(1e-6, Math.abs((b.x - a.x) * 0.5 * size.width));
+        const widthProgressRaw = Math.max(0, Math.min(1, projectedW / Math.max(1e-6, size.width)));
+        const revealOpacity = getRevealOpacity(widthProgressRaw, Math.pow(gridRevealRamp, 0.55));
+        applyRevealOpacityToIndices(visiblePhotoIndices, revealOpacity);
+        const nextSig = nextPlanes.map((p) => `${p.key}:${p.cx.toFixed(2)}:${p.cy.toFixed(2)}:${p.h.toFixed(2)}`).join('|');
+        if (nextSig !== prevGridPhotoSigRef.current) {
+          prevGridPhotoSigRef.current = nextSig;
+          setGridPhotoPlanes(nextPlanes);
+        }
+      } else {
+        onPhotoOverlayChange?.(null);
+        clearSelectedRevealOpacity();
+        if (prevGridPhotoSigRef.current !== '') {
+          prevGridPhotoSigRef.current = '';
+          setGridPhotoPlanes([]);
         }
       }
     }
@@ -1817,6 +1958,17 @@ const GridContent: React.FC<GridContentProps> = ({
   return (
     <>
       <group>
+        {!singleIndividual && gridPhotoPlanes.map((p) => (
+          <DreiImage
+            key={p.key}
+            url={p.url}
+            position={[p.cx, p.cy, -0.02]}
+            scale={[RIBBON_W, p.h, 1]}
+            transparent
+            opacity={1}
+            toneMapped={false}
+          />
+        ))}
         <instancedMesh
           ref={ribbonMeshRef}
           args={[ribbonGeometry, ribbonMaterial, ribbonData.length]}
@@ -1945,6 +2097,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   }, [overlayBg]);
   const individuals = useMemo(() => {
     if (!data) return [];
+    const lineageSets = computeLineageFilterSets(data, selectedId);
     if (singleIndividual && selectedId) {
       const indi = data.individuals[selectedId];
       return indi ? [indi] : [];
@@ -1957,7 +2110,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       list = all.filter(i => selectedIds.has(i.id));
     }
     if (activeFilters && activeFilters.size > 0) {
-      list = list.filter(i => matchesFilters(i, activeFilters));
+      list = list.filter(i => matchesFilters(i, activeFilters, { selectedId, lineageSets }));
     }
     return applySortMode(list, sortMode);
   }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId]);

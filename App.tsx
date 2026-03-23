@@ -3259,6 +3259,8 @@ function App() {
             rootIndividual={rootIndividual} 
             selectedId={selectedIndividual?.id}
             data={gedcomData} 
+            primaryPhotoUrlById={primaryPhotoUrlById}
+            documentsByIndividualId={documentsByIndividualId}
             showBoxes={showBoxes}
             showAxes={showAxes}
             onIndividualClick={handleInspectIndividual}

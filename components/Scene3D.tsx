@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, OrthographicCamera, Image as DreiImage } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { Vector3, Quaternion, Matrix4 as M4, MOUSE, TOUCH } from 'three';
 import { Individual, GedcomData, Gender, DragMode, RenderedPerson, CameraMode, LayoutParams } from '../types';
@@ -20,6 +20,10 @@ const INDIVIDUAL_WIDTH = 10;
 const FOV_DEG = 50;
 const FOV_RAD = FOV_DEG * Math.PI / 180;
 const TOP_VIEW_PADDING = 1.0; // scene extent multiplier for top view (lower = more zoomed in)
+const PHOTO_MAX_PLANES_3D = 10;
+const PHOTO_MIN_PROJECTED_PX_3D = 18;
+const PHOTO_MIN_PROJECTED_PX_TOP_3D = 8;
+const PHOTO_RECALC_MS_3D = 90;
 
 function individualViewDistance(): number {
     const aspect = window.innerWidth / window.innerHeight;
@@ -462,10 +466,164 @@ const CameraController: React.FC<{
   return null;
 };
 
+const RibbonPhotoOverlays3D: React.FC<{
+  nodes: LayoutNode[];
+  cameraMode: CameraMode;
+  primaryPhotoUrlById?: Record<string, string>;
+  documentsByIndividualId?: Record<string, Array<{ url: string; kind?: 'photo' | 'document'; isPrimaryPhoto?: boolean }>>;
+}> = ({ nodes, cameraMode, primaryPhotoUrlById, documentsByIndividualId }) => {
+  const [planes, setPlanes] = useState<Array<{
+    key: string;
+    url: string;
+    position: [number, number, number];
+    quaternion: [number, number, number, number];
+    scale: [number, number, number];
+  }>>([]);
+  const sigRef = useRef('');
+  const recalcAtRef = useRef(0);
+
+  const isImageLikeUrl = useCallback((url: string): boolean => {
+    if (!url) return false;
+    if (url.startsWith('data:image/')) return true;
+    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
+  }, []);
+
+  const photoUrlById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const node of nodes) {
+      const id = node.id;
+      const primary = primaryPhotoUrlById?.[id];
+      if (primary) {
+        map[id] = primary;
+        continue;
+      }
+      const docs = documentsByIndividualId?.[id] ?? [];
+      const firstImage = docs.find((d) => !!d.url && (d.kind === 'photo' || isImageLikeUrl(d.url)));
+      if (firstImage?.url) map[id] = firstImage.url;
+    }
+    return map;
+  }, [nodes, primaryPhotoUrlById, documentsByIndividualId, isImageLikeUrl]);
+
+  useFrame((state) => {
+    const nowMs = state.clock.elapsedTime * 1000;
+    if (nowMs - recalcAtRef.current < PHOTO_RECALC_MS_3D) return;
+    recalcAtRef.current = nowMs;
+    if (nodes.length === 0) {
+      if (sigRef.current !== '') {
+        sigRef.current = '';
+        setPlanes([]);
+      }
+      return;
+    }
+
+    const cam = state.camera;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const candidates: Array<{
+      key: string;
+      url: string;
+      projectedPx: number;
+      position: [number, number, number];
+      quaternion: [number, number, number, number];
+      scale: [number, number, number];
+    }> = [];
+
+    const p = new Vector3();
+    const s = new Vector3();
+    const q = new Quaternion();
+    const left = new Vector3();
+    const right = new Vector3();
+    const top = new Vector3();
+    const bottom = new Vector3();
+    const camDir = new Vector3();
+    const xAxis = new Vector3(1, 0, 0);
+    const yAxis = new Vector3(0, 1, 0);
+    const zAxis = new Vector3(0, 0, 1);
+    const rot = new Quaternion();
+    const pathQ = new Quaternion();
+    cam.getWorldDirection(camDir);
+
+    for (const node of nodes) {
+      const url = photoUrlById[node.id];
+      if (!url) continue;
+      node.matrix.decompose(p, q, s);
+      const thickness = s.x;
+      const h = s.y;
+      const d = s.z;
+      const diagonal = Math.sqrt(h * h + d * d);
+      const angle = Math.atan2(d, h);
+      const rotationX = node.gender === Gender.Female ? angle : -angle;
+      rot.setFromAxisAngle(xAxis, rotationX);
+      pathQ.copy(rot).premultiply(q);
+
+      left.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(-thickness / 2).add(p).project(cam);
+      right.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(thickness / 2).add(p).project(cam);
+      top.copy(yAxis).applyQuaternion(pathQ).multiplyScalar(diagonal / 2).add(p).project(cam);
+      bottom.copy(yAxis).applyQuaternion(pathQ).multiplyScalar(-diagonal / 2).add(p).project(cam);
+
+      const wPx = Math.hypot((right.x - left.x) * 0.5 * width, (right.y - left.y) * 0.5 * height);
+      const hPx = Math.hypot((top.x - bottom.x) * 0.5 * width, (top.y - bottom.y) * 0.5 * height);
+      const projectedPx = Math.max(wPx, hPx);
+      const minPx = cameraMode === 'top' ? PHOTO_MIN_PROJECTED_PX_TOP_3D : PHOTO_MIN_PROJECTED_PX_3D;
+      if (projectedPx < minPx) continue;
+
+      const pos = p.clone().addScaledVector(camDir, 0.08);
+      candidates.push({
+        key: node.id,
+        url,
+        projectedPx,
+        position: [pos.x, pos.y, pos.z],
+        quaternion: [pathQ.x, pathQ.y, pathQ.z, pathQ.w],
+        scale: [thickness * 0.98, diagonal * 0.98, 1],
+      });
+    }
+
+    candidates.sort((a, b) => b.projectedPx - a.projectedPx);
+    const next = candidates.slice(0, PHOTO_MAX_PLANES_3D).map(({ projectedPx: _p, ...rest }) => rest);
+    const sig = next.map((it) => `${it.key}:${it.url}`).join('|');
+    if (sig !== sigRef.current) {
+      sigRef.current = sig;
+      setPlanes(next);
+    }
+  });
+
+  return (
+    <>
+      {planes.map((p) => (
+        <DreiImage
+          key={`photo-3d-${p.key}`}
+          url={p.url}
+          position={p.position}
+          quaternion={p.quaternion}
+          scale={p.scale}
+          transparent
+          opacity={0.95}
+          depthWrite={false}
+          side={2}
+          renderOrder={-1}
+          toneMapped={false}
+          ref={(obj: any) => {
+            if (!obj) return;
+            if (typeof obj.traverse === 'function') {
+              obj.traverse((child: any) => {
+                child.raycast = () => null;
+              });
+            } else {
+              obj.raycast = () => null;
+            }
+          }}
+        />
+      ))}
+    </>
+  );
+};
+
 interface Scene3DProps {
   rootIndividual: Individual | null; 
   selectedId?: string | null; 
   data: GedcomData | null;
+  primaryPhotoUrlById?: Record<string, string>;
+  documentsByIndividualId?: Record<string, Array<{ url: string; kind?: 'photo' | 'document'; isPrimaryPhoto?: boolean }>>;
   showBoxes?: boolean;
   showAxes?: boolean;
   onIndividualClick: (indi: Individual) => void;
@@ -492,6 +650,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
   rootIndividual, 
   selectedId, 
   data, 
+  primaryPhotoUrlById,
+  documentsByIndividualId,
   showBoxes = true, 
   showAxes = false, 
   onIndividualClick,
@@ -966,6 +1126,12 @@ const Scene3D: React.FC<Scene3DProps> = ({
             zoomToCursor={true}
         />
         
+        <RibbonPhotoOverlays3D
+            nodes={allLayoutNodes}
+            cameraMode={cameraMode}
+            primaryPhotoUrlById={primaryPhotoUrlById}
+            documentsByIndividualId={documentsByIndividualId}
+        />
         <InstancedGenealogyTree 
             key={rootIndividual?.id || 'empty-tree'}
             nodes={allLayoutNodes} 
@@ -979,7 +1145,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             cameraMode={cameraMode}
-            showTopViewLabels={cameraMode === 'top' && flyTarget === null}
+            showTopViewLabels={cameraMode === 'top'}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
         />
