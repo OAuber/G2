@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Save, Network, Copy, Check, WifiOff } from 'lucide-react';
+import { Network, Copy, Check, WifiOff } from 'lucide-react';
 import { P2PStatus, P2PMode } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
@@ -18,10 +18,6 @@ interface P2PVisibilitySettings {
 interface TopPanelProps {
   isOpen: boolean;
   onToggle: () => void;
-  databaseName?: string;
-  onDownload: () => void;
-  onDownloadBundle: () => void;
-  hasData: boolean;
   isDarkMode: boolean;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -76,10 +72,6 @@ interface TopPanelProps {
 const TopPanel: React.FC<TopPanelProps> = ({ 
   isOpen, 
   onToggle, 
-  databaseName,
-  onDownload, 
-  onDownloadBundle,
-  hasData,
   isDarkMode,
   onMouseEnter, 
   onMouseLeave,
@@ -204,32 +196,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
           <div className="w-full max-w-5xl mx-auto">
           <div className="flex items-center gap-2 w-full flex-wrap">
           
-          {/* Save Section */}
-          <div className={`flex items-center gap-2 rounded px-2 py-1 border ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-            <Save className={`w-3.5 h-3.5 shrink-0 ${subTextClass}`} />
-            {!hasData ? (
-              <span className={`text-[10px] ${subTextClass}`}>{t('topPanel.noData')}</span>
-            ) : (
-              <>
-                <span className={`text-[10px] font-bold ${textClass} truncate max-w-[120px]`}>
-                  {databaseName || t('topPanel.unknown')}
-                </span>
-                <button 
-                  onClick={onDownload}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold text-[10px] transition-colors shadow-sm shrink-0 ${btnAction}`}
-                >
-                  <Save className="w-3 h-3" /> GED
-                </button>
-                <button
-                  onClick={onDownloadBundle}
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold text-[10px] transition-colors shadow-sm shrink-0 ${btnAction}`}
-                >
-                  {t('sidebar.labels.importBundle')}
-                </button>
-              </>
-            )}
-          </div>
-
           {/* P2P Network Section */}
           <div className={`flex items-center gap-2 rounded px-2 py-1 border ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
             <Network className={`w-3.5 h-3.5 shrink-0 ${!isOnline ? 'text-red-500' : (p2pStatus === 'connected' ? 'text-green-500' : 'text-slate-500')}`} />

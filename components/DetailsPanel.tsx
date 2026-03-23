@@ -601,11 +601,51 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </div>
         </div>
 
-        <div className={`rounded border p-1 grid grid-cols-4 gap-1 ${inputBg}`}>
-          <button type="button" onClick={() => setActiveTab('records')} className={`py-1 text-xs font-bold rounded ${activeTab === 'records' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabRecords')}</button>
-          <button type="button" onClick={() => setActiveTab('documents')} className={`py-1 text-xs font-bold rounded ${activeTab === 'documents' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabDocuments')}</button>
-          <button type="button" onClick={() => setActiveTab('review')} className={`py-1 text-xs font-bold rounded ${activeTab === 'review' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabReview')}</button>
-          <button type="button" onClick={() => setActiveTab('identity')} className={`py-1 text-xs font-bold rounded ${activeTab === 'identity' ? 'bg-blue-600 text-white' : ''}`}>{t('details.tabIdentity')}</button>
+        <div className={`rounded border p-1 grid grid-cols-4 gap-1 ${isDarkMode ? 'border-slate-700' : 'border-slate-300'}`}>
+          <button
+            type="button"
+            onClick={() => setActiveTab('records')}
+            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center ${
+              activeTab === 'records'
+                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
+                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {t('details.tabRecords')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('documents')}
+            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center ${
+              activeTab === 'documents'
+                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
+                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {t('details.tabDocuments')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('review')}
+            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center ${
+              activeTab === 'review'
+                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
+                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {t('details.tabReview')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('identity')}
+            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center ${
+              activeTab === 'identity'
+                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
+                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {t('details.tabIdentity')}
+          </button>
         </div>
 
         {(isCreating || isEditing) ? (

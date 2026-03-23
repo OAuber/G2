@@ -29,6 +29,55 @@ import {
 
 const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
 const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
+const AUTOSAVE_SETTINGS_KEY = 'g2:autoSaveEnabled:v1';
+const AUTOSAVE_DB_NAME = 'g2-autosave-db';
+const AUTOSAVE_STORE_NAME = 'snapshots';
+const AUTOSAVE_RECORD_KEY = 'latest';
+
+type AutoSaveSnapshot = {
+  savedAt: string;
+  databaseName: string;
+  originalGedcomData: GedcomData;
+  documentsByIndividualId: Record<string, unknown>;
+  selfIdentity: SelfIdentityPublic | null;
+};
+
+const openAutoSaveDb = (): Promise<IDBDatabase> =>
+  new Promise((resolve, reject) => {
+    const request = indexedDB.open(AUTOSAVE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(AUTOSAVE_STORE_NAME)) {
+        db.createObjectStore(AUTOSAVE_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+
+const saveAutoSaveSnapshot = async (snapshot: AutoSaveSnapshot): Promise<void> => {
+  const db = await openAutoSaveDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(AUTOSAVE_STORE_NAME, 'readwrite');
+    tx.objectStore(AUTOSAVE_STORE_NAME).put(snapshot, AUTOSAVE_RECORD_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+};
+
+const readAutoSaveSnapshot = async (): Promise<AutoSaveSnapshot | null> => {
+  const db = await openAutoSaveDb();
+  const result = await new Promise<AutoSaveSnapshot | null>((resolve, reject) => {
+    const tx = db.transaction(AUTOSAVE_STORE_NAME, 'readonly');
+    const req = tx.objectStore(AUTOSAVE_STORE_NAME).get(AUTOSAVE_RECORD_KEY);
+    req.onsuccess = () => resolve((req.result as AutoSaveSnapshot | undefined) || null);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return result;
+};
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
@@ -267,6 +316,7 @@ function App() {
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | 'contact' | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const buildLabel = `${import.meta.env.MODE}:${window.location.host}`;
+  const [programUpdateState, setProgramUpdateState] = useState<'idle' | 'checking' | 'available' | 'updating' | 'error' | 'unsupported'>('idle');
   const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
   const [emulateRevealShortcut, setEmulateRevealShortcut] = useState(false);
   const [topViewLabelMaxZSpan, setTopViewLabelMaxZSpan] = useState(500);
@@ -301,6 +351,17 @@ function App() {
   const [isIdentifyingSelf, setIsIdentifyingSelf] = useState(false);
   const [identityTabSignal, setIdentityTabSignal] = useState(0);
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_SETTINGS_KEY);
+      return raw === null ? true : raw === '1';
+    } catch {
+      return true;
+    }
+  });
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [autoSaveLastAt, setAutoSaveLastAt] = useState<string | null>(null);
+  const [hasAutoSaveDraft, setHasAutoSaveDraft] = useState(false);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
@@ -346,6 +407,9 @@ function App() {
   const initialDiffTimeoutHandlesRef = useRef<Record<string, number>>({});
   const initialDiffSeenProposalKeysRef = useRef<Set<string>>(new Set());
   const rejectedInitialMatchesRef = useRef<RejectedInitialMatchMap>({});
+  const serviceWorkerRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const isRestoringAutoSaveRef = useRef(false);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
@@ -363,7 +427,64 @@ function App() {
     }
   }, [selfIdentity]);
   useEffect(() => {
+    try {
+      localStorage.setItem(AUTOSAVE_SETTINGS_KEY, autoSaveEnabled ? '1' : '0');
+    } catch {
+      // no-op
+    }
+  }, [autoSaveEnabled]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snapshot = await readAutoSaveSnapshot();
+        if (!cancelled && snapshot) {
+          setHasAutoSaveDraft(true);
+          setAutoSaveLastAt(snapshot.savedAt);
+        }
+      } catch {
+        if (!cancelled) setHasAutoSaveDraft(false);
+      }
+    })();
     return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!autoSaveEnabled || !originalGedcomData || isRestoringAutoSaveRef.current) return;
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      try {
+        setAutoSaveState('saving');
+        const snapshot: AutoSaveSnapshot = {
+          savedAt: new Date().toISOString(),
+          databaseName,
+          originalGedcomData,
+          documentsByIndividualId,
+          selfIdentity,
+        };
+        await saveAutoSaveSnapshot(snapshot);
+        setAutoSaveLastAt(snapshot.savedAt);
+        setAutoSaveState('saved');
+        setHasAutoSaveDraft(true);
+      } catch (error) {
+        console.error('Auto-save failed', error);
+        setAutoSaveState('error');
+      }
+    }, 2200);
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [autoSaveEnabled, originalGedcomData, documentsByIndividualId, selfIdentity, databaseName]);
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
       if (bundleToastTimeoutRef.current !== null) {
         window.clearTimeout(bundleToastTimeoutRef.current);
       }
@@ -373,6 +494,51 @@ function App() {
       Object.values(initialDiffTimeoutHandlesRef.current).forEach((handle) => {
         window.clearTimeout(handle);
       });
+    };
+  }, []);
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) {
+      setProgramUpdateState('unsupported');
+      return;
+    }
+    let cancelled = false;
+    const onControllerChange = () => {
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+    (async () => {
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (cancelled) return;
+        if (!registration) {
+          setProgramUpdateState('unsupported');
+          return;
+        }
+        serviceWorkerRegistrationRef.current = registration;
+        if (registration.waiting) {
+          setProgramUpdateState('available');
+        } else {
+          setProgramUpdateState('idle');
+        }
+        registration.addEventListener('updatefound', () => {
+          const installing = registration.installing;
+          if (!installing) return;
+          setProgramUpdateState('checking');
+          installing.addEventListener('statechange', () => {
+            if (installing.state === 'installed') {
+              setProgramUpdateState(navigator.serviceWorker.controller ? 'available' : 'idle');
+            } else if (installing.state === 'redundant') {
+              setProgramUpdateState('error');
+            }
+          });
+        });
+      } catch {
+        if (!cancelled) setProgramUpdateState('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
     };
   }, []);
 
@@ -2011,12 +2177,12 @@ function App() {
       });
       triggerDownloadBlob(bundleBlob, `${safeName}_${new Date().toISOString().slice(0, 10)}.lifethread.zip`);
       logP2PActivity('tree.bundle.download', 'session', peerId || 'local');
-      setBundleToast({ kind: 'success', message: 'Bundle exporte avec succes.' });
+      setBundleToast({ kind: 'success', message: t('app.toasts.archiveExported') });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
       bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 2500);
     } catch (error) {
       console.error('Bundle export failed', error);
-      setBundleToast({ kind: 'error', message: "Echec de l'export bundle." });
+      setBundleToast({ kind: 'error', message: t('app.toasts.archiveExportFailed') });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
       bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 3000);
     }
@@ -2037,14 +2203,43 @@ function App() {
       }
       if (p2pStatus === 'connected') sendSessionState();
       logP2PActivity('tree.bundle.import', 'session', peerId || 'local');
-      setBundleToast({ kind: 'success', message: 'Bundle importe avec succes.' });
+      setBundleToast({ kind: 'success', message: t('app.toasts.archiveImported') });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
       bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 2500);
     } catch (error) {
       console.error('Bundle import failed', error);
-      setBundleToast({ kind: 'error', message: 'Import bundle impossible. Verifiez le format du fichier.' });
+      setBundleToast({ kind: 'error', message: t('app.toasts.archiveImportFailed') });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
       bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), 3500);
+    }
+  };
+
+  const handleRestoreAutoSave = async () => {
+    try {
+      isRestoringAutoSaveRef.current = true;
+      setIsLoading(true);
+      const snapshot = await readAutoSaveSnapshot();
+      if (!snapshot) return;
+      setDatabaseName(snapshot.databaseName || 'My Family Tree');
+      setOriginalGedcomData(snapshot.originalGedcomData);
+      setNormalizedGedcomData(normalizeGedcom(snapshot.originalGedcomData));
+      setDocumentsByIndividualId(normalizeDocumentsByIndividual(snapshot.documentsByIndividualId));
+      if (snapshot.selfIdentity?.individualId && snapshot.selfIdentity?.deviceKeyId) {
+        setSelfIdentity(snapshot.selfIdentity);
+      }
+      setRootIndividual(null);
+      setSelectedIndividual(null);
+      setSelectedIdsFor2D(new Set());
+      setHasAutoSaveDraft(true);
+      setAutoSaveLastAt(snapshot.savedAt || new Date().toISOString());
+      setAutoSaveState('saved');
+      setLeftPanelOpen(true);
+    } catch (error) {
+      console.error('Auto-save restore failed', error);
+      setAutoSaveState('error');
+    } finally {
+      setIsLoading(false);
+      isRestoringAutoSaveRef.current = false;
     }
   };
 
@@ -2753,6 +2948,46 @@ function App() {
   const closeRightPanel = () => { setRightPanelOpen(false); setIsCreating(false); setIsHoveringUI(false); };
   const closeTopPanel = () => { setTopPanelOpen(false); setIsHoveringUI(false); };
   const closeBottomPanel = () => { setBottomPanelOpen(false); setIsHoveringUI(false); };
+  const handleProgramCheckUpdates = async () => {
+    if (!('serviceWorker' in navigator)) {
+      setProgramUpdateState('unsupported');
+      return;
+    }
+    try {
+      setProgramUpdateState('checking');
+      const registration = serviceWorkerRegistrationRef.current || await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        setProgramUpdateState('unsupported');
+        return;
+      }
+      serviceWorkerRegistrationRef.current = registration;
+      await registration.update();
+      setProgramUpdateState(registration.waiting ? 'available' : 'idle');
+    } catch {
+      setProgramUpdateState('error');
+    }
+  };
+  const handleProgramApplyUpdate = async () => {
+    if (!('serviceWorker' in navigator)) {
+      setProgramUpdateState('unsupported');
+      return;
+    }
+    try {
+      const registration = serviceWorkerRegistrationRef.current || await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        window.location.reload();
+        return;
+      }
+      if (registration.waiting) {
+        setProgramUpdateState('updating');
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } else {
+        window.location.reload();
+      }
+    } catch {
+      setProgramUpdateState('error');
+    }
+  };
   const renderBrandMark = (compact = false) => (
     <span
       className={`inline-flex items-start font-black tracking-tight ${compact ? 'text-2xl md:text-3xl' : 'text-3xl md:text-4xl'} ${
@@ -2982,6 +3217,8 @@ function App() {
         data={gedcomData} 
         onDataLoaded={handleDataLoaded} 
         onImportBundle={handleImportBundle}
+        onDownloadGedcom={handleDownloadGedcom}
+        onDownloadBundle={handleDownloadBundle}
         onSelectIndividual={handleNavigateToIndividual}
         selectedId={selectedIndividual?.id || null}
         selectedIdsFor2D={selectedIdsFor2D}
@@ -3002,6 +3239,16 @@ function App() {
         // Normalization Props
         isNormalized={isNormalized}
         onToggleNormalization={() => setIsNormalized(!isNormalized)}
+        autoSaveEnabled={autoSaveEnabled}
+        onToggleAutoSave={() => setAutoSaveEnabled((prev) => !prev)}
+        autoSaveState={autoSaveState}
+        autoSaveLastAt={autoSaveLastAt}
+        hasAutoSaveDraft={hasAutoSaveDraft}
+        onRestoreAutoSave={handleRestoreAutoSave}
+        programUpdateState={programUpdateState}
+        programVersionLabel={buildLabel}
+        onProgramCheckUpdates={handleProgramCheckUpdates}
+        onProgramApplyUpdate={handleProgramApplyUpdate}
       />
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
@@ -3213,10 +3460,6 @@ function App() {
             if(topPanelOpen) closeTopPanel();
             else setTopPanelOpen(true);
         }}
-        databaseName={databaseName}
-        onDownload={handleDownloadGedcom}
-        onDownloadBundle={handleDownloadBundle}
-        hasData={!!gedcomData}
         isDarkMode={isDarkMode}
         onMouseEnter={handleUIEnter}
         onMouseLeave={handleUILeave}

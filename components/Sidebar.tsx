@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff, Sparkles, SlidersHorizontal, Check } from 'lucide-react';
+import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff, Sparkles, SlidersHorizontal, Check, Save } from 'lucide-react';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { parseGedcom } from '../services/gedcomParser';
 import { getDemoGedcom } from '../services/demoData';
@@ -75,6 +75,8 @@ export function applySortMode(list: Individual[], mode: SortMode): Individual[] 
 interface SidebarProps {
   onDataLoaded: (data: GedcomData, name?: string) => void;
   onImportBundle: (file: File) => Promise<void> | void;
+  onDownloadGedcom: () => void;
+  onDownloadBundle: () => void;
   onSelectIndividual: (indi: Individual) => void;
   data: GedcomData | null;
   selectedId: string | null;
@@ -94,6 +96,16 @@ interface SidebarProps {
   onToggleFilter: (tag: FilterTag) => void;
   isNormalized: boolean;
   onToggleNormalization: () => void;
+  autoSaveEnabled: boolean;
+  onToggleAutoSave: () => void;
+  autoSaveState: 'idle' | 'saving' | 'saved' | 'error';
+  autoSaveLastAt: string | null;
+  hasAutoSaveDraft: boolean;
+  onRestoreAutoSave: () => void;
+  programUpdateState: 'idle' | 'checking' | 'available' | 'updating' | 'error' | 'unsupported';
+  programVersionLabel: string;
+  onProgramCheckUpdates: () => void;
+  onProgramApplyUpdate: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -102,6 +114,8 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ 
   onDataLoaded, 
   onImportBundle,
+  onDownloadGedcom,
+  onDownloadBundle,
   onSelectIndividual, 
   data, 
   selectedId, 
@@ -121,10 +135,21 @@ const Sidebar: React.FC<SidebarProps> = ({
   onToggleFilter,
   isNormalized,
   onToggleNormalization,
+  autoSaveEnabled,
+  onToggleAutoSave,
+  autoSaveState,
+  autoSaveLastAt,
+  hasAutoSaveDraft,
+  onRestoreAutoSave,
+  programUpdateState,
+  programVersionLabel,
+  onProgramCheckUpdates,
+  onProgramApplyUpdate,
 }) => {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activePane, setActivePane] = useState<'program' | 'data' | 'list'>('data');
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -148,6 +173,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
+  useEffect(() => {
+    if (activePane === 'program') return;
+    setActivePane(data ? 'list' : 'data');
+  }, [data]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -208,7 +237,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       await onImportBundle(file);
     } catch (err) {
       console.error(err);
-      alert(t('sidebar.labels.importBundleError'));
+      alert(t('sidebar.labels.importArchiveError'));
     } finally {
       onLoading(false);
       event.target.value = '';
@@ -275,6 +304,50 @@ const Sidebar: React.FC<SidebarProps> = ({
     const active = SORT_OPTIONS.find(o => o.value === sortMode);
     return active ? t(active.key) : t('sidebar.sort.fallback');
   })();
+  const autoSaveStatusText =
+    autoSaveState === 'saving'
+      ? t('sidebar.labels.autosaveSaving')
+      : autoSaveState === 'saved'
+      ? `${t('sidebar.labels.autosaveSaved')} • ${autoSaveLastAt ? new Date(autoSaveLastAt).toLocaleTimeString() : t('sidebar.labels.autosaveNever')}`
+      : autoSaveState === 'error'
+      ? t('sidebar.labels.autosaveError')
+      : `${t('sidebar.labels.autosaveSaved')} • ${autoSaveLastAt ? new Date(autoSaveLastAt).toLocaleTimeString() : t('sidebar.labels.autosaveNever')}`;
+  const getProgramStatusText = (): string => {
+    if (programUpdateState === 'available') return t('sidebar.program.available');
+    if (programUpdateState === 'checking') return t('sidebar.program.checking');
+    if (programUpdateState === 'updating') return t('sidebar.program.updating');
+    if (programUpdateState === 'error') return t('sidebar.program.error');
+    if (programUpdateState === 'unsupported') return t('sidebar.program.unsupported');
+    return t('sidebar.program.upToDate');
+  };
+  const signalDot = (state: 'none' | 'attention' | 'running' | 'error') => {
+    if (state === 'none') return null;
+    const color =
+      state === 'attention' ? 'bg-amber-500'
+      : state === 'running' ? 'bg-cyan-500'
+      : 'bg-rose-500';
+    const pulse = state === 'attention' || state === 'running' ? 'animate-pulse' : '';
+    return <span className={`inline-block w-2 h-2 rounded-full ${color} ${pulse}`} />;
+  };
+  const programSignal: 'none' | 'attention' | 'running' | 'error' =
+    programUpdateState === 'available'
+      ? 'attention'
+      : programUpdateState === 'checking' || programUpdateState === 'updating'
+      ? 'running'
+      : programUpdateState === 'error'
+      ? 'error'
+      : 'none';
+  const dataSignal: 'none' | 'attention' | 'running' | 'error' =
+    autoSaveState === 'error'
+      ? 'error'
+      : isLoading || autoSaveState === 'saving'
+      ? 'running'
+      : (!data && hasAutoSaveDraft)
+      ? 'attention'
+      : 'none';
+  const listSignal: 'none' | 'attention' | 'running' | 'error' = 'none';
+  const globalSignal: 'none' | 'attention' | 'running' | 'error' =
+    programSignal !== 'none' ? programSignal : dataSignal !== 'none' ? dataSignal : listSignal;
 
   return (
     <div 
@@ -289,37 +362,111 @@ const Sidebar: React.FC<SidebarProps> = ({
       <button 
          onClick={onToggle}
          style={{ touchAction: 'manipulation' }}
-         className={`absolute top-1/2 right-0 translate-x-full -translate-y-1/2 origin-left py-8 px-3 rounded-r-xl border-y border-r border-l-0 ${handleBg} flex items-center justify-center shadow-md`}
+         className={`absolute top-1/2 left-full -translate-y-1/2 origin-left w-9 py-8 px-0 overflow-hidden rounded-r-xl border-y border-r border-l-0 ${handleBg} flex items-center justify-center shadow-md`}
       >
         <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-bold uppercase tracking-widest whitespace-nowrap">
             {t('sidebar.labels.families')}
         </span>
       </button>
 
-      {/* Header (Import & Normalization) */}
-      <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} space-y-3`}>
-        <div className="grid grid-cols-2 gap-2">
-          <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            <span className={`text-xs font-medium ${textClass}`}>
-              {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importGedcom')}
-            </span>
-            <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
-          </label>
-          <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
-            {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            <span className={`text-xs font-medium ${textClass}`}>
-              {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importBundle')}
-            </span>
-            <input
-              type="file"
-              accept=".lifethread.zip,.zip,application/zip"
-              onChange={handleBundleUpload}
-              className="hidden"
-              disabled={isLoading}
-            />
-          </label>
+      <div className={`p-2 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} grid grid-cols-3 gap-1`}>
+        {([
+          { key: 'program', label: t('sidebar.tabs.program'), signal: programSignal },
+          { key: 'data', label: t('sidebar.tabs.data'), signal: dataSignal },
+          { key: 'list', label: t('sidebar.tabs.list'), signal: listSignal },
+        ] as const).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActivePane(tab.key)}
+            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center gap-1 ${
+              activePane === tab.key
+                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
+                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {signalDot(tab.signal)}
+            <span>{tab.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Header (Data actions & Normalization) */}
+      {activePane === 'data' && <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} space-y-3`}>
+        <div className={`flex items-center justify-between text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+          <span>{t('sidebar.labels.data')}</span>
+          <button
+            type="button"
+            onClick={onToggleAutoSave}
+            className={`rounded px-2 py-0.5 border text-[10px] ${isDarkMode ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}`}
+            title={t('sidebar.labels.autosave')}
+          >
+            {t('sidebar.labels.autosave')}: {autoSaveEnabled ? t('sidebar.labels.autosaveOn') : t('sidebar.labels.autosaveOff')}
+          </button>
         </div>
+        <div className={`text-[10px] ${subTextClass}`}>{t('sidebar.labels.autosaveScopeHint')}</div>
+        <div className="grid grid-cols-2 gap-2">
+          {!data ? (
+            <>
+              <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                <span className={`text-xs font-medium ${textClass}`}>
+                  {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importGedcom')}
+                </span>
+                <input type="file" accept=".ged" onChange={handleFileUpload} className="hidden" disabled={isLoading} />
+              </label>
+              <label className={`w-full flex items-center justify-center px-3 py-2 border rounded-md cursor-pointer transition-colors ${buttonImportClass} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {isLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                <span className={`text-xs font-medium ${textClass}`}>
+                  {isLoading ? t('sidebar.labels.importing') : t('sidebar.labels.importArchive')}
+                </span>
+                <input
+                  type="file"
+                  accept=".lifethread.zip,.zip,application/zip"
+                  onChange={handleBundleUpload}
+                  className="hidden"
+                  disabled={isLoading}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <div className="space-y-1">
+                <div className={`text-[10px] ${subTextClass}`}>{t('sidebar.labels.autosaveGedcom')}: {autoSaveStatusText}</div>
+                <button
+                  type="button"
+                  onClick={onDownloadGedcom}
+                  className={`w-full flex items-center justify-center px-3 py-2 border rounded-md transition-colors ${buttonImportClass}`}
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  <span className={`text-xs font-medium ${textClass}`}>{t('sidebar.labels.exportGedcom')}</span>
+                </button>
+              </div>
+              <div className="space-y-1">
+                <div className={`text-[10px] ${subTextClass}`}>{t('sidebar.labels.autosaveArchive')}: {autoSaveStatusText}</div>
+                <button
+                  type="button"
+                  onClick={onDownloadBundle}
+                  className={`w-full flex items-center justify-center px-3 py-2 border rounded-md transition-colors ${buttonImportClass}`}
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  <span className={`text-xs font-medium ${textClass}`}>{t('sidebar.labels.exportArchive')}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        {data && <div className={`text-[10px] ${subTextClass}`}>{t('sidebar.labels.saveToDiskHint')}</div>}
+
+        {!data && hasAutoSaveDraft && (
+          <button
+            type="button"
+            onClick={onRestoreAutoSave}
+            className={`w-full flex items-center justify-center px-3 py-2 border rounded-md transition-colors ${buttonImportClass}`}
+          >
+            <span className={`text-xs font-medium ${textClass}`}>{t('sidebar.labels.restoreAutosave')}</span>
+          </button>
+        )}
         
         {data && (
             <button 
@@ -342,10 +489,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             </button>
         )}
-      </div>
+      </div>}
 
       {/* Search + Sort/Filter Menu */}
-      {data && (
+      {activePane === 'list' && data && (
         <div className={`flex flex-col border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
             <div className="p-4 space-y-3 pb-3">
               {/* Search bar */}
@@ -477,14 +624,62 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Scrollable List */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
-        {!data ? (
-          <div className={`flex-1 flex flex-col items-center justify-center text-sm ${subTextClass}`}>
+        {activePane === 'program' ? (
+          <div className="p-4 space-y-3">
+            <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('sidebar.program.title')}</div>
+            <div className={`rounded border p-3 space-y-2 ${inputBg}`}>
+              <div className={`text-xs ${subTextClass}`}>{t('sidebar.program.version')}: <span className={textClass}>{programVersionLabel}</span></div>
+              <div className={`text-xs ${subTextClass}`}>{t('sidebar.program.updateStatus')}: <span className={textClass}>{getProgramStatusText()}</span></div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={onProgramCheckUpdates}
+                  className={`flex-1 py-1.5 rounded text-xs font-semibold border ${buttonImportClass}`}
+                >
+                  {t('sidebar.program.check')}
+                </button>
+                {programUpdateState === 'available' && (
+                  <button
+                    type="button"
+                    onClick={onProgramApplyUpdate}
+                    className={`flex-1 py-1.5 rounded text-xs font-semibold border ${buttonImportClass}`}
+                  >
+                    {t('sidebar.program.apply')}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : activePane === 'data' ? (
+          !data ? (
+            <div className={`p-4 text-sm ${subTextClass}`}>
+              <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
+              <div className="mt-2 flex flex-col gap-1">
+                <span className="opacity-70 text-xs">{t('sidebar.labels.noGedcom')}</span>
+                <button
+                  onClick={handleLoadDemo}
+                  className="text-left text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
+                  disabled={isLoading}
+                >
+                  {t('sidebar.labels.tryDemo')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4">
+              <div className={`rounded border p-3 text-xs ${inputBg}`}>
+                <div className={subTextClass}>{t('sidebar.labels.records')}: <span className={textClass}>{Object.keys(data.individuals).length}</span></div>
+              </div>
+            </div>
+          )
+        ) : !data ? (
+          <div className={`p-4 text-sm ${subTextClass}`}>
             <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
-            <div className="mt-4 flex flex-col items-center gap-1">
+            <div className="mt-2 flex flex-col gap-1">
                  <span className="opacity-70 text-xs">{t('sidebar.labels.noGedcom')}</span>
                  <button 
                     onClick={handleLoadDemo} 
-                    className="text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
+                    className="text-left text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
                     disabled={isLoading}
                  >
                     {t('sidebar.labels.tryDemo')}
@@ -534,7 +729,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   <button 
                      onClick={(e) => { e.stopPropagation(); onToggle2DSelection?.(indi.id); }}
                      className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}
-                     title={isSelected2D ? "Hide in 2D View" : "Show in 2D View"}
+                     title={isSelected2D ? t('sidebar.labels.hideAll') : t('sidebar.labels.showAll')}
                   >
                      {isSelected2D ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4 opacity-30" />}
                   </button>
