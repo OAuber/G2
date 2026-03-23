@@ -135,7 +135,7 @@ const GRID_TO_INDIVIDUAL_SWITCH_ZOOM = GRID_DEFAULT_ZOOM * 1.2;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
 const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
 const SINGLE_VIEW_ZOOM_OUT_FACTOR = 0.95;
-const DEFAULT_RIBBON_OPACITY = 0.42;
+const DEFAULT_RIBBON_OPACITY = 1;
 
 /* ------------------------------------------------------------------ */
 /*  Color palettes (aligned with 3D view)                              */
@@ -616,9 +616,9 @@ const GridContent: React.FC<GridContentProps> = ({
           '#include <color_fragment>',
           `#include <color_fragment>
            float fade = 1.0;
-           // 1 = unknown death  → fade top
-           // 2 = unknown birth  → fade bottom
-           // 3 = both unknown   → fade both ends
+           // 1 = unknown death  -> fade top
+           // 2 = unknown birth  -> fade bottom
+           // 3 = both unknown   -> fade both ends
            if (vFadingMode > 0.5 && vFadingMode < 1.5) {
              fade = smoothstep(1.0, 0.5, vUvCustom.y);
            } else if (vFadingMode > 1.5 && vFadingMode < 2.5) {
@@ -1021,13 +1021,12 @@ const GridContent: React.FC<GridContentProps> = ({
             setIsAtZoomLimit(false);
           }
 
-          // Ribbon opacity reaches exactly 0 when projected width is near viewport width.
-          if (projectedW >= maxWidthPx * 0.97) {
-            ribbonMaterial.opacity = 0;
-          } else {
-            const widthProgress = Math.max(0, Math.min(1, projectedW / maxWidthPx));
-            ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY * (1 - widthProgress);
-          }
+          // Keep ribbons globally opaque, but fade them only during the
+          // photo-reveal zoom transition in 2D individual mode.
+          const revealOpacity = widthProgressRaw >= 0.97
+            ? 0
+            : Math.max(0, Math.pow(1 - widthProgressRaw, 1.6) * 0.65);
+          ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY * revealOpacity;
         } else {
           onPhotoOverlayChange?.(null);
           ribbonMaterial.opacity = DEFAULT_RIBBON_OPACITY;

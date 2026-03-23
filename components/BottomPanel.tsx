@@ -91,12 +91,12 @@ const IconDesc = () => (
 
 /* ────────────────────── Main component ────────────────────── */
 
-const VIEW_BUTTONS: { mode: DisplayMode; icon: React.FC; title: string }[] = [
-  { mode: '2d-individual', icon: Icon2DIndividual, title: 'Individual' },
-  { mode: '2d-grid',       icon: Icon2DGrid,       title: 'Grid' },
-  { mode: '3d-individual', icon: Icon3DIndividual, title: 'Close-up' },
-  { mode: '3d-top',        icon: Icon3DTop,        title: 'Top view' },
-  { mode: '3d-free',       icon: Icon3DFree,       title: 'Free view' },
+const VIEW_BUTTONS: { mode: DisplayMode; icon: React.FC; titleKey: string }[] = [
+  { mode: '2d-individual', icon: Icon2DIndividual, titleKey: 'bottomPanel.view2dIndividual' },
+  { mode: '2d-grid',       icon: Icon2DGrid,       titleKey: 'bottomPanel.view2dGrid' },
+  { mode: '3d-individual', icon: Icon3DIndividual, titleKey: 'bottomPanel.view3dCloseup' },
+  { mode: '3d-top',        icon: Icon3DTop,        titleKey: 'bottomPanel.view3dTop' },
+  { mode: '3d-free',       icon: Icon3DFree,       titleKey: 'bottomPanel.view3dFree' },
 ];
 
 const BottomPanel: React.FC<BottomPanelProps> = ({
@@ -204,7 +204,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                       key={vb.mode}
                       onClick={() => onSetDisplayMode(vb.mode)}
                       disabled={isAnimating}
-                      title={vb.title}
+                      title={t(vb.titleKey)}
                       className={displayMode === vb.mode ? btnActive : btnDefault}
                     >
                       <Icon />
