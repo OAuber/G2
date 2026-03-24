@@ -56,9 +56,11 @@ interface TopPanelProps {
     individualName: string;
     role: 'viewer' | 'contributor' | 'editor';
     expiresAt?: string;
-    status: 'active' | 'revoked';
+    status: 'active' | 'accepted' | 'revoked' | 'expired';
     personalizedDefault: boolean;
+    inviteLink?: string;
   }>;
+  pendingInviteToken?: string | null;
   pendingProposalsCount: number;
   syncStatusText?: string | null;
   initialCompareStatusText?: string | null;
@@ -66,6 +68,7 @@ interface TopPanelProps {
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
   onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
   onRevokeInvite: (inviteId: string) => void;
+  onAcceptInvite: (inviteId: string) => void;
   onReviewProposal: (proposalId: string) => void;
 }
 
@@ -89,6 +92,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   visibilitySettings,
   livingCandidates,
   invites,
+  pendingInviteToken,
   pendingProposalsCount,
   syncStatusText,
   initialCompareStatusText,
@@ -96,6 +100,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onChangeVisibilitySettings,
   onCreateInvite,
   onRevokeInvite,
+  onAcceptInvite,
   onReviewProposal,
 }) => {
   const { t } = useI18n();
@@ -106,6 +111,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showActivityDetails, setShowActivityDetails] = useState(false);
+  const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
 
@@ -171,6 +177,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
     if (role === 'viewer') return t('topPanel.roleViewer');
     if (role === 'contributor') return t('topPanel.roleContributor');
     return t('topPanel.roleEditor');
+  };
+  const copyInviteLink = async (inviteId: string, link?: string) => {
+    if (!link) return;
+    await navigator.clipboard.writeText(link);
+    setCopiedInviteId(inviteId);
+    window.setTimeout(() => setCopiedInviteId((current) => (current === inviteId ? null : current)), 1800);
   };
   const showShareAction = p2pMode === 'host';
   // Allow actions when remote state is unknown; handlers perform final checks.
@@ -455,8 +467,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
           <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.connectionProfiles')}</h3>
             <p className={`text-xs mb-3 ${subTextClass}`}>
-              {t('topPanel.connectionProfilesHint')}
+              {p2pMode === 'host' ? t('topPanel.connectionProfilesHint') : t('topPanel.invitedModeHint')}
             </p>
+            {p2pMode === 'host' && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
               <select
                 value={newInviteIndividualId}
@@ -496,6 +509,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 {t('topPanel.createInvite')}
               </button>
             </div>
+            )}
             <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
               {invites.length === 0 ? (
                 <p className={`text-sm ${subTextClass}`}>{t('topPanel.noInvites')}</p>
@@ -508,19 +522,43 @@ const TopPanel: React.FC<TopPanelProps> = ({
                         {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')} | {t('topPanel.status')}: {invite.status}
                         {invite.expiresAt ? ` | ${t('topPanel.expires')}: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
                       </div>
+                      {invite.inviteLink && (
+                        <div className={`font-mono text-[10px] truncate max-w-[320px] ${subTextClass}`}>{invite.inviteLink}</div>
+                      )}
                     </div>
-                    {invite.status === 'active' && (
-                      <button
-                        onClick={() => onRevokeInvite(invite.inviteId)}
-                        className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
-                      >
-                        {t('topPanel.revoke')}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {invite.inviteLink && p2pMode === 'host' && (
+                        <button
+                          onClick={() => copyInviteLink(invite.inviteId, invite.inviteLink)}
+                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-200 text-slate-800 hover:bg-slate-300'}`}
+                        >
+                          {copiedInviteId === invite.inviteId ? t('topPanel.inviteCopied') : t('topPanel.copyInviteLink')}
+                        </button>
+                      )}
+                      {invite.status === 'active' && p2pMode === 'host' && (
+                        <button
+                          onClick={() => onRevokeInvite(invite.inviteId)}
+                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
+                        >
+                          {t('topPanel.revoke')}
+                        </button>
+                      )}
+                      {invite.status === 'active' && p2pMode === 'client' && (
+                        <button
+                          onClick={() => onAcceptInvite(invite.inviteId)}
+                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                        >
+                          {t('topPanel.acceptInvite')}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
             </div>
+            {pendingInviteToken && (
+              <p className={`text-[11px] mt-3 ${subTextClass}`}>{t('topPanel.pendingInviteToken')}</p>
+            )}
           </section>
         </div>
         </div>

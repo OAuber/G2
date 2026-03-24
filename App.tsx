@@ -26,9 +26,11 @@ import {
   IndividualDiffRequestPayload,
   IndividualDiffResponsePayload,
 } from './services/p2pProtocol';
+import { InviteTokenClaims, signInviteClaims, verifyInviteToken } from './services/p2pSecurity';
 
 const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
 const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
+const INVITE_SECRET_STORAGE_KEY = 'g2:p2pInviteSecret:v1';
 const AUTOSAVE_SETTINGS_KEY = 'g2:autoSaveEnabled:v1';
 const AUTOSAVE_DB_NAME = 'g2-autosave-db';
 const AUTOSAVE_STORE_NAME = 'snapshots';
@@ -82,6 +84,7 @@ const readAutoSaveSnapshot = async (): Promise<AutoSaveSnapshot | null> => {
 function App() {
   const { language, toggleLanguage, t } = useI18n();
   type P2PSessionUseCase = 'share' | 'compare' | null;
+  type P2PRole = 'viewer' | 'contributor' | 'editor';
   type P2PVisibilitySettings = {
     exposeIdentity: boolean;
     exposeDates: boolean;
@@ -97,11 +100,14 @@ function App() {
     inviteId: string;
     individualId: string;
     individualName: string;
-    role: 'viewer' | 'contributor' | 'editor';
+    role: P2PRole;
     expiresAt?: string;
-    status: 'active' | 'revoked';
+    status: 'active' | 'accepted' | 'revoked' | 'expired';
     personalizedDefault: boolean;
     createdAt: string;
+    token?: string;
+    inviteLink?: string;
+    accessProfile: P2PVisibilitySettings;
   };
 
   type P2PProposalItem = {
@@ -186,8 +192,8 @@ function App() {
 
   // Conservative chunk size for mobile/browser DataChannel compatibility.
   const SYNC_CHUNK_SIZE = 12_000;
-  const SYNC_CHUNK_SEND_DELAY_MS = 4;
-  const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 12000;
+  const SYNC_CHUNK_SEND_DELAY_MS = 8;
+  const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 45000;
   const INITIAL_DIFF_BATCH_LIMIT = 300;
   const INITIAL_DIFF_MAX_RETRY = 1;
   const INITIAL_DIFF_REQUEST_TIMEOUT_MS = 12000;
@@ -225,7 +231,10 @@ function App() {
           databaseName: databaseNameRef.current,
           sentAt: new Date().toISOString(),
         });
-        setP2PSyncStatusText(`sending ${index + 1}/${totalChunks}`);
+        const nextCount = index + 1;
+        if (nextCount === 1 || nextCount === totalChunks || nextCount % 12 === 0) {
+          setP2PSyncStatusText(`sending ${nextCount}/${totalChunks}`);
+        }
         if (index + 1 === totalChunks) {
           window.setTimeout(() => setP2PSyncStatusText('waiting apply'), 250);
         }
@@ -366,6 +375,9 @@ function App() {
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null);
+  const [pendingInviteHostPeerId, setPendingInviteHostPeerId] = useState<string | null>(null);
+  const [pendingInviteTargetIndividualId, setPendingInviteTargetIndividualId] = useState<string | null>(null);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
     exposeDates: true,
@@ -377,6 +389,7 @@ function App() {
     allowDirectEdit: false,
   });
   const [remoteAccessPolicy, setRemoteAccessPolicy] = useState<P2PVisibilitySettings | null>(null);
+  const [activeSessionPeerPolicy, setActiveSessionPeerPolicy] = useState<P2PVisibilitySettings | null>(null);
   const isIdentified = !!selfIdentity && selfIdentity.status !== 'unidentified';
 
   // Keep ref to data for P2P sync (closure issue)
@@ -410,11 +423,21 @@ function App() {
   const serviceWorkerRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
   const isRestoringAutoSaveRef = useRef(false);
+  const inviteAutoConnectAttemptedRef = useRef(false);
+  const p2pInvitesRef = useRef<P2PInviteItem[]>([]);
+  const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
+  const originalGedcomDataRef = useRef<GedcomData | null>(null);
+  const syncApplyingInProgressRef = useRef(false);
+  const normalizeTimeoutRef = useRef<number | null>(null);
+  const normalizeIdleHandleRef = useRef<number | null>(null);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
+  useEffect(() => { p2pInvitesRef.current = p2pInvites; }, [p2pInvites]);
+  useEffect(() => { activeSessionPeerPolicyRef.current = activeSessionPeerPolicy; }, [activeSessionPeerPolicy]);
+  useEffect(() => { originalGedcomDataRef.current = originalGedcomData; }, [originalGedcomData]);
   useEffect(() => {
     try {
       if (selfIdentity) {
@@ -583,6 +606,80 @@ function App() {
     bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), durationMs);
   };
 
+  const getOrCreateInviteSecret = (): string => {
+    const existing = localStorage.getItem(INVITE_SECRET_STORAGE_KEY);
+    if (existing) return existing;
+    const created =
+      (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `secret-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    localStorage.setItem(INVITE_SECRET_STORAGE_KEY, created);
+    return created;
+  };
+
+  const buildAccessProfileFromRole = (role: P2PRole): P2PVisibilitySettings => {
+    if (role === 'viewer') {
+      return {
+        exposeIdentity: true,
+        exposeDates: true,
+        exposePlaces: false,
+        exposeNotes: false,
+        allowDocuments: false,
+        allowDownload: false,
+        allowProposal: false,
+        allowDirectEdit: false,
+      };
+    }
+    if (role === 'contributor') {
+      return {
+        exposeIdentity: true,
+        exposeDates: true,
+        exposePlaces: true,
+        exposeNotes: false,
+        allowDocuments: true,
+        allowDownload: false,
+        allowProposal: true,
+        allowDirectEdit: false,
+      };
+    }
+    return {
+      exposeIdentity: true,
+      exposeDates: true,
+      exposePlaces: true,
+      exposeNotes: true,
+      allowDocuments: true,
+      allowDownload: true,
+      allowProposal: true,
+      allowDirectEdit: true,
+    };
+  };
+
+  const intersectAccessPolicy = (
+    base: P2PVisibilitySettings,
+    cap: P2PVisibilitySettings
+  ): P2PVisibilitySettings => ({
+    exposeIdentity: base.exposeIdentity && cap.exposeIdentity,
+    exposeDates: base.exposeDates && cap.exposeDates,
+    exposePlaces: base.exposePlaces && cap.exposePlaces,
+    exposeNotes: base.exposeNotes && cap.exposeNotes,
+    allowDocuments: base.allowDocuments && cap.allowDocuments,
+    allowDownload: base.allowDownload && cap.allowDownload,
+    allowProposal: base.allowProposal && cap.allowProposal,
+    allowDirectEdit: base.allowDirectEdit && cap.allowDirectEdit,
+  });
+
+  const parseInviteClaimsUnsafe = (token: string): InviteTokenClaims | null => {
+    const encodedClaims = token.split('.')[0];
+    if (!encodedClaims) return null;
+    try {
+      const padded = encodedClaims.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encodedClaims.length / 4) * 4, '=');
+      const decoded = atob(padded);
+      return JSON.parse(decoded) as InviteTokenClaims;
+    } catch {
+      return null;
+    }
+  };
+
   const sendSessionState = (requestEcho: boolean = false) => {
     p2pService.sendMessage('SESSION_STATE', {
       hasGedcom: !!gedcomDataRef.current,
@@ -623,6 +720,9 @@ function App() {
   const getEffectiveSharePolicy = (): P2PVisibilitySettings => {
     if (p2pModeRef.current === 'client' && remoteAccessPolicy) {
       return remoteAccessPolicy;
+    }
+    if (p2pModeRef.current === 'host' && activeSessionPeerPolicy) {
+      return activeSessionPeerPolicy;
     }
     return visibilitySettingsRef.current;
   };
@@ -1038,29 +1138,86 @@ function App() {
 
   useEffect(() => {
     if (!livingCandidates.length) return;
-    setP2PInvites((prev) => {
-      const existingByIndividualId = new Set(prev.map((i) => i.individualId));
-      const defaultsToAdd = livingCandidates
-        .filter((candidate) => !existingByIndividualId.has(candidate.id))
-        .map((candidate) => ({
-          inviteId: `inv-${candidate.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          individualId: candidate.id,
+    setP2PInvites((prev) =>
+      prev.map((invite) => {
+        const candidate = livingCandidates.find((c) => c.id === invite.individualId);
+        if (!candidate) return invite;
+        return {
+          ...invite,
           individualName: candidate.label,
-          role: 'viewer' as const,
-          status: 'active' as const,
-          personalizedDefault: true,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        }));
-      if (!defaultsToAdd.length) return prev;
-      return [...prev, ...defaultsToAdd];
-    });
+        };
+      })
+    );
   }, [livingCandidates]);
 
   useEffect(() => {
+    if (!pendingInviteTargetIndividualId || !gedcomData) return;
+    const invitedIndividual = gedcomData.individuals[pendingInviteTargetIndividualId];
+    if (!invitedIndividual) return;
+    setRootIndividual(invitedIndividual);
+    setSelectedIndividual(invitedIndividual);
+    setDisplayMode('2d-individual');
+    setRightPanelOpen(true);
+  }, [pendingInviteTargetIndividualId, gedcomData]);
+
+  useEffect(() => {
+    if (!pendingInviteToken || !pendingInviteHostPeerId) return;
+    if (p2pStatus !== 'disconnected') return;
+    if (inviteAutoConnectAttemptedRef.current) return;
+    initP2PWithMode('client', pendingInviteHostPeerId);
+  }, [pendingInviteToken, pendingInviteHostPeerId, p2pStatus]);
+
+  useEffect(() => {
+    if (!pendingInviteToken || !pendingInviteHostPeerId) return;
+    if (p2pStatus !== 'disconnected') return;
+    if (inviteAutoConnectAttemptedRef.current) return;
+    initP2PWithMode('client', pendingInviteHostPeerId);
+  }, [pendingInviteToken, pendingInviteHostPeerId, p2pStatus]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inviteToken = params.get('g2invite');
+    if (!inviteToken) return;
+    setPendingInviteToken(inviteToken);
+    const claims = parseInviteClaimsUnsafe(inviteToken);
+    if (!claims) return;
+    if (claims.sessionId && claims.sessionId !== 'local-session') {
+      setPendingInviteHostPeerId(claims.sessionId);
+      inviteAutoConnectAttemptedRef.current = false;
+    }
+    if (claims.targetIndividualId) {
+      setPendingInviteTargetIndividualId(claims.targetIndividualId);
+    }
+    setP2PInvites((prev) => {
+      if (prev.some((invite) => invite.inviteId === claims.inviteId)) return prev;
+      return [
+        {
+          inviteId: claims.inviteId,
+          individualId: claims.targetIndividualId || '',
+          individualName: claims.targetIndividualName || `invité (${claims.role})`,
+          role: claims.role,
+          status: 'active',
+          personalizedDefault: false,
+          createdAt: claims.issuedAt,
+          expiresAt: claims.expiresAt,
+          token: inviteToken,
+          inviteLink: `${window.location.origin}${window.location.pathname}?g2invite=${encodeURIComponent(inviteToken)}`,
+          accessProfile: buildAccessProfileFromRole(claims.role),
+        },
+        ...prev,
+      ];
+    });
+  }, []);
+
+  useEffect(() => {
     if (p2pStatus !== 'connected' || p2pModeRef.current !== 'host') return;
+    const profileToSend = activeSessionPeerPolicy
+      ? intersectAccessPolicy(activeSessionPeerPolicy, p2pVisibilitySettings)
+      : p2pVisibilitySettings;
+    setActiveSessionPeerPolicy(profileToSend);
+    activeSessionPeerPolicyRef.current = profileToSend;
     p2pService.sendMessage('ACCESS_PROFILE_SET', {
-      profile: p2pVisibilitySettings,
+      profile: profileToSend,
       fromPeerId: peerId || 'host',
     });
     logP2PActivity('policy.sent', 'session', peerId || 'host');
@@ -1118,9 +1275,9 @@ function App() {
     };
   }, [isHelpOpen]);
 
-  const handleInitP2P = () => {
-      setP2pMode('host');
-      p2pModeRef.current = 'host';
+  const initP2PWithMode = (mode: 'host' | 'client', autoConnectHostId?: string) => {
+      setP2pMode(mode);
+      p2pModeRef.current = mode;
       setP2pStatus('connecting');
       p2pService.init(
           (status, id) => {
@@ -1130,14 +1287,30 @@ function App() {
                 setRemotePeerHasData(null);
                 setP2PSessionUseCase(null);
                 p2pSessionUseCaseRef.current = null;
+                setActiveSessionPeerPolicy(null);
+                activeSessionPeerPolicyRef.current = null;
               }
               logP2PActivity(`session.${status}`, 'session', id || 'local');
+              if (
+                status === 'ready' &&
+                mode === 'client' &&
+                autoConnectHostId &&
+                !inviteAutoConnectAttemptedRef.current &&
+                id !== autoConnectHostId
+              ) {
+                inviteAutoConnectAttemptedRef.current = true;
+                p2pService.connect(autoConnectHostId);
+                logP2PActivity('invite.autoconnect.requested', 'session', autoConnectHostId, id || 'local');
+              }
               if (status === 'connected') {
                   setP2PSessionUseCase(null);
                   setRemotePeerHasData(null);
+                  setActiveSessionPeerPolicy(visibilitySettingsRef.current);
+                  activeSessionPeerPolicyRef.current = visibilitySettingsRef.current;
                   if (p2pModeRef.current === 'host') {
+                    const profile = activeSessionPeerPolicyRef.current || visibilitySettingsRef.current;
                     p2pService.sendMessage('ACCESS_PROFILE_SET', {
-                      profile: visibilitySettingsRef.current,
+                      profile,
                       fromPeerId: id || peerId || 'host',
                     });
                   }
@@ -1228,7 +1401,9 @@ function App() {
                   if (!acc.parts[payload.index]) {
                     acc.parts[payload.index] = payload.chunk;
                     acc.received += 1;
-                    setP2PSyncStatusText(`receiving ${acc.received}/${acc.totalChunks}`);
+                    if (acc.received === 1 || acc.received === acc.totalChunks || acc.received % 12 === 0) {
+                      setP2PSyncStatusText(`receiving ${acc.received}/${acc.totalChunks}`);
+                    }
                   }
 
                   if (acc.received >= acc.totalChunks) {
@@ -1240,6 +1415,7 @@ function App() {
                       syncChunkReceiveTimeoutRef.current = null;
                     }
                     try {
+                      syncApplyingInProgressRef.current = true;
                       setP2PSyncStatusText('applying');
                       const incomingGedcom = parseGedcom(fullGedcomText);
                       handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
@@ -1255,12 +1431,16 @@ function App() {
                       }
                       setP2PSyncStatusText('done');
                       window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+                      window.setTimeout(() => {
+                        syncApplyingInProgressRef.current = false;
+                      }, 2000);
                       logP2PActivity('sync.received', 'session', 'remote');
                       alert(t('app.alerts.synchronizedWithPeer'));
                     } catch (error) {
                       console.error('Failed to parse chunked GEDCOM sync', error);
                       logP2PActivity('sync.parse.error', 'session', 'remote');
                       setP2PSyncStatusText('parse error');
+                      syncApplyingInProgressRef.current = false;
                       alert(t('app.alerts.syncFailedLargeGedcom'));
                     }
                   }
@@ -1304,6 +1484,91 @@ function App() {
                     sendSessionState(false);
                   }
               }
+              if (data.type === 'INVITE_CREATE' && data.payload) {
+                  const payload = data.payload as {
+                    invite?: P2PInviteItem;
+                    token?: string;
+                    inviteLink?: string;
+                    fromPeerId?: string;
+                  };
+                  if (payload.invite) {
+                    setP2PInvites((prev) => {
+                      const existingIndex = prev.findIndex((invite) => invite.inviteId === payload.invite!.inviteId);
+                      const normalized: P2PInviteItem = {
+                        ...payload.invite!,
+                        status: payload.invite!.status || 'active',
+                        accessProfile: payload.invite!.accessProfile || buildAccessProfileFromRole(payload.invite!.role),
+                        token: payload.token || payload.invite!.token,
+                        inviteLink: payload.inviteLink || payload.invite!.inviteLink,
+                      };
+                      if (existingIndex >= 0) {
+                        const next = [...prev];
+                        next[existingIndex] = { ...next[existingIndex], ...normalized };
+                        return next;
+                      }
+                      return [normalized, ...prev];
+                    });
+                    logP2PActivity('invite.received', 'invite', payload.invite.inviteId, payload.fromPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'INVITE_REVOKE' && data.payload) {
+                  const payload = data.payload as { inviteId?: string; fromPeerId?: string };
+                  if (payload.inviteId) {
+                    setP2PInvites((prev) =>
+                      prev.map((invite) =>
+                        invite.inviteId === payload.inviteId ? { ...invite, status: 'revoked' } : invite
+                      )
+                    );
+                    logP2PActivity('invite.revoked.remote', 'invite', payload.inviteId, payload.fromPeerId || 'remote');
+                  }
+              }
+              if (data.type === 'INVITE_ACCEPT' && data.payload && p2pModeRef.current === 'host') {
+                  const payload = data.payload as {
+                    inviteId?: string;
+                    token?: string;
+                    acceptedAt?: string;
+                    claimantPeerId?: string;
+                  };
+                  if (payload.inviteId && payload.token) {
+                    const targetInvite = p2pInvitesRef.current.find((invite) => invite.inviteId === payload.inviteId);
+                    if (!targetInvite || targetInvite.status === 'revoked') {
+                      logP2PActivity('invite.accept.rejected', 'invite', payload.inviteId, payload.claimantPeerId || 'remote');
+                      showTransientToast('error', 'Invitation invalide ou révoquée.', 2200);
+                    } else {
+                      const secret = getOrCreateInviteSecret();
+                      verifyInviteToken(payload.token, secret).then((claims) => {
+                        if (!claims || claims.inviteId !== payload.inviteId) {
+                          logP2PActivity('invite.accept.rejected', 'invite', payload.inviteId!, payload.claimantPeerId || 'remote');
+                          showTransientToast('error', 'Token d’invitation invalide.', 2200);
+                          return;
+                        }
+                        const basePolicy = targetInvite.accessProfile || buildAccessProfileFromRole(targetInvite.role);
+                        const sessionPolicy = intersectAccessPolicy(basePolicy, visibilitySettingsRef.current);
+                        setActiveSessionPeerPolicy(sessionPolicy);
+                        activeSessionPeerPolicyRef.current = sessionPolicy;
+                        setP2PInvites((prev) =>
+                          prev.map((invite) =>
+                            invite.inviteId === payload.inviteId ? { ...invite, status: 'accepted' } : invite
+                          )
+                        );
+                        p2pService.sendMessage('ACCESS_PROFILE_SET', {
+                          profile: sessionPolicy,
+                          fromPeerId: peerId || 'host',
+                          inviteId: payload.inviteId,
+                        });
+                        if (gedcomDataRef.current) {
+                          setP2PSessionUseCase('share');
+                          p2pSessionUseCaseRef.current = 'share';
+                          sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
+                        }
+                        logP2PActivity('invite.accepted', 'invite', payload.inviteId, payload.claimantPeerId || 'remote');
+                        showTransientToast('success', 'Invitation acceptée et profil appliqué.', 2200);
+                      }).catch(() => {
+                        showTransientToast('error', 'Validation du token échouée.', 2200);
+                      });
+                    }
+                  }
+              }
               if (data.type === 'ACCESS_PROFILE_SET' && data.payload) {
                   const payload = data.payload as { profile?: P2PVisibilitySettings; fromPeerId?: string };
                   if (payload.profile) {
@@ -1313,6 +1578,49 @@ function App() {
                     });
                     logP2PActivity('policy.received', 'session', payload.fromPeerId || 'remote');
                   }
+              }
+              if (data.type === 'MERGE_APPLY' && data.payload && p2pModeRef.current === 'host') {
+                  const payload = data.payload as {
+                    operation?: 'update_individual' | 'create_individual' | 'delete_individual';
+                    individualId?: string;
+                    proposedIndividual?: Individual;
+                    proposedFamilies?: Record<string, Family>;
+                    relatedIndividuals?: Record<string, Individual>;
+                    changeSet?: Partial<Individual>;
+                    authorPeerId?: string;
+                  };
+                  const allowDirectEdit = activeSessionPeerPolicyRef.current?.allowDirectEdit ?? visibilitySettingsRef.current.allowDirectEdit;
+                  if (!allowDirectEdit) {
+                    logP2PActivity('merge_apply.rejected_policy', 'session', payload.individualId || 'unknown', payload.authorPeerId || 'remote');
+                    showTransientToast('error', 'Édition directe refusée par la politique.', 1800);
+                    return;
+                  }
+                  if (!payload.operation || !payload.individualId) return;
+                  const mergedData = JSON.parse(
+                    JSON.stringify(originalGedcomDataRef.current || { individuals: {}, families: {} })
+                  ) as GedcomData;
+                  if (payload.operation === 'create_individual' && payload.proposedIndividual) {
+                    mergedData.individuals[payload.proposedIndividual.id] = payload.proposedIndividual;
+                    if (payload.proposedFamilies) mergedData.families = { ...mergedData.families, ...payload.proposedFamilies };
+                    if (payload.relatedIndividuals) mergedData.individuals = { ...mergedData.individuals, ...payload.relatedIndividuals };
+                  } else if (payload.operation === 'delete_individual') {
+                    delete mergedData.individuals[payload.individualId];
+                    Object.values(mergedData.families).forEach((fam) => {
+                      if (fam.husbandId === payload.individualId) fam.husbandId = undefined;
+                      if (fam.wifeId === payload.individualId) fam.wifeId = undefined;
+                      fam.childrenIds = fam.childrenIds.filter((childId) => childId !== payload.individualId);
+                    });
+                  } else if (payload.operation === 'update_individual' && mergedData.individuals[payload.individualId]) {
+                    mergedData.individuals[payload.individualId] = {
+                      ...mergedData.individuals[payload.individualId],
+                      ...(payload.changeSet || {}),
+                    };
+                  }
+                  setOriginalGedcomData(mergedData);
+                  refreshFocusedIndividualsFromData(mergedData);
+                  setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+                  logP2PActivity('merge_apply.applied', 'individual', payload.individualId, payload.authorPeerId || 'remote');
+                  showTransientToast('success', 'Édition directe appliquée.', 1600);
               }
               if (data.type === 'INDIVIDUAL_DIFF_REQUEST' && data.payload) {
                   const payload = data.payload as IndividualDiffRequestPayload;
@@ -1578,6 +1886,15 @@ function App() {
                     remoteFingerprint?: string;
                     retryAfterReject?: boolean;
                   };
+                  const allowProposalInbound =
+                    p2pModeRef.current === 'host'
+                      ? (activeSessionPeerPolicyRef.current?.allowProposal ?? visibilitySettingsRef.current.allowProposal)
+                      : true;
+                  if (!allowProposalInbound) {
+                    logP2PActivity('proposal.rejected.policy', 'individual', payload.individualId || 'unknown', payload.authorPeerId || 'remote');
+                    showTransientToast('error', 'Proposition refusée par la politique active.', 1800);
+                    return;
+                  }
                   const individual = payload.individualId ? gedcomDataRef.current?.individuals[payload.individualId] : undefined;
                   const individualLabel = individual
                     ? (`${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id)
@@ -1648,6 +1965,18 @@ function App() {
       );
   };
 
+  const handleInitP2P = () => {
+      const shouldJoinInviteAsClient =
+        !!pendingInviteToken &&
+        !!pendingInviteHostPeerId &&
+        pendingInviteHostPeerId !== 'local-session';
+      if (shouldJoinInviteAsClient) {
+        initP2PWithMode('client', pendingInviteHostPeerId || undefined);
+        return;
+      }
+      initP2PWithMode('host');
+  };
+
   const handleConnectP2P = (hostId: string) => {
       const targetHostId = hostId.trim();
       if (!targetHostId) {
@@ -1674,7 +2003,7 @@ function App() {
       if (target !== displayMode) {
         // During intentional view switches, old canvases can emit context-lost
         // while unmounting. Ignore recovery in that short window to prevent flicker.
-        webglRecoverySuppressedUntilRef.current = Date.now() + 2500;
+        webglRecoverySuppressedUntilRef.current = Date.now() + 6000;
       }
 
       const wasIn2D = viewMode === '2D';
@@ -1707,10 +2036,11 @@ function App() {
 
   const handleWebGLContextLost = useCallback(() => {
     const now = Date.now();
+    if (syncReceivingInProgressRef.current || syncApplyingInProgressRef.current) return;
     if (now < webglRecoverySuppressedUntilRef.current) return;
     if (webglRecoveryInFlightRef.current) return;
     // Minimum cooldown between recoveries — long enough to prevent GPU storm loops.
-    if (now - webglLastRecoveryAtRef.current < 4000) return;
+    if (now - webglLastRecoveryAtRef.current < 10000) return;
 
     // Anti-storm: count consecutive recoveries within a 10 s window.
     // If ≥ 3 occur, force a 15 s backoff to prevent endless remount cycles.
@@ -1731,12 +2061,12 @@ function App() {
       window.clearTimeout(webglRecoveryTimerRef.current);
       webglRecoveryTimerRef.current = null;
     }
-    // 300 ms delay: give the GPU/driver time to stabilise before remounting.
+    // 600 ms delay: give the GPU/driver time to stabilise before remounting.
     webglRecoveryTimerRef.current = window.setTimeout(() => {
       setWebglRecoveryKey((prev) => prev + 1);
       webglRecoveryInFlightRef.current = false;
       webglRecoveryTimerRef.current = null;
-    }, 300);
+    }, 600);
   }, []);
 
   useEffect(() => {
@@ -1744,17 +2074,54 @@ function App() {
       if (webglRecoveryTimerRef.current !== null) {
         window.clearTimeout(webglRecoveryTimerRef.current);
       }
+      if (normalizeTimeoutRef.current !== null) {
+        window.clearTimeout(normalizeTimeoutRef.current);
+      }
+      if (normalizeIdleHandleRef.current !== null && 'cancelIdleCallback' in window) {
+        (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(normalizeIdleHandleRef.current);
+      }
     };
+  }, []);
+
+  const scheduleNormalization = useCallback((data: GedcomData, defer: boolean) => {
+    if (normalizeTimeoutRef.current !== null) {
+      window.clearTimeout(normalizeTimeoutRef.current);
+      normalizeTimeoutRef.current = null;
+    }
+    if (normalizeIdleHandleRef.current !== null && 'cancelIdleCallback' in window) {
+      (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(normalizeIdleHandleRef.current);
+      normalizeIdleHandleRef.current = null;
+    }
+
+    const run = () => {
+      const norm = normalizeGedcom(data);
+      setNormalizedGedcomData(norm);
+      normalizeIdleHandleRef.current = null;
+      normalizeTimeoutRef.current = null;
+    };
+
+    if (!defer) {
+      normalizeTimeoutRef.current = window.setTimeout(run, 50);
+      return;
+    }
+
+    const w = window as Window & {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      normalizeIdleHandleRef.current = w.requestIdleCallback(() => run(), { timeout: 2500 });
+    } else {
+      normalizeTimeoutRef.current = window.setTimeout(run, 1200);
+    }
   }, []);
 
   const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
     setOriginalGedcomData(data);
-    
-    // Calculate Normalization in background (simple approach here, could be worker)
-    setTimeout(() => {
-        const norm = normalizeGedcom(data);
-        setNormalizedGedcomData(norm);
-    }, 50);
+
+    const shouldDeferNormalization =
+      p2pModeRef.current === 'client' ||
+      Object.keys(data.individuals).length > 15000;
+    scheduleNormalization(data, shouldDeferNormalization);
 
     setDatabaseName(name);
     setDocumentsByIndividualId({});
@@ -1768,8 +2135,9 @@ function App() {
     // Default to Full Auto Layout for performance and complete view
     setAutoLayoutMode('all');
 
-    // Improved Selection Logic: Find the "Best" Candidate
-    // Priority: Youngest Descendant (Max Generation) -> Youngest Date -> Name
+    // Improved selection logic:
+    // 1) If we are in invite flow and target exists, focus invite target.
+    // 2) Otherwise fallback to best candidate (youngest descendant heuristic).
     const individuals = Object.values(data.individuals);
     let bestCandidate = individuals[0];
     
@@ -1790,25 +2158,34 @@ function App() {
         bestCandidate = sorted[0];
     }
 
-    if (bestCandidate) {
-      setRootIndividual(bestCandidate);
-      setSelectedIndividual(bestCandidate);
+    const inviteTarget =
+      pendingInviteTargetIndividualId && data.individuals[pendingInviteTargetIndividualId]
+        ? data.individuals[pendingInviteTargetIndividualId]
+        : null;
+    const initialFocus = inviteTarget || bestCandidate;
+
+    if (initialFocus) {
+      setRootIndividual(initialFocus);
+      setSelectedIndividual(initialFocus);
       setDisplayMode('2d-individual');
       setRightPanelOpen(true);
-      
-      // Clear 2D selection to show ALL individuals on load
+
+      // Keep "show all" behavior to avoid apparent partial loads.
       setSelectedIdsFor2D(new Set());
-      
+
       // Reset 3D extras
       setSceneExtras([]);
+      // Force Scene2DIndividual centering to avoid stale focus after sync.
+      setCenterRequest((prev) => prev + 1);
     }
 
     // Notify peer about local GEDCOM availability/state.
     if (p2pStatus === 'connected') {
       sendSessionState();
       if (p2pModeRef.current === 'host') {
+        const profile = activeSessionPeerPolicy || visibilitySettingsRef.current;
         p2pService.sendMessage('ACCESS_PROFILE_SET', {
-          profile: visibilitySettingsRef.current,
+          profile,
           fromPeerId: peerId || 'host',
         });
       }
@@ -2076,6 +2453,23 @@ function App() {
     }, 10);
 
     if (p2pStatus === 'connected') {
+      const canDirectEdit =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowDirectEdit ?? false)
+          : false;
+      const changeSet = buildIndividualChangeSet(previousIndi, newData.individuals[updatedIndi.id]);
+      if (canDirectEdit) {
+        p2pService.sendMessage('MERGE_APPLY', {
+          individualId: updatedIndi.id,
+          authorPeerId: peerId || 'client',
+          proposedAt: new Date().toISOString(),
+          operation: 'update_individual' as const,
+          proposedIndividual: newData.individuals[updatedIndi.id],
+          changeSet,
+        });
+        logP2PActivity('merge_apply.sent', 'individual', updatedIndi.id, peerId || 'client');
+        return;
+      }
       const allowProposal =
         p2pModeRef.current === 'client'
           ? (remoteAccessPolicy?.allowProposal ?? true)
@@ -2084,7 +2478,6 @@ function App() {
         alert(t('app.alerts.proposalsDisabledByPolicy'));
         return;
       }
-      const changeSet = buildIndividualChangeSet(previousIndi, newData.individuals[updatedIndi.id]);
       const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       p2pService.sendMessage('PROPOSAL_SUBMIT', {
         proposalId,
@@ -2307,29 +2700,68 @@ function App() {
     return changed;
   };
 
-  const handleCreateInvite = (
+  const handleCreateInvite = async (
     individualId: string,
-    role: 'viewer' | 'contributor' | 'editor',
+    role: P2PRole,
     expiresAt?: string
   ) => {
     if (!isIdentified) {
       alert(t('app.alerts.claimIdentityBeforeInvites'));
       return;
     }
+    if (!peerId) {
+      showTransientToast('error', 'Activez le P2P et attendez votre Peer ID avant de créer une invitation.', 2600);
+      return;
+    }
     const candidate = livingCandidates.find((c) => c.id === individualId);
     if (!candidate) return;
+    const inviteId = `inv-${individualId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const issuedAt = new Date().toISOString();
+    const accessProfile = buildAccessProfileFromRole(role);
+    const claims: InviteTokenClaims = {
+      inviteId,
+      sessionId: peerId,
+      role,
+      accessProfileId: `profile-${role}`,
+      targetIndividualId: individualId,
+      targetIndividualName: candidate.label,
+      issuedAt,
+      expiresAt,
+      nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    };
+    let token: string;
+    try {
+      token = await signInviteClaims(claims, getOrCreateInviteSecret());
+    } catch (error) {
+      console.error('Failed to sign invite token', error);
+      showTransientToast('error', 'Impossible de signer l’invitation.', 2200);
+      return;
+    }
+    const inviteLink = `${window.location.origin}${window.location.pathname}?g2invite=${encodeURIComponent(token)}`;
     const invite: P2PInviteItem = {
-      inviteId: `inv-${individualId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      inviteId,
       individualId,
       individualName: candidate.label,
       role,
       expiresAt,
       status: 'active',
       personalizedDefault: false,
-      createdAt: new Date().toISOString(),
+      createdAt: issuedAt,
+      token,
+      inviteLink,
+      accessProfile,
     };
     setP2PInvites((prev) => [invite, ...prev]);
     logP2PActivity('invite.created', 'invite', invite.inviteId);
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+      p2pService.sendMessage('INVITE_CREATE', {
+        invite,
+        token,
+        inviteLink,
+        fromPeerId: peerId || 'host',
+      });
+    }
+    showTransientToast('success', 'Invitation personnalisée créée.', 1800);
   };
 
   const handleRevokeInvite = (inviteId: string) => {
@@ -2339,6 +2771,52 @@ function App() {
       )
     );
     logP2PActivity('invite.revoked', 'invite', inviteId);
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+      p2pService.sendMessage('INVITE_REVOKE', {
+        inviteId,
+        revokedAt: new Date().toISOString(),
+        fromPeerId: peerId || 'host',
+      });
+    }
+  };
+
+  const handleAcceptInvite = (inviteId: string) => {
+    const invite = p2pInvites.find((item) => item.inviteId === inviteId);
+    if (!invite || invite.status !== 'active' || !invite.token) {
+      showTransientToast('error', 'Invitation non disponible.', 1800);
+      return;
+    }
+    if (p2pStatus !== 'connected' || p2pModeRef.current !== 'client') {
+      showTransientToast('error', 'Connexion P2P requise pour accepter.', 1800);
+      return;
+    }
+    if (invite.expiresAt && Date.now() > Date.parse(invite.expiresAt)) {
+      setP2PInvites((prev) =>
+        prev.map((item) => (item.inviteId === inviteId ? { ...item, status: 'expired' } : item))
+      );
+      showTransientToast('error', 'Invitation expirée.', 1800);
+      return;
+    }
+    p2pService.sendMessage('INVITE_ACCEPT', {
+      inviteId: invite.inviteId,
+      token: invite.token,
+      acceptedAt: new Date().toISOString(),
+      claimantPeerId: peerId || 'client',
+      claimantIndividualId: selfIdentity?.individualId,
+      claimantDeviceKeyId: selfIdentity?.deviceKeyId,
+    });
+    setPendingInviteToken(null);
+    setP2PInvites((prev) =>
+      prev.map((item) =>
+        item.inviteId === inviteId ? { ...item, status: 'accepted', personalizedDefault: false } : item
+      )
+    );
+    if (invite.individualId) {
+      setPendingInviteTargetIndividualId(invite.individualId);
+    }
+    setRemoteAccessPolicy(invite.accessProfile);
+    logP2PActivity('invite.accept.sent', 'invite', inviteId, peerId || 'client');
+    showTransientToast('success', 'Acceptation envoyée au généalogiste.', 1800);
   };
 
   const refreshFocusedIndividualsFromData = (data: GedcomData) => {
@@ -2874,6 +3352,32 @@ function App() {
           return !!before && JSON.stringify(before) !== JSON.stringify(indi);
         })
       ) as Record<string, Individual>;
+      const canDirectEdit =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowDirectEdit ?? false)
+          : false;
+      if (canDirectEdit) {
+        p2pService.sendMessage('MERGE_APPLY', {
+          operation: 'create_individual' as const,
+          individualId: createdIndi.id,
+          authorPeerId: peerId || 'peer',
+          proposedAt: new Date().toISOString(),
+          proposedIndividual: createdIndi,
+          proposedFamilies,
+          relatedIndividuals,
+          changeSet: createdIndi,
+        });
+        logP2PActivity('merge_apply.create.sent', 'individual', createdIndi.id, peerId || 'peer');
+        return;
+      }
+      const allowProposal =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowProposal ?? true)
+          : true;
+      if (!allowProposal) {
+        alert(t('app.alerts.proposalsDisabledByPolicy'));
+        return;
+      }
       const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       p2pService.sendMessage('PROPOSAL_SUBMIT', {
         proposalId,
@@ -2911,6 +3415,29 @@ function App() {
     });
 
     if (p2pStatus === 'connected') {
+      const canDirectEdit =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowDirectEdit ?? false)
+          : false;
+      if (canDirectEdit) {
+        p2pService.sendMessage('MERGE_APPLY', {
+          operation: 'delete_individual' as const,
+          individualId: id,
+          authorPeerId: peerId || 'peer',
+          proposedAt: new Date().toISOString(),
+          changeSet: {},
+        });
+        logP2PActivity('merge_apply.delete.sent', 'individual', id, peerId || 'peer');
+        return;
+      }
+      const allowProposal =
+        p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowProposal ?? true)
+          : true;
+      if (!allowProposal) {
+        alert(t('app.alerts.proposalsDisabledByPolicy'));
+        return;
+      }
       const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       p2pService.sendMessage('PROPOSAL_SUBMIT', {
         proposalId,
@@ -3480,6 +4007,7 @@ function App() {
         visibilitySettings={p2pVisibilitySettings}
         livingCandidates={livingCandidates}
         invites={p2pInvites}
+        pendingInviteToken={pendingInviteToken}
         pendingProposalsCount={pendingProposalsCount}
         syncStatusText={p2pSyncStatusText}
         initialCompareStatusText={initialCompareStatusText}
@@ -3487,6 +4015,7 @@ function App() {
         onChangeVisibilitySettings={setP2PVisibilitySettings}
         onCreateInvite={handleCreateInvite}
         onRevokeInvite={handleRevokeInvite}
+        onAcceptInvite={handleAcceptInvite}
         onReviewProposal={handleReviewProposal}
       />
 

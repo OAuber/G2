@@ -5,6 +5,8 @@ export interface InviteTokenClaims {
   sessionId: string;
   role: 'viewer' | 'contributor' | 'editor';
   accessProfileId: string;
+  targetIndividualId?: string;
+  targetIndividualName?: string;
   issuedAt: string;
   expiresAt?: string;
   nonce: string;

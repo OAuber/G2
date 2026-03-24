@@ -469,9 +469,10 @@ const CameraController: React.FC<{
 const RibbonPhotoOverlays3D: React.FC<{
   nodes: LayoutNode[];
   cameraMode: CameraMode;
+  fadedNodeIds?: string[];
   primaryPhotoUrlById?: Record<string, string>;
   documentsByIndividualId?: Record<string, Array<{ url: string; kind?: 'photo' | 'document'; isPrimaryPhoto?: boolean }>>;
-}> = ({ nodes, cameraMode, primaryPhotoUrlById, documentsByIndividualId }) => {
+}> = ({ nodes, cameraMode, fadedNodeIds, primaryPhotoUrlById, documentsByIndividualId }) => {
   const [planes, setPlanes] = useState<Array<{
     key: string;
     url: string;
@@ -589,7 +590,11 @@ const RibbonPhotoOverlays3D: React.FC<{
 
   return (
     <>
-      {planes.map((p) => (
+      {planes.map((p) => {
+        const shouldFadePhoto =
+          cameraMode === 'top' &&
+          (fadedNodeIds?.includes(p.key) ?? false);
+        return (
         <DreiImage
           key={`photo-3d-${p.key}`}
           url={p.url}
@@ -597,7 +602,7 @@ const RibbonPhotoOverlays3D: React.FC<{
           quaternion={p.quaternion}
           scale={p.scale}
           transparent
-          opacity={0.95}
+          opacity={shouldFadePhoto ? 0.8 : 0.95}
           depthWrite={false}
           side={2}
           renderOrder={-1}
@@ -613,7 +618,8 @@ const RibbonPhotoOverlays3D: React.FC<{
             }
           }}
         />
-      ))}
+        );
+      })}
     </>
   );
 };
@@ -681,6 +687,14 @@ const Scene3D: React.FC<Scene3DProps> = ({
   const [manualFocusGender, setManualFocusGender] = useState<Gender | null>(null);
   const [manualFocusKind, setManualFocusKind] = useState<'child' | 'mother' | null>(null);
   const [manualFocusNonce, setManualFocusNonce] = useState(0);
+  const [topFadedNodeIds, setTopFadedNodeIds] = useState<string[]>([]);
+  const handleTopViewFadedIdsChange = useCallback((ids: string[]) => {
+    const next = [...ids].sort();
+    setTopFadedNodeIds((prev) => {
+      if (prev.length === next.length && prev.every((id, idx) => id === next[idx])) return prev;
+      return next;
+    });
+  }, []);
 
   const centerTargetRef = useRef(new Vector3());
   const sceneSizeRef = useRef(100);
@@ -1129,6 +1143,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         <RibbonPhotoOverlays3D
             nodes={allLayoutNodes}
             cameraMode={cameraMode}
+            fadedNodeIds={topFadedNodeIds}
             primaryPhotoUrlById={primaryPhotoUrlById}
             documentsByIndividualId={documentsByIndividualId}
         />
@@ -1148,6 +1163,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
             showTopViewLabels={cameraMode === 'top'}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
+            onTopViewFadedIdsChange={handleTopViewFadedIdsChange}
         />
     </Canvas>
   );

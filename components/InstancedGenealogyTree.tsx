@@ -11,6 +11,8 @@ interface InstancedTreeProps {
   data: GedcomData | null;
   showBoxes?: boolean;
   selectedId?: string | null;
+  onTopViewHoverStateChange?: (state: { hoveredNameId: string | null; partnerIds: string[] }) => void;
+  onTopViewFadedIdsChange?: (ids: string[]) => void;
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
   onChildLabelClick?: (childId: string) => void;
@@ -63,6 +65,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   data, 
   showBoxes = true, 
   selectedId,
+  onTopViewHoverStateChange,
+  onTopViewFadedIdsChange,
   onNodeClick, 
   onTraitClick,
   onChildLabelClick,
@@ -266,6 +270,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       }
       return ids;
   }, [isTopViewActive, data, hoveredNameId, nodesMap]);
+  useEffect(() => {
+      onTopViewHoverStateChange?.({
+          hoveredNameId: isTopViewActive ? hoveredNameId : null,
+          partnerIds: isTopViewActive ? Array.from(hoveredNamePartnerIds) : [],
+      });
+  }, [onTopViewHoverStateChange, isTopViewActive, hoveredNameId, hoveredNamePartnerIds]);
   const cancelHoverHide = () => {
       if (hideHoverTimerRef.current !== null) {
           window.clearTimeout(hideHoverTimerRef.current);
@@ -573,16 +583,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     const pathAlpha = pathGeometry.getAttribute('aInstanceAlpha') as THREE.InstancedBufferAttribute | null;
     if (!boxAlpha || !pathAlpha) return;
     const hiddenAlpha = 0.06;
+    const fadedIds: string[] = [];
     for (let i = 0; i < nodes.length; i++) {
       const id = nodes[i].id;
       const shouldFade = isTopViewActive && hoveredNamePartnerIds.has(id) && id !== hoveredNameId;
       const a = shouldFade ? hiddenAlpha : 1;
       boxAlpha.setX(i, a);
       pathAlpha.setX(i, a);
+      if (shouldFade) fadedIds.push(id);
     }
     boxAlpha.needsUpdate = true;
     pathAlpha.needsUpdate = true;
-  }, [nodes, boxGeometry, pathGeometry, hoveredNameId, hoveredNamePartnerIds, isTopViewActive]);
+    onTopViewFadedIdsChange?.(fadedIds);
+  }, [nodes, boxGeometry, pathGeometry, hoveredNameId, hoveredNamePartnerIds, isTopViewActive, onTopViewFadedIdsChange]);
 
   const isConnectorOnPath = (parentId: string, childId: string, pathIds: Set<string>) => {
     // Normal case: connector parent <-> child is directly on the node path set
