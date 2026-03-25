@@ -198,6 +198,7 @@ function App() {
   const SYNC_CHUNK_SIZE = 12_000;
   const SYNC_CHUNK_SEND_DELAY_MS = 8;
   const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 45000;
+  const DOCUMENT_SYNC_CHUNK_SIZE = 48_000;
   const INITIAL_DIFF_BATCH_LIMIT = 300;
   const INITIAL_DIFF_MAX_RETRY = 1;
   const INITIAL_DIFF_REQUEST_TIMEOUT_MS = 12000;
@@ -281,8 +282,7 @@ function App() {
     const isPartial = mode === 'partial' && target !== 'documents' && !!target;
     const documentsPayload = isPartial ? { [target]: documents[target] || [] } : documents;
     const payloadStats = computeMediaStats(documentsPayload);
-    p2pService.sendMessage('DOCUMENTS_SYNC', {
-      documentsByIndividualId: documentsPayload,
+    const meta = {
       databaseName: databaseNameRef.current,
       authorPeerId: peerId || 'peer',
       updatedAt: new Date().toISOString(),
@@ -294,8 +294,54 @@ function App() {
       photoItemsInPayload: payloadStats.photoItems,
       documentItemsTotal: options?.totalDocumentItems,
       photoItemsTotal: options?.totalPhotoItems,
-    });
+    };
+    const serialized = JSON.stringify(documentsPayload);
+    if (serialized.length <= DOCUMENT_SYNC_CHUNK_SIZE) {
+      p2pService.sendMessage('DOCUMENTS_SYNC', {
+        ...meta,
+        documentsByIndividualId: documentsPayload,
+      });
+    } else {
+      const transferId = `docs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const totalChunks = Math.ceil(serialized.length / DOCUMENT_SYNC_CHUNK_SIZE);
+      for (let index = 0; index < totalChunks; index += 1) {
+        const chunk = serialized.slice(index * DOCUMENT_SYNC_CHUNK_SIZE, (index + 1) * DOCUMENT_SYNC_CHUNK_SIZE);
+        window.setTimeout(() => {
+          p2pService.sendMessage('DOCUMENTS_SYNC_CHUNK', {
+            transferId,
+            index,
+            totalChunks,
+            chunk,
+            ...meta,
+          });
+        }, index * 4);
+      }
+    }
     logP2PActivity(isPartial ? 'documents.sync.sent.partial' : 'documents.sync.sent.full', 'individual', target, peerId || 'peer');
+  };
+
+  const sendDocumentPatchToPeer = (
+    patch: {
+      operation: 'add' | 'update' | 'remove' | 'set_primary';
+      individualId: string;
+      doc?: IndividualDocument;
+      docId?: string;
+      patch?: Partial<IndividualDocument>;
+    }
+  ) => {
+    const allowDocuments =
+      p2pModeRef.current === 'client'
+        ? (remoteAccessPolicy?.allowDocuments ?? true)
+        : visibilitySettingsRef.current.allowDocuments;
+    if (!allowDocuments) return;
+    window.setTimeout(() => {
+      p2pService.sendMessage('DOCUMENT_PATCH', {
+        ...patch,
+        authorPeerId: peerId || 'peer',
+        updatedAt: new Date().toISOString(),
+      });
+    }, 0);
+    logP2PActivity('documents.patch.sent', 'individual', patch.individualId, peerId || 'peer');
   };
 
   const sendDocumentsSnapshotInBatches = (documents: Record<string, IndividualDocument[]>) => {
@@ -492,6 +538,22 @@ function App() {
     parts: string[];
     received: number;
   }>>({});
+  const incomingDocumentChunksRef = useRef<Record<string, {
+    totalChunks: number;
+    parts: string[];
+    received: number;
+    meta: {
+      authorPeerId?: string;
+      partial?: boolean;
+      scopeIndividualId?: string;
+      batchIndex?: number;
+      batchTotal?: number;
+      documentItemsInPayload?: number;
+      photoItemsInPayload?: number;
+      documentItemsTotal?: number;
+      photoItemsTotal?: number;
+    };
+  }>>({});
   const syncReceivingInProgressRef = useRef(false);
   const pendingIncomingDocumentsRef = useRef<Record<string, IndividualDocument[]> | null>(null);
   const initialDiffContextsRef = useRef<Record<string, InitialDiffContext>>({});
@@ -598,6 +660,7 @@ function App() {
       if (syncChunkReceiveTimeoutRef.current !== null) {
         window.clearTimeout(syncChunkReceiveTimeoutRef.current);
       }
+      incomingDocumentChunksRef.current = {};
       if (inviteDocsFlushTimerRef.current !== null) {
         window.clearTimeout(inviteDocsFlushTimerRef.current);
       }
@@ -705,6 +768,61 @@ function App() {
       return;
     }
     setDocumentsByIndividualId(docs);
+  };
+
+  const applyIncomingDocumentPatch = (payload: {
+    operation?: 'add' | 'update' | 'remove' | 'set_primary';
+    individualId?: string;
+    doc?: unknown;
+    docId?: string;
+    patch?: Record<string, unknown>;
+  }) => {
+    if (!payload.operation || !payload.individualId) return;
+    setDocumentsByIndividualId((prev) => {
+      const individualId = payload.individualId as string;
+      const current = prev[individualId] || [];
+      let next = current;
+      if (payload.operation === 'add' && payload.doc) {
+        const normalized = normalizeDocumentsByIndividual({ [individualId]: [payload.doc] })[individualId] || [];
+        const incoming = normalized[0];
+        if (!incoming) return prev;
+        const deduped = current.filter((d) => d.id !== incoming.id);
+        const shouldBecomePrimary = incoming.kind === 'photo' && !deduped.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
+        next = [...deduped, shouldBecomePrimary ? { ...incoming, isPrimaryPhoto: true } : incoming];
+      } else if (payload.operation === 'update' && payload.docId) {
+        next = current.map((doc) => {
+          if (doc.id !== payload.docId) return doc;
+          const patch = payload.patch || {};
+          const nextUrl = typeof patch.url === 'string' ? patch.url : doc.url;
+          const nextKind: 'photo' | 'document' =
+            patch.kind === 'photo' || patch.kind === 'document'
+              ? patch.kind
+              : ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
+          return {
+            ...doc,
+            ...patch,
+            kind: nextKind,
+            date: patch.date === '' ? undefined : (typeof patch.date === 'string' ? patch.date : doc.date),
+          };
+        });
+      } else if (payload.operation === 'remove' && payload.docId) {
+        next = current.filter((doc) => doc.id !== payload.docId);
+        if (!next.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+          const firstPhoto = next.find((d) => d.kind === 'photo');
+          if (firstPhoto) {
+            next = next.map((d) => (d.id === firstPhoto.id ? { ...d, isPrimaryPhoto: true } : d));
+          }
+        }
+      } else if (payload.operation === 'set_primary' && payload.docId) {
+        next = current.map((doc) =>
+          (doc.kind === 'photo' || isImageLikeUrl(doc.url))
+            ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === payload.docId }
+            : doc
+        );
+      }
+      if (next === current) return prev;
+      return { ...prev, [individualId]: next };
+    });
   };
 
   const showTransientToast = (
@@ -1542,6 +1660,84 @@ function App() {
               }
           },
           (data) => {
+              const processIncomingDocumentsPayload = (payload: {
+                documentsByIndividualId?: Record<string, unknown>;
+                authorPeerId?: string;
+                partial?: boolean;
+                scopeIndividualId?: string;
+                batchIndex?: number;
+                batchTotal?: number;
+                documentItemsInPayload?: number;
+                photoItemsInPayload?: number;
+                documentItemsTotal?: number;
+                photoItemsTotal?: number;
+              }) => {
+                const allowDocumentsInbound =
+                  p2pModeRef.current === 'client'
+                    ? (remoteAccessPolicy?.allowDocuments ?? true)
+                    : visibilitySettingsRef.current.allowDocuments;
+                if (!payload.documentsByIndividualId || !allowDocumentsInbound) return;
+                applyIncomingDocuments(payload.documentsByIndividualId, payload.partial === true);
+                logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
+                const isInitialInviteBatch = p2pModeRef.current === 'client' && !!payload.batchTotal && payload.batchTotal > 1;
+                if (!isInitialInviteBatch) {
+                  showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1500);
+                }
+                if (pendingInviteToken && p2pModeRef.current === 'client') {
+                  if (payload.partial) {
+                    const scope = payload.scopeIndividualId || `${payload.batchIndex || 0}`;
+                    if (!inviteReceivedDocumentScopesRef.current.has(scope)) {
+                      inviteReceivedDocumentScopesRef.current.add(scope);
+                      setInviteMediaProgress((prev) => ({
+                        receivedBatches: (prev?.receivedBatches || 0) + 1,
+                        totalBatches: payload.batchTotal || prev?.totalBatches || 0,
+                        receivedDocs: (prev?.receivedDocs || 0) + (payload.documentItemsInPayload || 0),
+                        totalDocs: payload.documentItemsTotal || prev?.totalDocs || 0,
+                        receivedPhotos: (prev?.receivedPhotos || 0) + (payload.photoItemsInPayload || 0),
+                        totalPhotos: payload.photoItemsTotal || prev?.totalPhotos || 0,
+                      }));
+                    }
+                  } else {
+                    setInviteMediaProgress({
+                      receivedBatches: payload.batchTotal || 1,
+                      totalBatches: payload.batchTotal || 1,
+                      receivedDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
+                      totalDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
+                      receivedPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
+                      totalPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
+                    });
+                  }
+                }
+                if (p2pModeRef.current === 'host') {
+                  const changedIndividualId = payload.scopeIndividualId
+                    || Object.keys(payload.documentsByIndividualId)[0]
+                    || 'unknown';
+                  const changedIndividual = gedcomDataRef.current?.individuals?.[changedIndividualId];
+                  const changedLabel = changedIndividual
+                    ? (`${changedIndividual.givenName || ''} ${changedIndividual.surname || ''}`.trim() || changedIndividual.name || changedIndividual.id)
+                    : changedIndividualId;
+                  const proposalId = `proposal-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                  setP2PProposals((prev) => [
+                    {
+                      proposalId,
+                      individualId: changedIndividualId,
+                      individualLabel: changedLabel,
+                      authorPeerId: payload.authorPeerId || 'remote',
+                      proposedAt: new Date().toISOString(),
+                      operation: 'update_individual' as const,
+                      changeSet: {},
+                      status: 'pending' as const,
+                      source: 'live' as const,
+                      proposalKind: 'documents' as const,
+                      scopeIndividualId: payload.scopeIndividualId,
+                      documentItemsDelta: payload.documentItemsInPayload || 0,
+                      photoItemsDelta: payload.photoItemsInPayload || 0,
+                    },
+                    ...prev,
+                  ].slice(0, 300));
+                  logP2PActivity('proposal.documents.received', 'individual', changedIndividualId, payload.authorPeerId || 'remote');
+                }
+              };
               if (data.type === 'SYNC_GEDCOM' && data.payload) {
                   if (p2pSessionUseCaseRef.current === 'compare') {
                     logP2PActivity('sync.ignored.compare_mode', 'session', 'remote');
@@ -1700,72 +1896,121 @@ function App() {
                     documentItemsTotal?: number;
                     photoItemsTotal?: number;
                   };
+                  processIncomingDocumentsPayload(payload);
+              }
+              if (data.type === 'DOCUMENTS_SYNC_CHUNK' && data.payload) {
+                  const payload = data.payload as {
+                    transferId?: string;
+                    index?: number;
+                    totalChunks?: number;
+                    chunk?: string;
+                    authorPeerId?: string;
+                    partial?: boolean;
+                    scopeIndividualId?: string;
+                    batchIndex?: number;
+                    batchTotal?: number;
+                    documentItemsInPayload?: number;
+                    photoItemsInPayload?: number;
+                    documentItemsTotal?: number;
+                    photoItemsTotal?: number;
+                  };
+                  if (
+                    !payload.transferId ||
+                    typeof payload.index !== 'number' ||
+                    typeof payload.totalChunks !== 'number' ||
+                    typeof payload.chunk !== 'string' ||
+                    payload.totalChunks <= 0 ||
+                    payload.index < 0
+                  ) return;
+                  const key = payload.transferId;
+                  if (!incomingDocumentChunksRef.current[key]) {
+                    incomingDocumentChunksRef.current[key] = {
+                      totalChunks: payload.totalChunks,
+                      parts: new Array(payload.totalChunks).fill(''),
+                      received: 0,
+                      meta: {
+                        authorPeerId: payload.authorPeerId,
+                        partial: payload.partial,
+                        scopeIndividualId: payload.scopeIndividualId,
+                        batchIndex: payload.batchIndex,
+                        batchTotal: payload.batchTotal,
+                        documentItemsInPayload: payload.documentItemsInPayload,
+                        photoItemsInPayload: payload.photoItemsInPayload,
+                        documentItemsTotal: payload.documentItemsTotal,
+                        photoItemsTotal: payload.photoItemsTotal,
+                      },
+                    };
+                  }
+                  const acc = incomingDocumentChunksRef.current[key];
+                  if (payload.index >= acc.totalChunks) return;
+                  if (!acc.parts[payload.index]) {
+                    acc.parts[payload.index] = payload.chunk;
+                    acc.received += 1;
+                  }
+                  if (acc.received >= acc.totalChunks) {
+                    const full = acc.parts.join('');
+                    const meta = acc.meta;
+                    delete incomingDocumentChunksRef.current[key];
+                    try {
+                      const parsedDocs = JSON.parse(full) as Record<string, unknown>;
+                      processIncomingDocumentsPayload({
+                        ...meta,
+                        documentsByIndividualId: parsedDocs,
+                      });
+                    } catch (error) {
+                      console.error('Failed to parse DOCUMENTS_SYNC_CHUNK payload', error);
+                    }
+                  }
+              }
+              if (data.type === 'DOCUMENT_PATCH' && data.payload) {
+                  const payload = data.payload as {
+                    operation?: 'add' | 'update' | 'remove' | 'set_primary';
+                    individualId?: string;
+                    doc?: unknown;
+                    docId?: string;
+                    patch?: Record<string, unknown>;
+                    authorPeerId?: string;
+                    updatedAt?: string;
+                  };
                   const allowDocumentsInbound =
                     p2pModeRef.current === 'client'
                       ? (remoteAccessPolicy?.allowDocuments ?? true)
                       : visibilitySettingsRef.current.allowDocuments;
-                  if (payload.documentsByIndividualId && allowDocumentsInbound) {
-                    applyIncomingDocuments(payload.documentsByIndividualId, payload.partial === true);
-                    logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
-                    const isInitialInviteBatch = p2pModeRef.current === 'client' && !!payload.batchTotal && payload.batchTotal > 1;
-                    if (!isInitialInviteBatch) {
-                      showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1500);
-                    }
-                    if (pendingInviteToken && p2pModeRef.current === 'client') {
-                      if (payload.partial) {
-                        const scope = payload.scopeIndividualId || `${payload.batchIndex || 0}`;
-                        if (!inviteReceivedDocumentScopesRef.current.has(scope)) {
-                          inviteReceivedDocumentScopesRef.current.add(scope);
-                          setInviteMediaProgress((prev) => ({
-                            receivedBatches: (prev?.receivedBatches || 0) + 1,
-                            totalBatches: payload.batchTotal || prev?.totalBatches || 0,
-                            receivedDocs: (prev?.receivedDocs || 0) + (payload.documentItemsInPayload || 0),
-                            totalDocs: payload.documentItemsTotal || prev?.totalDocs || 0,
-                            receivedPhotos: (prev?.receivedPhotos || 0) + (payload.photoItemsInPayload || 0),
-                            totalPhotos: payload.photoItemsTotal || prev?.totalPhotos || 0,
-                          }));
-                        }
-                      } else {
-                        setInviteMediaProgress({
-                          receivedBatches: payload.batchTotal || 1,
-                          totalBatches: payload.batchTotal || 1,
-                          receivedDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
-                          totalDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
-                          receivedPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
-                          totalPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
-                        });
-                      }
-                    }
-                    if (p2pModeRef.current === 'host') {
-                      const changedIndividualId = payload.scopeIndividualId
-                        || Object.keys(payload.documentsByIndividualId)[0]
-                        || 'unknown';
-                      const changedIndividual = gedcomDataRef.current?.individuals?.[changedIndividualId];
-                      const changedLabel = changedIndividual
-                        ? (`${changedIndividual.givenName || ''} ${changedIndividual.surname || ''}`.trim() || changedIndividual.name || changedIndividual.id)
-                        : changedIndividualId;
-                      const proposalId = `proposal-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                      setP2PProposals((prev) => [
-                        {
-                          proposalId,
-                          individualId: changedIndividualId,
-                          individualLabel: changedLabel,
-                          authorPeerId: payload.authorPeerId || 'remote',
-                          proposedAt: new Date().toISOString(),
-                          operation: 'update_individual' as const,
-                          changeSet: {},
-                          status: 'pending' as const,
-                          source: 'live' as const,
-                          proposalKind: 'documents' as const,
-                          scopeIndividualId: payload.scopeIndividualId,
-                          documentItemsDelta: payload.documentItemsInPayload || 0,
-                          photoItemsDelta: payload.photoItemsInPayload || 0,
-                        },
-                        ...prev,
-                      ].slice(0, 300));
-                      logP2PActivity('proposal.documents.received', 'individual', changedIndividualId, payload.authorPeerId || 'remote');
-                    }
+                  if (!allowDocumentsInbound) return;
+                  applyIncomingDocumentPatch(payload);
+                  const docsDelta =
+                    payload.operation === 'add' || payload.operation === 'update'
+                      ? 1
+                      : 0;
+                  const photoDelta =
+                    payload.operation === 'add' && payload.doc && normalizeDocumentsByIndividual({ x: [payload.doc] }).x?.[0]?.kind === 'photo'
+                      ? 1
+                      : 0;
+                  if (p2pModeRef.current === 'host' && payload.individualId) {
+                    const changedIndividual = gedcomDataRef.current?.individuals?.[payload.individualId];
+                    const changedLabel = changedIndividual
+                      ? (`${changedIndividual.givenName || ''} ${changedIndividual.surname || ''}`.trim() || changedIndividual.name || changedIndividual.id)
+                      : payload.individualId;
+                    setP2PProposals((prev) => [
+                      {
+                        proposalId: `proposal-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        individualId: payload.individualId!,
+                        individualLabel: changedLabel,
+                        authorPeerId: payload.authorPeerId || 'remote',
+                        proposedAt: payload.updatedAt || new Date().toISOString(),
+                        operation: 'update_individual' as const,
+                        changeSet: {},
+                        status: 'pending' as const,
+                        source: 'live' as const,
+                        proposalKind: 'documents' as const,
+                        scopeIndividualId: payload.individualId,
+                        documentItemsDelta: docsDelta,
+                        photoItemsDelta: photoDelta,
+                      },
+                      ...prev,
+                    ].slice(0, 300));
                   }
+                  showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1200);
               }
               if (data.type === 'SESSION_STATE' && data.payload) {
                   const payload = data.payload as {
@@ -3375,33 +3620,40 @@ function App() {
       kind: inferredKind,
       isPrimaryPhoto: false,
     };
-    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    let addedDoc: IndividualDocument | null = null;
     setDocumentsByIndividualId((prev) => {
       const current = prev[individualId] || [];
       const shouldBecomePrimary = newDoc.kind === 'photo' && !current.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
       const withPrimary = shouldBecomePrimary ? { ...newDoc, isPrimaryPhoto: true } : newDoc;
-      nextSnapshot = { ...prev, [individualId]: [...current, withPrimary] };
-      return nextSnapshot;
+      addedDoc = withPrimary;
+      return { ...prev, [individualId]: [...current, withPrimary] };
     });
-    sendDocumentsToPeer(nextSnapshot, individualId);
+    if (addedDoc) {
+      sendDocumentPatchToPeer({
+        operation: 'add',
+        individualId,
+        doc: addedDoc,
+      });
+    }
   };
 
   const handleRemoveDocument = (individualId: string, docId: string) => {
-    let nextSnapshot: Record<string, IndividualDocument[]> = {};
     setDocumentsByIndividualId((prev) => {
       const current = prev[individualId] || [];
       const next = current.filter((doc) => doc.id !== docId);
-      nextSnapshot = { ...prev, [individualId]: next };
-      return nextSnapshot;
+      return { ...prev, [individualId]: next };
     });
-    sendDocumentsToPeer(nextSnapshot, individualId);
+    sendDocumentPatchToPeer({
+      operation: 'remove',
+      individualId,
+      docId,
+    });
   };
 
   const handleSetPrimaryPhoto = (individualId: string, docId: string) => {
-    let nextSnapshot: Record<string, IndividualDocument[]> = {};
     setDocumentsByIndividualId((prev) => {
       const current = prev[individualId] || [];
-      nextSnapshot = {
+      return {
         ...prev,
         [individualId]: current.map((doc) =>
           (doc.kind === 'photo' || isImageLikeUrl(doc.url))
@@ -3409,9 +3661,12 @@ function App() {
             : doc
         ),
       };
-      return nextSnapshot;
     });
-    sendDocumentsToPeer(nextSnapshot, individualId);
+    sendDocumentPatchToPeer({
+      operation: 'set_primary',
+      individualId,
+      docId,
+    });
   };
 
   const handleUpdateDocument = (
@@ -3425,27 +3680,41 @@ function App() {
       date?: string;
     }
   ) => {
-    let nextSnapshot: Record<string, IndividualDocument[]> = {};
+    let patchToSend: Partial<IndividualDocument> | null = null;
     setDocumentsByIndividualId((prev) => {
       const current = prev[individualId] || [];
-      nextSnapshot = {
+      const next = {
         ...prev,
         [individualId]: current.map((doc) => {
           if (doc.id !== docId) return doc;
           const nextUrl = patch.url ?? doc.url;
           const nextKind: 'photo' | 'document' =
             patch.kind ?? ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
-          return {
+          const updated = {
             ...doc,
             ...patch,
             kind: nextKind,
             date: patch.date === '' ? undefined : (patch.date ?? doc.date),
           };
+          patchToSend = {
+            title: updated.title,
+            url: updated.url,
+            source: updated.source,
+            kind: updated.kind,
+            date: updated.date,
+            isPrimaryPhoto: updated.isPrimaryPhoto,
+          };
+          return updated;
         }),
       };
-      return nextSnapshot;
+      return next;
     });
-    sendDocumentsToPeer(nextSnapshot, individualId);
+    sendDocumentPatchToPeer({
+      operation: 'update',
+      individualId,
+      docId,
+      patch: patchToSend || patch,
+    });
   };
 
   // --- Creation, Linking & Deletion Logic ---

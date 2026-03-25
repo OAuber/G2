@@ -126,6 +126,47 @@ interface DetailsPanelProps {
 /* ------------------------------------------------------------------ */
 const MAX_RESULTS = 200;
 
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+const imageFileToOptimizedDataUrl = async (file: File): Promise<string> => {
+  if (!file.type.startsWith('image/')) return blobToDataUrl(file);
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return blobToDataUrl(file);
+  }
+  try {
+    const maxSide = 1600;
+    const longest = Math.max(bitmap.width, bitmap.height);
+    const ratio = longest > maxSide ? (maxSide / longest) : 1;
+    const width = Math.max(1, Math.round(bitmap.width * ratio));
+    const height = Math.max(1, Math.round(bitmap.height * ratio));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return blobToDataUrl(file);
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    const mimeType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, mimeType, mimeType === 'image/png' ? undefined : 0.82);
+    });
+    if (!blob) return blobToDataUrl(file);
+    // Keep original if optimization doesn't reduce size enough.
+    if (blob.size >= file.size * 0.95) return blobToDataUrl(file);
+    return blobToDataUrl(blob);
+  } finally {
+    bitmap.close();
+  }
+};
+
 interface SearchSelectProps {
   value: string;
   onChange: (id: string) => void;
@@ -337,6 +378,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     file: null,
   });
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [isSubmittingDocument, setIsSubmittingDocument] = useState(false);
   const [editingDocTitle, setEditingDocTitle] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
   const [identityCandidateId, setIdentityCandidateId] = useState('');
@@ -860,37 +902,40 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 />
                 <button
                   type="button"
-                  disabled={!docForm.title || (docForm.source === 'online' ? !docForm.url : !docForm.file)}
+                  disabled={isSubmittingDocument || !docForm.title || (docForm.source === 'online' ? !docForm.url : !docForm.file)}
                   className={`w-full py-2 rounded text-sm font-bold ${actionBtnClass} disabled:opacity-50`}
                   onClick={async () => {
                     if (!individual || !onAddDocument) return;
-                    let resolvedUrl = docForm.url;
-                    if (docForm.source === 'local') {
-                      if (!docForm.file) return;
-                      resolvedUrl = await new Promise<string>((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onload = () => resolve(String(reader.result || ''));
-                        reader.onerror = () => reject(reader.error);
-                        reader.readAsDataURL(docForm.file as Blob);
+                    setIsSubmittingDocument(true);
+                    try {
+                      let resolvedUrl = docForm.url;
+                      if (docForm.source === 'local') {
+                        if (!docForm.file) return;
+                        const shouldOptimize = docForm.kind === 'photo' || docForm.file.type.startsWith('image/');
+                        resolvedUrl = shouldOptimize
+                          ? await imageFileToOptimizedDataUrl(docForm.file)
+                          : await blobToDataUrl(docForm.file as Blob);
+                      }
+                      const inferredKind: 'photo' | 'document' =
+                        docForm.kind === 'photo' ||
+                        resolvedUrl.startsWith('data:image/') ||
+                        /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(resolvedUrl)
+                          ? 'photo'
+                          : 'document';
+                      onAddDocument(individual.id, {
+                        title: docForm.title,
+                        url: resolvedUrl,
+                        source: docForm.source,
+                        kind: inferredKind,
+                        date: docForm.date || undefined,
                       });
+                      setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', file: null });
+                    } finally {
+                      setIsSubmittingDocument(false);
                     }
-                    const inferredKind: 'photo' | 'document' =
-                      docForm.kind === 'photo' ||
-                      resolvedUrl.startsWith('data:image/') ||
-                      /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(resolvedUrl)
-                        ? 'photo'
-                        : 'document';
-                    onAddDocument(individual.id, {
-                      title: docForm.title,
-                      url: resolvedUrl,
-                      source: docForm.source,
-                      kind: inferredKind,
-                      date: docForm.date || undefined,
-                    });
-                    setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', file: null });
                   }}
                 >
-                  {t('details.addDocumentAction')}
+                  {isSubmittingDocument ? `${t('help.processing')}...` : t('details.addDocumentAction')}
                 </button>
               </div>
 

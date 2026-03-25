@@ -7,6 +7,7 @@ export interface InviteTokenClaims {
   accessProfileId: string;
   targetIndividualId?: string;
   targetIndividualName?: string;
+  inviterName?: string;
   issuedAt: string;
   expiresAt?: string;
   nonce: string;
