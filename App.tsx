@@ -130,6 +130,10 @@ function App() {
     remoteIndividualId?: string;
     remoteFingerprint?: string;
     retryAfterReject?: boolean;
+    proposalKind?: 'records' | 'documents';
+    scopeIndividualId?: string;
+    documentItemsDelta?: number;
+    photoItemsDelta?: number;
   };
 
   type IndividualDocument = {
@@ -241,27 +245,79 @@ function App() {
       }, index * SYNC_CHUNK_SEND_DELAY_MS);
     }
     if (Object.keys(documents).length > 0) {
-      sendDocumentsToPeer(documents, 'documents');
+      sendDocumentsSnapshotInBatches(documents);
     }
     logP2PActivity(source, 'session', peerId || 'host');
   };
 
+  const computeMediaStats = (documents: Record<string, IndividualDocument[]>) => {
+    let documentItems = 0;
+    let photoItems = 0;
+    for (const docs of Object.values(documents)) {
+      for (const doc of docs || []) {
+        if (doc.kind === 'photo' || doc.url.startsWith('data:image/')) photoItems += 1;
+        else documentItems += 1;
+      }
+    }
+    return { documentItems, photoItems };
+  };
+
   const sendDocumentsToPeer = (
     documents: Record<string, IndividualDocument[]>,
-    target: string = selectedIndividual?.id || 'documents'
+    target: string = selectedIndividual?.id || 'documents',
+    mode: 'full' | 'partial' = 'partial',
+    options?: {
+      batchIndex?: number;
+      batchTotal?: number;
+      totalDocumentItems?: number;
+      totalPhotoItems?: number;
+    }
   ) => {
     const allowDocuments =
       p2pModeRef.current === 'client'
         ? (remoteAccessPolicy?.allowDocuments ?? true)
         : visibilitySettingsRef.current.allowDocuments;
     if (!allowDocuments) return;
+    const isPartial = mode === 'partial' && target !== 'documents' && !!target;
+    const documentsPayload = isPartial ? { [target]: documents[target] || [] } : documents;
+    const payloadStats = computeMediaStats(documentsPayload);
     p2pService.sendMessage('DOCUMENTS_SYNC', {
-      documentsByIndividualId: documents,
+      documentsByIndividualId: documentsPayload,
       databaseName: databaseNameRef.current,
       authorPeerId: peerId || 'peer',
       updatedAt: new Date().toISOString(),
+      partial: isPartial,
+      scopeIndividualId: isPartial ? target : undefined,
+      batchIndex: options?.batchIndex,
+      batchTotal: options?.batchTotal,
+      documentItemsInPayload: payloadStats.documentItems,
+      photoItemsInPayload: payloadStats.photoItems,
+      documentItemsTotal: options?.totalDocumentItems,
+      photoItemsTotal: options?.totalPhotoItems,
     });
-    logP2PActivity('documents.sync.sent', 'individual', target, peerId || 'peer');
+    logP2PActivity(isPartial ? 'documents.sync.sent.partial' : 'documents.sync.sent.full', 'individual', target, peerId || 'peer');
+  };
+
+  const sendDocumentsSnapshotInBatches = (documents: Record<string, IndividualDocument[]>) => {
+    const entries = Object.entries(documents);
+    if (entries.length === 0) return;
+    const stats = computeMediaStats(documents);
+    const total = entries.length;
+    entries.forEach(([individualId], index) => {
+      window.setTimeout(() => {
+        sendDocumentsToPeer(
+          documents,
+          individualId,
+          'partial',
+          {
+            batchIndex: index + 1,
+            batchTotal: total,
+            totalDocumentItems: stats.documentItems,
+            totalPhotoItems: stats.photoItems,
+          }
+        );
+      }, index * 8);
+    });
   };
 
   const [originalGedcomData, setOriginalGedcomData] = useState<GedcomData | null>(null);
@@ -346,6 +402,7 @@ function App() {
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
   const [webglRecoveryKey, setWebglRecoveryKey] = useState(0);
   const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
+  const [remoteIdentityClaimsByIndividualId, setRemoteIdentityClaimsByIndividualId] = useState<Record<string, { claimedAt: string; actorPeerId: string }>>({});
   const [selfIdentity, setSelfIdentity] = useState<SelfIdentityPublic | null>(() => {
     try {
       const raw = localStorage.getItem(SELF_IDENTITY_STORAGE_KEY);
@@ -375,9 +432,30 @@ function App() {
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
-  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(null);
+  const readInviteTokenFromLocation = (): string | null => {
+    const search = new URLSearchParams(window.location.search);
+    const fromQuery = search.get('g2invite');
+    if (fromQuery) return fromQuery;
+    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+    if (!hash) return null;
+    const hashParams = new URLSearchParams(hash);
+    return hashParams.get('g2invite');
+  };
+
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => readInviteTokenFromLocation());
   const [pendingInviteHostPeerId, setPendingInviteHostPeerId] = useState<string | null>(null);
   const [pendingInviteTargetIndividualId, setPendingInviteTargetIndividualId] = useState<string | null>(null);
+  const [pendingInviteInviterName, setPendingInviteInviterName] = useState<string | null>(null);
+  const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(null);
+  const [inviteOnboardingStage, setInviteOnboardingStage] = useState<'idle' | 'connecting' | 'connected' | 'accepted' | 'syncing' | 'completed' | 'ready' | 'error'>('idle');
+  const [inviteMediaProgress, setInviteMediaProgress] = useState<{
+    receivedBatches: number;
+    totalBatches: number;
+    receivedDocs: number;
+    totalDocs: number;
+    receivedPhotos: number;
+    totalPhotos: number;
+  } | null>(null);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
     exposeDates: true,
@@ -430,11 +508,17 @@ function App() {
   const syncApplyingInProgressRef = useRef(false);
   const normalizeTimeoutRef = useRef<number | null>(null);
   const normalizeIdleHandleRef = useRef<number | null>(null);
+  const inviteAcceptRequestedRef = useRef(false);
+  const inviteOnboardingDismissTimerRef = useRef<number | null>(null);
+  const inviteReceivedDocumentScopesRef = useRef<Set<string>>(new Set());
+  const inviteDocsFlushTimerRef = useRef<number | null>(null);
+  const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
+  useEffect(() => { inviteOnboardingStageRef.current = inviteOnboardingStage; }, [inviteOnboardingStage]);
   useEffect(() => { p2pInvitesRef.current = p2pInvites; }, [p2pInvites]);
   useEffect(() => { activeSessionPeerPolicyRef.current = activeSessionPeerPolicy; }, [activeSessionPeerPolicy]);
   useEffect(() => { originalGedcomDataRef.current = originalGedcomData; }, [originalGedcomData]);
@@ -514,6 +598,9 @@ function App() {
       if (syncChunkReceiveTimeoutRef.current !== null) {
         window.clearTimeout(syncChunkReceiveTimeoutRef.current);
       }
+      if (inviteDocsFlushTimerRef.current !== null) {
+        window.clearTimeout(inviteDocsFlushTimerRef.current);
+      }
       Object.values(initialDiffTimeoutHandlesRef.current).forEach((handle) => {
         window.clearTimeout(handle);
       });
@@ -585,10 +672,36 @@ function App() {
     }, SYNC_CHUNK_RECEIVE_TIMEOUT_MS);
   };
 
-  const applyIncomingDocuments = (documentsRaw: Record<string, unknown>) => {
+  const applyIncomingDocuments = (documentsRaw: Record<string, unknown>, merge: boolean = false) => {
     const docs = normalizeDocumentsByIndividual(documentsRaw);
     if (syncReceivingInProgressRef.current) {
-      pendingIncomingDocumentsRef.current = docs;
+      pendingIncomingDocumentsRef.current = merge && pendingIncomingDocumentsRef.current
+        ? { ...pendingIncomingDocumentsRef.current, ...docs }
+        : docs;
+      return;
+    }
+    const shouldBufferForInvite =
+      merge &&
+      p2pModeRef.current === 'client' &&
+      !!pendingInviteToken &&
+      inviteOnboardingStageRef.current !== 'ready';
+    if (shouldBufferForInvite) {
+      pendingIncomingDocumentsRef.current = pendingIncomingDocumentsRef.current
+        ? { ...pendingIncomingDocumentsRef.current, ...docs }
+        : docs;
+      if (inviteDocsFlushTimerRef.current !== null) {
+        window.clearTimeout(inviteDocsFlushTimerRef.current);
+      }
+      inviteDocsFlushTimerRef.current = window.setTimeout(() => {
+        inviteDocsFlushTimerRef.current = null;
+        if (!pendingIncomingDocumentsRef.current) return;
+        setDocumentsByIndividualId((prev) => ({ ...prev, ...pendingIncomingDocumentsRef.current! }));
+        pendingIncomingDocumentsRef.current = null;
+      }, 180);
+      return;
+    }
+    if (merge) {
+      setDocumentsByIndividualId((prev) => ({ ...prev, ...docs }));
       return;
     }
     setDocumentsByIndividualId(docs);
@@ -604,6 +717,39 @@ function App() {
       window.clearTimeout(bundleToastTimeoutRef.current);
     }
     bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), durationMs);
+  };
+
+  const completeInviteOnboarding = () => {
+    if (!pendingInviteToken) return;
+    if (inviteDocsFlushTimerRef.current !== null) {
+      window.clearTimeout(inviteDocsFlushTimerRef.current);
+      inviteDocsFlushTimerRef.current = null;
+    }
+    if (pendingIncomingDocumentsRef.current) {
+      setDocumentsByIndividualId((prev) => ({ ...prev, ...pendingIncomingDocumentsRef.current! }));
+      pendingIncomingDocumentsRef.current = null;
+    }
+    const targetId = pendingInviteTargetIndividualId;
+    if (targetId && gedcomDataRef.current?.individuals[targetId]) {
+      const target = gedcomDataRef.current.individuals[targetId];
+      setRootIndividual(target);
+      setSelectedIndividual(target);
+      setDisplayMode('2d-individual');
+      setCenterRequest((prev) => prev + 1);
+    }
+    setInviteOnboardingStage('completed');
+    setLeftPanelOpen(true);
+    setRightPanelOpen(true);
+    setIsIdentifyingSelf(true);
+    setIdentityTabSignal((prev) => prev + 1);
+    if (inviteOnboardingDismissTimerRef.current !== null) {
+      window.clearTimeout(inviteOnboardingDismissTimerRef.current);
+    }
+    inviteOnboardingDismissTimerRef.current = window.setTimeout(() => {
+      setInviteOnboardingStage('ready');
+      setPendingInviteToken(null);
+      inviteOnboardingDismissTimerRef.current = null;
+    }, 1200);
   };
 
   const getOrCreateInviteSecret = (): string => {
@@ -624,7 +770,7 @@ function App() {
         exposeDates: true,
         exposePlaces: false,
         exposeNotes: false,
-        allowDocuments: false,
+        allowDocuments: true,
         allowDownload: false,
         allowProposal: false,
         allowDirectEdit: false,
@@ -1120,6 +1266,62 @@ function App() {
     () => p2pProposals.find((proposal) => proposal.proposalId === activeReviewProposalId) || null,
     [p2pProposals, activeReviewProposalId]
   );
+  const pendingInviteItem = useMemo(
+    () => p2pInvites.find((invite) => invite.token === pendingInviteToken) || null,
+    [p2pInvites, pendingInviteToken]
+  );
+  const pendingInviteRoleLabel = useMemo(() => {
+    if (!pendingInviteRole) return '';
+    if (pendingInviteRole === 'viewer') return t('topPanel.inviteActionView');
+    if (pendingInviteRole === 'contributor') return t('topPanel.inviteActionContribute');
+    return t('topPanel.inviteActionEdit');
+  }, [pendingInviteRole, t]);
+  const isInviteLandingActive = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
+  const inviteLandingDescription = useMemo(() => {
+    const template = t('topPanel.inviteLandingText');
+    const inviter = pendingInviteInviterName || 'Un généalogiste';
+    const action = pendingInviteRoleLabel || 'consulter';
+    return template.replace('{{inviter}}', inviter).replace('{{action}}', action);
+  }, [pendingInviteInviterName, pendingInviteRoleLabel, t]);
+  const inviteLandingStatusLabel = useMemo(() => {
+    if (inviteOnboardingStage === 'connecting') return t('topPanel.inviteLandingConnecting');
+    if (inviteOnboardingStage === 'connected') return t('topPanel.inviteLandingConnected');
+    if (inviteOnboardingStage === 'accepted') return t('topPanel.inviteLandingAccepted');
+    if (inviteOnboardingStage === 'syncing') return t('topPanel.inviteLandingSyncing');
+    if (inviteOnboardingStage === 'error') return t('topPanel.inviteLandingError');
+    if (inviteOnboardingStage === 'completed') return t('topPanel.inviteLandingCompleted');
+    return t('topPanel.inviteLandingWaiting');
+  }, [inviteOnboardingStage, t]);
+  const inviteLandingMediaLabel = useMemo(() => {
+    if (!inviteMediaProgress) return null;
+    const batchPart = inviteMediaProgress.totalBatches > 0
+      ? `${inviteMediaProgress.receivedBatches}/${inviteMediaProgress.totalBatches}`
+      : `${inviteMediaProgress.receivedBatches}`;
+    const docsPart = inviteMediaProgress.totalDocs > 0
+      ? `${inviteMediaProgress.receivedDocs}/${inviteMediaProgress.totalDocs}`
+      : `${inviteMediaProgress.receivedDocs}`;
+    const photosPart = inviteMediaProgress.totalPhotos > 0
+      ? `${inviteMediaProgress.receivedPhotos}/${inviteMediaProgress.totalPhotos}`
+      : `${inviteMediaProgress.receivedPhotos}`;
+    return `${t('topPanel.inviteLandingMediaBatches')} ${batchPart} | ${t('topPanel.inviteLandingMediaDocuments')} ${docsPart} | ${t('topPanel.inviteLandingMediaPhotos')} ${photosPart}`;
+  }, [inviteMediaProgress, t]);
+  const formatSyncStatusLabel = useCallback((raw: string | null): string => {
+    if (!raw) return '';
+    const sendingMatch = raw.match(/^sending\s+(\d+)\/(\d+)$/i);
+    if (sendingMatch) return `${t('topPanel.syncStatusSending')} ${sendingMatch[1]}/${sendingMatch[2]}`;
+    const receivingMatch = raw.match(/^receiving\s+(\d+)\/(\d+)$/i);
+    if (receivingMatch) return `${t('topPanel.syncStatusReceiving')} ${receivingMatch[1]}/${receivingMatch[2]}`;
+
+    const normalized = raw.toLowerCase().trim();
+    if (normalized === 'waiting apply') return t('topPanel.syncStatusWaitingApply');
+    if (normalized === 'applying') return t('topPanel.syncStatusApplying');
+    if (normalized === 'done') return t('topPanel.syncStatusDone');
+    if (normalized === 'retry requested') return t('topPanel.syncStatusRetryRequested');
+    if (normalized === 'peer requested retry') return t('topPanel.syncStatusPeerRequestedRetry');
+    if (normalized === 'share started') return t('topPanel.syncStatusShareStarted');
+    if (normalized === 'parse error') return t('topPanel.syncStatusParseError');
+    return raw;
+  }, [t]);
   const selectedIndividualDocuments = useMemo(
     () => (selectedIndividual ? (documentsByIndividualId[selectedIndividual.id] || []) : []),
     [documentsByIndividualId, selectedIndividual]
@@ -1161,30 +1363,42 @@ function App() {
   }, [pendingInviteTargetIndividualId, gedcomData]);
 
   useEffect(() => {
-    if (!pendingInviteToken || !pendingInviteHostPeerId) return;
-    if (p2pStatus !== 'disconnected') return;
-    if (inviteAutoConnectAttemptedRef.current) return;
-    initP2PWithMode('client', pendingInviteHostPeerId);
-  }, [pendingInviteToken, pendingInviteHostPeerId, p2pStatus]);
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage === 'ready') return;
+    if (p2pStatus === 'connected') {
+      setInviteOnboardingStage((prev) => (prev === 'ready' ? prev : 'connected'));
+    } else if (p2pStatus === 'connecting') {
+      setInviteOnboardingStage((prev) => (prev === 'accepted' || prev === 'syncing' || prev === 'ready' ? prev : 'connecting'));
+    } else if (p2pStatus === 'error') {
+      setInviteOnboardingStage('error');
+    }
+  }, [pendingInviteToken, inviteOnboardingStage, p2pStatus]);
 
   useEffect(() => {
-    if (!pendingInviteToken || !pendingInviteHostPeerId) return;
-    if (p2pStatus !== 'disconnected') return;
-    if (inviteAutoConnectAttemptedRef.current) return;
-    initP2PWithMode('client', pendingInviteHostPeerId);
-  }, [pendingInviteToken, pendingInviteHostPeerId, p2pStatus]);
+    if (!pendingInviteToken) return;
+    if (!inviteAcceptRequestedRef.current) return;
+    if (p2pStatus !== 'connected' || p2pModeRef.current !== 'client') return;
+    if (!pendingInviteItem || pendingInviteItem.status !== 'active') return;
+    handleAcceptInvite(pendingInviteItem.inviteId);
+  }, [pendingInviteToken, p2pStatus, pendingInviteItem]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const inviteToken = params.get('g2invite');
+    const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+    const hashParams = new URLSearchParams(hashRaw);
+    const inviteToken = params.get('g2invite') || hashParams.get('g2invite');
     if (!inviteToken) return;
     setPendingInviteToken(inviteToken);
+    inviteAcceptRequestedRef.current = false;
     const claims = parseInviteClaimsUnsafe(inviteToken);
     if (!claims) return;
     if (claims.sessionId && claims.sessionId !== 'local-session') {
       setPendingInviteHostPeerId(claims.sessionId);
       inviteAutoConnectAttemptedRef.current = false;
     }
+    setPendingInviteRole(claims.role);
+    setPendingInviteInviterName(claims.inviterName || null);
+    setInviteOnboardingStage('idle');
     if (claims.targetIndividualId) {
       setPendingInviteTargetIndividualId(claims.targetIndividualId);
     }
@@ -1201,12 +1415,21 @@ function App() {
           createdAt: claims.issuedAt,
           expiresAt: claims.expiresAt,
           token: inviteToken,
-          inviteLink: `${window.location.origin}${window.location.pathname}?g2invite=${encodeURIComponent(inviteToken)}`,
+          inviteLink: `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(claims.inviterName || 'invitant')}&invite_to=${encodeURIComponent(claims.targetIndividualName || 'invite')}&invite_role=${encodeURIComponent(claims.role)}#g2invite=${encodeURIComponent(inviteToken)}`,
           accessProfile: buildAccessProfileFromRole(claims.role),
         },
         ...prev,
       ];
     });
+    params.delete('g2invite');
+    params.delete('invite_from');
+    params.delete('invite_to');
+    params.delete('invite_role');
+    const nextQuery = params.toString();
+    hashParams.delete('g2invite');
+    const nextHash = hashParams.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${nextHash ? `#${nextHash}` : ''}`;
+    window.history.replaceState(null, '', nextUrl);
   }, []);
 
   useEffect(() => {
@@ -1355,14 +1578,17 @@ function App() {
                         ? (remoteAccessPolicy?.allowDocuments ?? true)
                         : visibilitySettingsRef.current.allowDocuments;
                     if (allowDocumentsInbound) {
-                      setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                      setDocumentsByIndividualId((prev) => ({ ...prev, ...pendingIncomingDocumentsRef.current! }));
                     }
                     pendingIncomingDocumentsRef.current = null;
                   }
                   setP2PSyncStatusText('done');
                   window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                   logP2PActivity('sync.received', 'session', 'remote');
-                  alert(t('app.alerts.synchronizedWithPeer'));
+                  completeInviteOnboarding();
+                  if (!pendingInviteToken) {
+                    showTransientToast('success', t('app.alerts.synchronizedWithPeer'), 1600);
+                  }
               }
               if (data.type === 'SYNC_GEDCOM_CHUNK' && data.payload) {
                   if (p2pSessionUseCaseRef.current === 'compare') {
@@ -1385,6 +1611,9 @@ function App() {
                   ) return;
 
                   syncReceivingInProgressRef.current = true;
+                  if (pendingInviteToken && inviteOnboardingStage !== 'ready') {
+                    setInviteOnboardingStage('syncing');
+                  }
                   resetIncomingSyncTimeout();
                   const key = payload.transferId;
                   const existing = incomingSyncChunksRef.current[key];
@@ -1425,7 +1654,7 @@ function App() {
                             ? (remoteAccessPolicy?.allowDocuments ?? true)
                             : visibilitySettingsRef.current.allowDocuments;
                         if (allowDocumentsInbound) {
-                          setDocumentsByIndividualId(pendingIncomingDocumentsRef.current);
+                          setDocumentsByIndividualId((prev) => ({ ...prev, ...pendingIncomingDocumentsRef.current! }));
                         }
                         pendingIncomingDocumentsRef.current = null;
                       }
@@ -1435,13 +1664,20 @@ function App() {
                         syncApplyingInProgressRef.current = false;
                       }, 2000);
                       logP2PActivity('sync.received', 'session', 'remote');
-                      alert(t('app.alerts.synchronizedWithPeer'));
+                      completeInviteOnboarding();
+                      if (!pendingInviteToken) {
+                        showTransientToast('success', t('app.alerts.synchronizedWithPeer'), 1600);
+                      }
                     } catch (error) {
                       console.error('Failed to parse chunked GEDCOM sync', error);
                       logP2PActivity('sync.parse.error', 'session', 'remote');
                       setP2PSyncStatusText('parse error');
                       syncApplyingInProgressRef.current = false;
-                      alert(t('app.alerts.syncFailedLargeGedcom'));
+                      if (pendingInviteToken) {
+                        setInviteOnboardingStage('error');
+                      } else {
+                        showTransientToast('error', t('app.alerts.syncFailedLargeGedcom'), 2200);
+                      }
                     }
                   }
               }
@@ -1455,14 +1691,80 @@ function App() {
                   const payload = data.payload as {
                     documentsByIndividualId?: Record<string, unknown>;
                     authorPeerId?: string;
+                    partial?: boolean;
+                    scopeIndividualId?: string;
+                    batchIndex?: number;
+                    batchTotal?: number;
+                    documentItemsInPayload?: number;
+                    photoItemsInPayload?: number;
+                    documentItemsTotal?: number;
+                    photoItemsTotal?: number;
                   };
                   const allowDocumentsInbound =
                     p2pModeRef.current === 'client'
                       ? (remoteAccessPolicy?.allowDocuments ?? true)
                       : visibilitySettingsRef.current.allowDocuments;
                   if (payload.documentsByIndividualId && allowDocumentsInbound) {
-                    applyIncomingDocuments(payload.documentsByIndividualId);
+                    applyIncomingDocuments(payload.documentsByIndividualId, payload.partial === true);
                     logP2PActivity('documents.sync.received', 'session', payload.authorPeerId || 'remote', payload.authorPeerId || 'remote');
+                    const isInitialInviteBatch = p2pModeRef.current === 'client' && !!payload.batchTotal && payload.batchTotal > 1;
+                    if (!isInitialInviteBatch) {
+                      showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1500);
+                    }
+                    if (pendingInviteToken && p2pModeRef.current === 'client') {
+                      if (payload.partial) {
+                        const scope = payload.scopeIndividualId || `${payload.batchIndex || 0}`;
+                        if (!inviteReceivedDocumentScopesRef.current.has(scope)) {
+                          inviteReceivedDocumentScopesRef.current.add(scope);
+                          setInviteMediaProgress((prev) => ({
+                            receivedBatches: (prev?.receivedBatches || 0) + 1,
+                            totalBatches: payload.batchTotal || prev?.totalBatches || 0,
+                            receivedDocs: (prev?.receivedDocs || 0) + (payload.documentItemsInPayload || 0),
+                            totalDocs: payload.documentItemsTotal || prev?.totalDocs || 0,
+                            receivedPhotos: (prev?.receivedPhotos || 0) + (payload.photoItemsInPayload || 0),
+                            totalPhotos: payload.photoItemsTotal || prev?.totalPhotos || 0,
+                          }));
+                        }
+                      } else {
+                        setInviteMediaProgress({
+                          receivedBatches: payload.batchTotal || 1,
+                          totalBatches: payload.batchTotal || 1,
+                          receivedDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
+                          totalDocs: payload.documentItemsTotal || payload.documentItemsInPayload || 0,
+                          receivedPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
+                          totalPhotos: payload.photoItemsTotal || payload.photoItemsInPayload || 0,
+                        });
+                      }
+                    }
+                    if (p2pModeRef.current === 'host') {
+                      const changedIndividualId = payload.scopeIndividualId
+                        || Object.keys(payload.documentsByIndividualId)[0]
+                        || 'unknown';
+                      const changedIndividual = gedcomDataRef.current?.individuals?.[changedIndividualId];
+                      const changedLabel = changedIndividual
+                        ? (`${changedIndividual.givenName || ''} ${changedIndividual.surname || ''}`.trim() || changedIndividual.name || changedIndividual.id)
+                        : changedIndividualId;
+                      const proposalId = `proposal-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                      setP2PProposals((prev) => [
+                        {
+                          proposalId,
+                          individualId: changedIndividualId,
+                          individualLabel: changedLabel,
+                          authorPeerId: payload.authorPeerId || 'remote',
+                          proposedAt: new Date().toISOString(),
+                          operation: 'update_individual' as const,
+                          changeSet: {},
+                          status: 'pending' as const,
+                          source: 'live' as const,
+                          proposalKind: 'documents' as const,
+                          scopeIndividualId: payload.scopeIndividualId,
+                          documentItemsDelta: payload.documentItemsInPayload || 0,
+                          photoItemsDelta: payload.photoItemsInPayload || 0,
+                        },
+                        ...prev,
+                      ].slice(0, 300));
+                      logP2PActivity('proposal.documents.received', 'individual', changedIndividualId, payload.authorPeerId || 'remote');
+                    }
                   }
               }
               if (data.type === 'SESSION_STATE' && data.payload) {
@@ -1885,6 +2187,10 @@ function App() {
                     remoteIndividualId?: string;
                     remoteFingerprint?: string;
                     retryAfterReject?: boolean;
+                    proposalKind?: 'records' | 'documents';
+                    scopeIndividualId?: string;
+                    documentItemsDelta?: number;
+                    photoItemsDelta?: number;
                   };
                   const allowProposalInbound =
                     p2pModeRef.current === 'host'
@@ -1923,6 +2229,10 @@ function App() {
                       remoteIndividualId: payload.remoteIndividualId,
                       remoteFingerprint: payload.remoteFingerprint,
                       retryAfterReject: payload.retryAfterReject,
+                      proposalKind: payload.proposalKind || 'records',
+                      scopeIndividualId: payload.scopeIndividualId,
+                      documentItemsDelta: payload.documentItemsDelta,
+                      photoItemsDelta: payload.photoItemsDelta,
                     },
                     ...prev,
                   ].slice(0, 300));
@@ -1956,9 +2266,24 @@ function App() {
                   }
               }
               if (data.type === 'ACTIVITY_EVENT' && data.payload) {
-                  const payload = data.payload as { eventType?: string; targetType?: ActivityLogEvent['targetType']; targetId?: string; actorPeerId?: string };
+                  const payload = data.payload as {
+                    eventType?: string;
+                    targetType?: ActivityLogEvent['targetType'];
+                    targetId?: string;
+                    actorPeerId?: string;
+                    timestamp?: string;
+                  };
                   if (payload.eventType && payload.targetType && payload.targetId) {
                     logP2PActivity(payload.eventType, payload.targetType, payload.targetId, payload.actorPeerId || 'remote');
+                    if (payload.eventType === 'identity.claimed' && payload.targetType === 'individual') {
+                      setRemoteIdentityClaimsByIndividualId((prev) => ({
+                        ...prev,
+                        [payload.targetId!]: {
+                          claimedAt: payload.timestamp || new Date().toISOString(),
+                          actorPeerId: payload.actorPeerId || 'remote',
+                        },
+                      }));
+                    }
                   }
               }
           }
@@ -2079,6 +2404,9 @@ function App() {
       }
       if (normalizeIdleHandleRef.current !== null && 'cancelIdleCallback' in window) {
         (window as Window & { cancelIdleCallback?: (handle: number) => void }).cancelIdleCallback?.(normalizeIdleHandleRef.current);
+      }
+      if (inviteOnboardingDismissTimerRef.current !== null) {
+        window.clearTimeout(inviteOnboardingDismissTimerRef.current);
       }
     };
   }, []);
@@ -2718,6 +3046,13 @@ function App() {
     const inviteId = `inv-${individualId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const issuedAt = new Date().toISOString();
     const accessProfile = buildAccessProfileFromRole(role);
+    const inviterIndividual =
+      (selfIdentity?.individualId && gedcomData?.individuals?.[selfIdentity.individualId])
+        ? gedcomData.individuals[selfIdentity.individualId]
+        : null;
+    const inviterName = inviterIndividual
+      ? (`${inviterIndividual.givenName || ''} ${inviterIndividual.surname || ''}`.trim() || inviterIndividual.name || inviterIndividual.id)
+      : undefined;
     const claims: InviteTokenClaims = {
       inviteId,
       sessionId: peerId,
@@ -2725,6 +3060,7 @@ function App() {
       accessProfileId: `profile-${role}`,
       targetIndividualId: individualId,
       targetIndividualName: candidate.label,
+      inviterName,
       issuedAt,
       expiresAt,
       nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -2737,7 +3073,7 @@ function App() {
       showTransientToast('error', 'Impossible de signer l’invitation.', 2200);
       return;
     }
-    const inviteLink = `${window.location.origin}${window.location.pathname}?g2invite=${encodeURIComponent(token)}`;
+    const inviteLink = `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(inviterName || 'invitant')}&invite_to=${encodeURIComponent(candidate.label)}&invite_role=${encodeURIComponent(role)}#g2invite=${encodeURIComponent(token)}`;
     const invite: P2PInviteItem = {
       inviteId,
       individualId,
@@ -2788,6 +3124,7 @@ function App() {
     }
     if (p2pStatus !== 'connected' || p2pModeRef.current !== 'client') {
       showTransientToast('error', 'Connexion P2P requise pour accepter.', 1800);
+      setInviteOnboardingStage('error');
       return;
     }
     if (invite.expiresAt && Date.now() > Date.parse(invite.expiresAt)) {
@@ -2805,7 +3142,7 @@ function App() {
       claimantIndividualId: selfIdentity?.individualId,
       claimantDeviceKeyId: selfIdentity?.deviceKeyId,
     });
-    setPendingInviteToken(null);
+    setInviteOnboardingStage('accepted');
     setP2PInvites((prev) =>
       prev.map((item) =>
         item.inviteId === inviteId ? { ...item, status: 'accepted', personalizedDefault: false } : item
@@ -2815,8 +3152,37 @@ function App() {
       setPendingInviteTargetIndividualId(invite.individualId);
     }
     setRemoteAccessPolicy(invite.accessProfile);
+    setInviteOnboardingStage('syncing');
     logP2PActivity('invite.accept.sent', 'invite', inviteId, peerId || 'client');
     showTransientToast('success', 'Acceptation envoyée au généalogiste.', 1800);
+  };
+
+  const handleInviteLandingAccept = () => {
+    if (!pendingInviteToken || !pendingInviteHostPeerId || !pendingInviteItem) {
+      setInviteOnboardingStage('error');
+      showTransientToast('error', 'Invitation incomplète ou invalide.', 2200);
+      return;
+    }
+    inviteAcceptRequestedRef.current = true;
+    inviteReceivedDocumentScopesRef.current.clear();
+    setInviteMediaProgress({
+      receivedBatches: 0,
+      totalBatches: 0,
+      receivedDocs: 0,
+      totalDocs: 0,
+      receivedPhotos: 0,
+      totalPhotos: 0,
+    });
+    if (p2pStatus === 'disconnected') {
+      setInviteOnboardingStage('connecting');
+      initP2PWithMode('client', pendingInviteHostPeerId);
+      return;
+    }
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
+      handleAcceptInvite(pendingInviteItem.inviteId);
+      return;
+    }
+    setInviteOnboardingStage('connecting');
   };
 
   const refreshFocusedIndividualsFromData = (data: GedcomData) => {
@@ -3116,6 +3482,15 @@ function App() {
       setSelectedIndividual(indi);
       setRootIndividual(indi);
       setIsIdentifyingSelf(false);
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
+        p2pService.sendMessage('ACTIVITY_EVENT', {
+          eventType: 'identity.claimed',
+          targetType: 'individual',
+          targetId: individualId,
+          actorPeerId: peerId || 'client',
+          timestamp: new Date().toISOString(),
+        });
+      }
       showTransientToast('success', t('app.toasts.identityClaimed'));
     } catch (error) {
       console.error('Failed to claim identity', error);
@@ -3735,6 +4110,15 @@ function App() {
     );
   };
 
+  const isSyncLoadingOverlayVisible =
+    !!p2pSyncStatusText &&
+    (p2pMode === 'client' || isInviteLandingActive) &&
+    /sending|receiving|waiting apply|applying|retry requested|share started/i.test(p2pSyncStatusText);
+  const syncStatusLabel = formatSyncStatusLabel(p2pSyncStatusText);
+  const loadingOverlayText = isSyncLoadingOverlayVisible
+    ? `${t('help.processing')} (${syncStatusLabel})`
+    : t('help.processing');
+
   return (
     <div className={`${isDarkMode ? 'dark [color-scheme:dark]' : '[color-scheme:light]'} flex h-screen h-dvh w-screen overflow-hidden relative transition-colors duration-500`}>
       <div className="absolute inset-0 bg-sky-50 dark:bg-black transition-colors duration-500 -z-10"></div>
@@ -3850,12 +4234,49 @@ function App() {
           />
         )}
         
+        {/* Invite Landing Overlay */}
+        {isInviteLandingActive && (
+          <div className={`absolute inset-0 flex items-center justify-center backdrop-blur-sm z-[70] ${isDarkMode ? 'bg-black/85' : 'bg-sky-50/85'}`}>
+            <div className={`w-full max-w-xl mx-4 p-8 rounded-xl border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'}`}>
+              <div className="text-center">
+                <div className="mb-3 opacity-90">{renderBrandMark(true)}</div>
+                <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+                  {inviteLandingDescription}
+                </p>
+              </div>
+              <div className="mt-6 flex justify-center">
+                {(inviteOnboardingStage === 'idle' || inviteOnboardingStage === 'connecting' || inviteOnboardingStage === 'connected' || inviteOnboardingStage === 'error') && (
+                  <button
+                    type="button"
+                    onClick={handleInviteLandingAccept}
+                    disabled={!pendingInviteItem || inviteOnboardingStage === 'connecting'}
+                    className={`px-5 py-2 rounded font-semibold disabled:opacity-50 ${isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                  >
+                    {t('topPanel.inviteLandingAccept')}
+                  </button>
+                )}
+              </div>
+              <div className={`mt-5 text-xs ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                <div className="font-semibold">{inviteLandingStatusLabel}</div>
+                {(inviteOnboardingStage !== 'idle' || p2pStatus !== 'disconnected') && (
+                  <div className="mt-2 space-y-1">
+                    <div>P2P: {p2pStatus}</div>
+                    {p2pSyncStatusText && <div>Sync: {syncStatusLabel}</div>}
+                    {remotePeerHasData !== null && <div>{t('topPanel.inviteLandingGedcom')}: {remotePeerHasData ? t('topPanel.loaded') : t('topPanel.empty')}</div>}
+                    {inviteLandingMediaLabel && <div>{t('topPanel.inviteLandingMedia')}: {inviteLandingMediaLabel}</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Loading Overlay */}
-        {isLoading && (
+        {(isLoading || isSyncLoadingOverlayVisible) && (
           <div className={`absolute inset-0 flex items-center justify-center backdrop-blur-sm z-50 ${isDarkMode ? 'bg-black/80' : 'bg-sky-50/80'}`}>
              <div className={`p-8 rounded-xl border shadow-2xl flex flex-col items-center gap-4 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-300'}`}>
                 <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
-                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{t('help.processing')}</span>
+                <span className={`font-medium ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{loadingOverlayText}</span>
              </div>
           </div>
         )}
@@ -3975,6 +4396,8 @@ function App() {
         selfIdentity={selfIdentity}
         isIdentifyingSelf={isIdentifyingSelf}
         identityTabSignal={identityTabSignal}
+        preferredIdentityCandidateId={pendingInviteTargetIndividualId}
+        remoteIdentityClaimsByIndividualId={remoteIdentityClaimsByIndividualId}
         livingCandidates={livingCandidates}
         onClaimIdentity={handleClaimIdentity}
         onExportIdentityBackup={handleExportIdentityBackup}

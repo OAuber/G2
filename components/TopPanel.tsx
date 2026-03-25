@@ -47,6 +47,7 @@ interface TopPanelProps {
     matchConfidence?: 'high' | 'medium' | 'low';
     matchScore?: number;
     retryAfterReject?: boolean;
+    proposalKind?: 'records' | 'documents';
   }>;
   visibilitySettings: P2PVisibilitySettings;
   livingCandidates: Array<{ id: string; label: string }>;
@@ -184,6 +185,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
     setCopiedInviteId(inviteId);
     window.setTimeout(() => setCopiedInviteId((current) => (current === inviteId ? null : current)), 1800);
   };
+  const isInviteMode = p2pMode === 'client' || !!pendingInviteToken;
   const showShareAction = p2pMode === 'host';
   // Allow actions when remote state is unknown; handlers perform final checks.
   const canStartShare = showShareAction && localHasData && remoteHasData !== true;
@@ -375,6 +377,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
                         <div className="font-semibold truncate">{proposal.individualLabel}</div>
                         <div className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
                           <span className="px-1 rounded border border-slate-500/40">{formatProposalType(proposal.operation)}</span>
+                          {proposal.proposalKind === 'documents' && (
+                            <span className="px-1 rounded border border-violet-500/50 text-violet-500">{t('topPanel.proposalDocuments')}</span>
+                          )}
                           {proposal.source === 'initial_compare' && (
                             <span className="px-1 rounded border border-blue-500/50">{t('topPanel.initialCompare')}</span>
                           )}
@@ -467,9 +472,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
           <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.connectionProfiles')}</h3>
             <p className={`text-xs mb-3 ${subTextClass}`}>
-              {p2pMode === 'host' ? t('topPanel.connectionProfilesHint') : t('topPanel.invitedModeHint')}
+              {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
             </p>
-            {p2pMode === 'host' && (
+            {!isInviteMode && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
               <select
                 value={newInviteIndividualId}
@@ -527,7 +532,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                       )}
                     </div>
                     <div className="flex items-center gap-1">
-                      {invite.inviteLink && p2pMode === 'host' && (
+                      {invite.inviteLink && !isInviteMode && (
                         <button
                           onClick={() => copyInviteLink(invite.inviteId, invite.inviteLink)}
                           className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-200 text-slate-800 hover:bg-slate-300'}`}
@@ -535,7 +540,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                           {copiedInviteId === invite.inviteId ? t('topPanel.inviteCopied') : t('topPanel.copyInviteLink')}
                         </button>
                       )}
-                      {invite.status === 'active' && p2pMode === 'host' && (
+                      {invite.status === 'active' && !isInviteMode && (
                         <button
                           onClick={() => onRevokeInvite(invite.inviteId)}
                           className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
@@ -543,7 +548,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                           {t('topPanel.revoke')}
                         </button>
                       )}
-                      {invite.status === 'active' && p2pMode === 'client' && (
+                      {invite.status === 'active' && isInviteMode && (
                         <button
                           onClick={() => onAcceptInvite(invite.inviteId)}
                           className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}

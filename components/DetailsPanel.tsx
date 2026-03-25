@@ -56,6 +56,10 @@ interface DetailsPanelProps {
     matchConfidence?: 'high' | 'medium' | 'low';
     matchScore?: number;
     retryAfterReject?: boolean;
+    proposalKind?: 'records' | 'documents';
+    scopeIndividualId?: string;
+    documentItemsDelta?: number;
+    photoItemsDelta?: number;
   } | null;
   reviewProposals?: Array<{
     proposalId: string;
@@ -70,6 +74,10 @@ interface DetailsPanelProps {
     matchConfidence?: 'high' | 'medium' | 'low';
     matchScore?: number;
     retryAfterReject?: boolean;
+    proposalKind?: 'records' | 'documents';
+    scopeIndividualId?: string;
+    documentItemsDelta?: number;
+    photoItemsDelta?: number;
   }>;
   documents?: Array<{
     id: string;
@@ -103,6 +111,8 @@ interface DetailsPanelProps {
   selfIdentity: SelfIdentityPublic | null;
   isIdentifyingSelf: boolean;
   identityTabSignal?: number;
+  preferredIdentityCandidateId?: string | null;
+  remoteIdentityClaimsByIndividualId?: Record<string, { claimedAt: string; actorPeerId: string }>;
   livingCandidates: Array<{ id: string; label: string }>;
   onClaimIdentity: (individualId: string) => Promise<void> | void;
   onExportIdentityBackup: (password: string) => Promise<void> | void;
@@ -294,6 +304,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   selfIdentity,
   isIdentifyingSelf,
   identityTabSignal = 0,
+  preferredIdentityCandidateId = null,
+  remoteIdentityClaimsByIndividualId,
   livingCandidates,
   onClaimIdentity,
   onExportIdentityBackup,
@@ -390,8 +402,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     setActiveTab('identity');
     if (selfIdentity?.individualId) {
       setIdentityCandidateId(selfIdentity.individualId);
+      return;
     }
-  }, [isIdentifyingSelf, selfIdentity?.individualId, identityTabSignal]);
+    if (preferredIdentityCandidateId) {
+      setIdentityCandidateId(preferredIdentityCandidateId);
+    }
+  }, [isIdentifyingSelf, selfIdentity?.individualId, preferredIdentityCandidateId, identityTabSignal]);
 
   const allIndividuals = useMemo(() =>
     data ? (Object.values(data.individuals) as Individual[]).sort((a, b) =>
@@ -406,6 +422,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const handleSaveEdit = () => {
      if(!individual) return;
+     if (!canModifyRecords) {
+       explainIdentityRequiredForEdit();
+       return;
+     }
      const updated: Individual = {
          ...individual,
          givenName: formData.givenName,
@@ -539,9 +559,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   );
   const selectedIndividualId = individual?.id || null;
   const isSelectedSelf = !!selfIdentity && !!selectedIndividualId && selfIdentity.individualId === selectedIndividualId;
-  const showClaimBlock = !selfIdentity || isIdentifyingSelf;
+  const showClaimBlock = !selfIdentity;
   const showSelfIdentityData = !!selfIdentity && isSelectedSelf;
   const showEmptyIdentityForSelectedOther = !!selfIdentity && !!selectedIndividualId && !isSelectedSelf;
+  const selectedRemoteIdentityClaim = selectedIndividualId ? remoteIdentityClaimsByIndividualId?.[selectedIndividualId] : undefined;
+  const canModifyRecords = !!selfIdentity && selfIdentity.status === 'claimed';
+  const explainIdentityRequiredForEdit = useCallback(() => {
+    window.alert(t('details.claimIdentityRequiredToEdit'));
+  }, [t]);
 
   return (
     <div 
@@ -565,7 +590,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       {/* Top Creation Button */}
       <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
         {!isCreating && (
-            <button onClick={onCreateNew} className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg}`}>
+            <button
+              onClick={() => {
+                if (!canModifyRecords) {
+                  explainIdentityRequiredForEdit();
+                  return;
+                }
+                onCreateNew();
+              }}
+              className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg} ${!canModifyRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
+              aria-disabled={!canModifyRecords}
+            >
                 <Plus className="w-4 h-4 mr-2" />
                 <span className={`text-sm font-medium ${textClass}`}>{t('details.createNew')}</span>
             </button>
@@ -649,7 +684,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
 
         {(isCreating || isEditing) ? (
-          <form onSubmit={(e) => {e.preventDefault(); isCreating ? onCreateIndividual(formData) : handleSaveEdit()}} className="space-y-3">
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            if (!canModifyRecords) {
+              explainIdentityRequiredForEdit();
+              return;
+            }
+            isCreating ? onCreateIndividual(formData) : handleSaveEdit();
+          }} className="space-y-3">
              <div className="flex justify-between items-center">
                  <h3 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{isCreating ? t('details.newIndividualTitle') : t('details.editIndividualTitle')}</h3>
                  {isEditing && <button type="button" onClick={() => setIsEditing(false)} className="text-xs text-red-500">{t('details.cancel')}</button>}
@@ -1010,6 +1052,52 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
             {reviewProposal &&
               reviewProposal.status === 'pending' &&
+              reviewProposal.proposalKind === 'documents' && (
+              <div className={`${cardBg} rounded-lg p-2.5 space-y-2.5 border border-violet-500/40`}>
+                <div className="flex items-start justify-between gap-2">
+                  <h4 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                    {t('details.reviewDocumentsTitle')}
+                  </h4>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded border border-violet-500/50 text-violet-500">
+                    {t('details.tabDocuments')}
+                  </span>
+                </div>
+                <div className={`text-[11px] ${subTextClass}`}>
+                  {t('details.reviewDocumentsFrom')} {reviewProposal.authorPeerId} | {new Date(reviewProposal.proposedAt).toLocaleString()}
+                </div>
+                <div className={`rounded border p-2 ${inputBg} text-xs space-y-1`}>
+                  <div>{t('details.reviewDocumentsText')}</div>
+                  <div className={subTextClass}>
+                    {t('details.reviewDocumentsScope')} {reviewProposal.scopeIndividualId || reviewProposal.individualId}
+                  </div>
+                  <div className={subTextClass}>
+                    {t('details.reviewDocumentsCounters')
+                      .replace('{{photos}}', String(reviewProposal.photoItemsDelta || 0))
+                      .replace('{{documents}}', String(reviewProposal.documentItemsDelta || 0))}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'fuse')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-500"
+                  >
+                    {t('details.reviewDocumentsApprove')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onReviewGlobalDecision?.(reviewProposal.proposalId, 'reject')}
+                    className="flex-1 py-2 rounded text-sm font-bold bg-slate-600 text-white hover:bg-slate-500"
+                  >
+                    {t('details.reviewDocumentsDismiss')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {reviewProposal &&
+              reviewProposal.status === 'pending' &&
+              reviewProposal.proposalKind !== 'documents' &&
               reviewProposal.operation !== 'delete_individual' &&
               reviewBaseIndividual &&
               proposedIndividual && (
@@ -1176,6 +1264,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <p className={`text-xs ${subTextClass}`}>
                   {t('details.noIdentityForSelected')}
                 </p>
+                {selectedRemoteIdentityClaim && (
+                  <div className="rounded border border-emerald-500/50 bg-emerald-500/10 p-2">
+                    <div className="text-[11px] font-semibold text-emerald-500">{t('details.remoteIdentityClaimed')}</div>
+                    <div className={`text-[11px] ${subTextClass}`}>
+                      {t('details.claimedAt')} {new Date(selectedRemoteIdentityClaim.claimedAt).toLocaleString()}
+                    </div>
+                    <div className={`text-[11px] ${subTextClass}`}>
+                      Peer: {selectedRemoteIdentityClaim.actorPeerId}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1277,8 +1376,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setIsEditing(true)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold ${inputBg} hover:text-blue-500`}
+                onClick={() => {
+                  if (!canModifyRecords) {
+                    explainIdentityRequiredForEdit();
+                    return;
+                  }
+                  setIsEditing(true);
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold ${inputBg} hover:text-blue-500 ${!canModifyRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
+                aria-disabled={!canModifyRecords}
               >
                  <Edit className="w-3.5 h-3.5" />
                  {t('details.edit')}
@@ -1385,12 +1491,33 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <div className="bg-red-500/10 border border-red-500/50 rounded p-3 text-center">
                   <p className="text-xs text-red-500 mb-2">{t('details.confirmDeletion')}</p>
                   <div className="flex gap-2">
-                    <button onClick={() => {onDeleteIndividual(individual.id); setShowDeleteConfirm(false)}} className="flex-1 py-1 bg-red-600 text-white rounded text-xs">{t('details.yes')}</button>
+                    <button
+                      onClick={() => {
+                        if (!canModifyRecords) {
+                          explainIdentityRequiredForEdit();
+                          return;
+                        }
+                        onDeleteIndividual(individual.id);
+                        setShowDeleteConfirm(false);
+                      }}
+                      className={`flex-1 py-1 rounded text-xs ${canModifyRecords ? 'bg-red-600 text-white' : 'bg-slate-500/50 text-slate-200 cursor-not-allowed'}`}
+                    >
+                      {t('details.yes')}
+                    </button>
                     <button onClick={() => setShowDeleteConfirm(false)} className={`flex-1 py-1 rounded text-xs ${inputBg}`}>{t('details.cancel')}</button>
                   </div>
                 </div>
               ) : (
-                <button onClick={() => setShowDeleteConfirm(true)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/30 text-red-500 rounded hover:bg-red-500/20 transition-colors text-sm font-bold">
+                <button
+                  onClick={() => {
+                    if (!canModifyRecords) {
+                      explainIdentityRequiredForEdit();
+                      return;
+                    }
+                    setShowDeleteConfirm(true);
+                  }}
+                  className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded transition-colors text-sm font-bold ${canModifyRecords ? 'bg-red-500/10 border border-red-500/30 text-red-500 hover:bg-red-500/20' : 'bg-slate-500/20 border border-slate-500/30 text-slate-400 cursor-not-allowed'}`}
+                >
                   <Trash2 className="w-4 h-4" /> {t('details.deleteIndividual')}
                 </button>
               )}
