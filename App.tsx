@@ -553,6 +553,8 @@ function App() {
     totalChunks: number;
     applied: boolean;
   } | null>(null);
+  const [inviteHasAccepted, setInviteHasAccepted] = useState(false);
+  const [inviteRibbonFirstRenderDone, setInviteRibbonFirstRenderDone] = useState(false);
   const [inviteSceneDeferred, setInviteSceneDeferred] = useState(false);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
@@ -625,6 +627,9 @@ function App() {
   const normalizeIdleHandleRef = useRef<number | null>(null);
   const inviteAcceptRequestedRef = useRef(false);
   const inviteOnboardingDismissTimerRef = useRef<number | null>(null);
+  const inviteUiReadyTimerRef = useRef<number | null>(null);
+  const inviteRibbonRenderRaf1Ref = useRef<number | null>(null);
+  const inviteRibbonRenderRaf2Ref = useRef<number | null>(null);
   const pendingInviteTokenRef = useRef<string | null>(pendingInviteToken);
   const inviteReceivedDocumentScopesRef = useRef<Set<string>>(new Set());
   const inviteDocsFlushTimerRef = useRef<number | null>(null);
@@ -725,6 +730,15 @@ function App() {
       }
       if (inviteSceneResumeTimerRef.current !== null) {
         window.clearTimeout(inviteSceneResumeTimerRef.current);
+      }
+      if (inviteUiReadyTimerRef.current !== null) {
+        window.clearTimeout(inviteUiReadyTimerRef.current);
+      }
+      if (inviteRibbonRenderRaf1Ref.current !== null) {
+        window.cancelAnimationFrame(inviteRibbonRenderRaf1Ref.current);
+      }
+      if (inviteRibbonRenderRaf2Ref.current !== null) {
+        window.cancelAnimationFrame(inviteRibbonRenderRaf2Ref.current);
       }
       Object.values(initialDiffTimeoutHandlesRef.current).forEach((handle) => {
         window.clearTimeout(handle);
@@ -918,6 +932,7 @@ function App() {
       setCenterRequest((prev) => prev + 1);
     }
     setInviteOnboardingStage('completed');
+    setInviteRibbonFirstRenderDone(false);
     setInviteGedcomProgress((prev) => prev ? { ...prev, applied: true } : { receivedChunks: 1, totalChunks: 1, applied: true });
     setLeftPanelOpen(true);
     setRightPanelOpen(true);
@@ -933,11 +948,7 @@ function App() {
     if (inviteOnboardingDismissTimerRef.current !== null) {
       window.clearTimeout(inviteOnboardingDismissTimerRef.current);
     }
-    inviteOnboardingDismissTimerRef.current = window.setTimeout(() => {
-      setInviteOnboardingStage('ready');
-      setPendingInviteToken(null);
-      inviteOnboardingDismissTimerRef.current = null;
-    }, 1200);
+    inviteOnboardingDismissTimerRef.current = null;
   };
 
   const getOrCreateInviteSecret = (): string => {
@@ -1464,7 +1475,9 @@ function App() {
     if (pendingInviteRole === 'contributor') return t('topPanel.inviteActionContribute');
     return t('topPanel.inviteActionEdit');
   }, [pendingInviteRole, t]);
-  const isInviteLandingActive = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
+  const hasInviteTokenInLocation = useMemo(() => !!readInviteTokenFromLocation(), []);
+  const hasInviteTokenRawInLocation = useMemo(() => window.location.href.includes('g2invite='), []);
+  const isInviteLandingActive = !!(pendingInviteToken || hasInviteTokenInLocation || hasInviteTokenRawInLocation) && inviteOnboardingStage !== 'ready';
   const inviteLandingDescription = useMemo(() => {
     const template = t('topPanel.inviteLandingText');
     const inviter = pendingInviteInviterName || 'Un généalogiste';
@@ -1563,11 +1576,15 @@ function App() {
     if (!pendingInviteToken) return;
     if (inviteOnboardingStage === 'ready') return;
     if (p2pStatus === 'connected') {
-      setInviteOnboardingStage((prev) => (prev === 'ready' ? prev : 'connected'));
+      setInviteOnboardingStage((prev) =>
+        (prev === 'idle' || prev === 'connecting' || prev === 'error') ? 'connected' : prev
+      );
     } else if (p2pStatus === 'connecting') {
-      setInviteOnboardingStage((prev) => (prev === 'accepted' || prev === 'syncing' || prev === 'ready' ? prev : 'connecting'));
+      setInviteOnboardingStage((prev) =>
+        (prev === 'idle' || prev === 'error') ? 'connecting' : prev
+      );
     } else if (p2pStatus === 'error') {
-      setInviteOnboardingStage('error');
+      setInviteOnboardingStage((prev) => (prev === 'ready' ? prev : 'error'));
     }
   }, [pendingInviteToken, inviteOnboardingStage, p2pStatus]);
 
@@ -1580,12 +1597,87 @@ function App() {
   }, [pendingInviteToken, p2pStatus, pendingInviteItem]);
 
   useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage !== 'completed') return;
+    const mediaFullyReceived =
+      !inviteMediaProgress ||
+      inviteMediaProgress.totalBatches <= 0 ||
+      inviteMediaProgress.receivedBatches >= inviteMediaProgress.totalBatches;
+    const gedcomApplied = !!inviteGedcomProgress?.applied;
+    const uiStillPreparing =
+      inviteSceneDeferred ||
+      !!p2pSyncStatusText ||
+      isLoading ||
+      !gedcomApplied ||
+      !mediaFullyReceived ||
+      !inviteRibbonFirstRenderDone ||
+      !rootIndividual ||
+      !selectedIndividual;
+    if (uiStillPreparing) {
+      if (inviteUiReadyTimerRef.current !== null) {
+        window.clearTimeout(inviteUiReadyTimerRef.current);
+        inviteUiReadyTimerRef.current = null;
+      }
+      return;
+    }
+    if (inviteUiReadyTimerRef.current !== null) return;
+    inviteUiReadyTimerRef.current = window.setTimeout(() => {
+      setInviteOnboardingStage('ready');
+      setPendingInviteToken(null);
+      inviteUiReadyTimerRef.current = null;
+    }, 500);
+  }, [
+    pendingInviteToken,
+    inviteOnboardingStage,
+    inviteSceneDeferred,
+    p2pSyncStatusText,
+    inviteGedcomProgress,
+    inviteMediaProgress,
+    isLoading,
+    inviteRibbonFirstRenderDone,
+    rootIndividual,
+    selectedIndividual,
+  ]);
+
+  useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage !== 'completed') return;
+    if (shouldSuspendSceneForInvite) return;
+    if (!rootIndividual || !selectedIndividual) return;
+    if (inviteRibbonFirstRenderDone) return;
+    if (inviteRibbonRenderRaf1Ref.current !== null) {
+      window.cancelAnimationFrame(inviteRibbonRenderRaf1Ref.current);
+      inviteRibbonRenderRaf1Ref.current = null;
+    }
+    if (inviteRibbonRenderRaf2Ref.current !== null) {
+      window.cancelAnimationFrame(inviteRibbonRenderRaf2Ref.current);
+      inviteRibbonRenderRaf2Ref.current = null;
+    }
+    inviteRibbonRenderRaf1Ref.current = window.requestAnimationFrame(() => {
+      inviteRibbonRenderRaf1Ref.current = null;
+      inviteRibbonRenderRaf2Ref.current = window.requestAnimationFrame(() => {
+        inviteRibbonRenderRaf2Ref.current = null;
+        setInviteRibbonFirstRenderDone(true);
+      });
+    });
+  }, [
+    pendingInviteToken,
+    inviteOnboardingStage,
+    shouldSuspendSceneForInvite,
+    rootIndividual,
+    selectedIndividual,
+    inviteRibbonFirstRenderDone,
+  ]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const hashRaw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
     const hashParams = new URLSearchParams(hashRaw);
     const inviteToken = params.get('g2invite') || hashParams.get('g2invite');
     if (!inviteToken) return;
     setPendingInviteToken(inviteToken);
+    setInviteHasAccepted(false);
+    setInviteRibbonFirstRenderDone(false);
     inviteAcceptRequestedRef.current = false;
     const claims = parseInviteClaimsUnsafe(inviteToken);
     if (!claims) return;
@@ -2759,6 +2851,9 @@ function App() {
       if (inviteOnboardingDismissTimerRef.current !== null) {
         window.clearTimeout(inviteOnboardingDismissTimerRef.current);
       }
+      if (inviteUiReadyTimerRef.current !== null) {
+        window.clearTimeout(inviteUiReadyTimerRef.current);
+      }
     };
   }, []);
 
@@ -3515,6 +3610,7 @@ function App() {
       return;
     }
     inviteAcceptRequestedRef.current = true;
+    setInviteRibbonFirstRenderDone(false);
     inviteReceivedDocumentScopesRef.current.clear();
     setInviteSceneDeferred(true);
     setInviteGedcomProgress({
@@ -4619,16 +4715,17 @@ function App() {
         
         {/* Invite Landing Overlay */}
         {isInviteLandingActive && (
-          <div className={`absolute inset-0 flex items-center justify-center backdrop-blur-sm z-[70] ${isDarkMode ? 'bg-black/85' : 'bg-sky-50/85'}`}>
-            <div className={`w-full max-w-xl mx-4 p-8 rounded-xl border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'}`}>
-              <div className="text-center">
-                <div className="mb-3 opacity-90">{renderBrandMark(true)}</div>
-                <p className={`text-sm leading-relaxed ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>
-                  {inviteLandingDescription}
-                </p>
-              </div>
+          <div className={`absolute inset-0 z-[80] overflow-y-auto ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
+            <div className="min-h-full flex flex-col items-center justify-center p-6 md:p-10 text-center">
+              <div className="mb-3 opacity-90">{renderBrandMark(true)}</div>
+              <p className={`text-sm leading-relaxed max-w-2xl ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>
+                {inviteLandingDescription}
+              </p>
               <div className="mt-6 flex justify-center">
-                {(inviteOnboardingStage === 'idle' || inviteOnboardingStage === 'connecting' || inviteOnboardingStage === 'connected' || inviteOnboardingStage === 'error') && (
+                {(inviteOnboardingStage === 'idle' || inviteOnboardingStage === 'connecting' || inviteOnboardingStage === 'connected' || inviteOnboardingStage === 'error') &&
+                  !inviteHasAccepted &&
+                  !inviteAcceptRequestedRef.current &&
+                  pendingInviteItem?.status === 'active' && (
                   <button
                     type="button"
                     onClick={handleInviteLandingAccept}
@@ -4639,11 +4736,10 @@ function App() {
                   </button>
                 )}
               </div>
-              <div className={`mt-5 text-xs ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+              <div className={`mt-6 text-xs max-w-2xl ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
                 <div className="font-semibold">{inviteLandingStatusLabel}</div>
                 {(inviteOnboardingStage !== 'idle' || p2pStatus !== 'disconnected') && (
                   <div className="mt-2 space-y-1">
-                    <div>P2P: {p2pStatus}</div>
                     {p2pSyncStatusText && <div>Sync: {syncStatusLabel}</div>}
                     {inviteGedcomProgress && (
                       <div>
@@ -4653,6 +4749,12 @@ function App() {
                     )}
                     {!inviteGedcomProgress && remotePeerHasData !== null && <div>{t('topPanel.inviteLandingGedcom')}: {remotePeerHasData ? t('topPanel.loaded') : t('topPanel.empty')}</div>}
                     {inviteLandingMediaLabel && <div>{t('topPanel.inviteLandingMedia')}: {inviteLandingMediaLabel}</div>}
+                    {inviteOnboardingStage === 'completed' && !inviteRibbonFirstRenderDone && (
+                      <div>{t('topPanel.inviteLandingUiPreparing')}</div>
+                    )}
+                    {inviteOnboardingStage === 'connected' && !inviteAcceptRequestedRef.current && (
+                      <div>{t('topPanel.inviteLandingWaitingAcceptAction')}</div>
+                    )}
                   </div>
                 )}
               </div>
