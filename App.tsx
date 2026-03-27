@@ -495,6 +495,51 @@ function App() {
         ? (remoteAccessPolicy?.allowDocuments ?? true)
         : visibilitySettingsRef.current.allowDocuments;
     if (!allowDocuments) return;
+    const buildDocumentsSnapshotAfterPatch = (): Record<string, IndividualDocument[]> => {
+      const snapshot = documentsRef.current;
+      const current = snapshot[patch.individualId] || [];
+      let next = current;
+      if (patch.operation === 'add' && patch.doc) {
+        const normalized = normalizeDocumentsByIndividual({ [patch.individualId]: [patch.doc] })[patch.individualId] || [];
+        const incoming = normalized[0];
+        if (incoming) {
+          const deduped = current.filter((d) => d.id !== incoming.id);
+          const shouldBecomePrimary = incoming.kind === 'photo' && !deduped.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
+          next = [...deduped, shouldBecomePrimary ? { ...incoming, isPrimaryPhoto: true } : incoming];
+        }
+      } else if (patch.operation === 'update' && patch.docId) {
+        next = current.map((doc) => {
+          if (doc.id !== patch.docId) return doc;
+          const nextUrl = typeof patch.patch?.url === 'string' ? patch.patch.url : doc.url;
+          const nextKind: 'photo' | 'document' =
+            patch.patch?.kind === 'photo' || patch.patch?.kind === 'document'
+              ? patch.patch.kind
+              : ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
+          return {
+            ...doc,
+            ...patch.patch,
+            kind: nextKind,
+            date: patch.patch?.date === '' ? undefined : (patch.patch?.date ?? doc.date),
+          };
+        });
+      } else if (patch.operation === 'remove' && patch.docId) {
+        next = current.filter((doc) => doc.id !== patch.docId);
+        if (!next.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+          const firstPhoto = next.find((d) => d.kind === 'photo');
+          if (firstPhoto) {
+            next = next.map((d) => (d.id === firstPhoto.id ? { ...d, isPrimaryPhoto: true } : d));
+          }
+        }
+      } else if (patch.operation === 'set_primary' && patch.docId) {
+        next = current.map((doc) =>
+          (doc.kind === 'photo' || isImageLikeUrl(doc.url))
+            ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === patch.docId }
+            : doc
+        );
+      }
+      if (next === current) return snapshot;
+      return { ...snapshot, [patch.individualId]: next };
+    };
     window.setTimeout(() => {
       p2pService.sendMessage('DOCUMENT_PATCH', {
         ...patch,
@@ -505,7 +550,7 @@ function App() {
       // for peers that may miss patch notifications in some browser/runtime paths.
       if (p2pModeRef.current === 'client') {
         window.setTimeout(() => {
-          sendDocumentsToPeer(documentsRef.current, patch.individualId, 'partial');
+          sendDocumentsToPeer(buildDocumentsSnapshotAfterPatch(), patch.individualId, 'partial');
         }, 120);
       }
     }, 0);
