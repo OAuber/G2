@@ -5,6 +5,9 @@ export interface LifeThreadBundleMetadata {
   databaseName?: string;
   exportedAt?: string;
   documentsByIndividualId?: Record<string, unknown>;
+  includesDocuments?: boolean;
+  normalizedGedcomContent?: string;
+  normalizationAlgoVersion?: string;
   selfIdentity?: SelfIdentityPublic | null;
   [key: string]: unknown;
 }

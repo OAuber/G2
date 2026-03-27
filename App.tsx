@@ -32,6 +32,8 @@ const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
 const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
 const INVITE_SECRET_STORAGE_KEY = 'g2:p2pInviteSecret:v1';
 const AUTOSAVE_SETTINGS_KEY = 'g2:autoSaveEnabled:v1';
+const P2P_TRANSFER_MODE_KEY = 'g2:p2pTransferMode:v1';
+const P2P_BUNDLE_CONTENT_MODE_KEY = 'g2:p2pBundleContentMode:v1';
 const AUTOSAVE_DB_NAME = 'g2-autosave-db';
 const AUTOSAVE_STORE_NAME = 'snapshots';
 const AUTOSAVE_RECORD_KEY = 'latest';
@@ -149,6 +151,7 @@ function App() {
   const isImageLikeUrl = (url: string): boolean => {
     if (!url) return false;
     if (url.startsWith('data:image/')) return true;
+    if (url.startsWith('blob:')) return true;
     return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
   };
 
@@ -199,6 +202,9 @@ function App() {
   const SYNC_CHUNK_SEND_DELAY_MS = 8;
   const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 45000;
   const DOCUMENT_SYNC_CHUNK_SIZE = 48_000;
+  const BUNDLE_SYNC_CHUNK_SIZE = 56_000;
+  const NORMALIZED_SNAPSHOT_CHUNK_SIZE = 20_000;
+  const NORMALIZATION_ALGO_VERSION = 'g2norm-v1';
   const INITIAL_DIFF_BATCH_LIMIT = 300;
   const INITIAL_DIFF_MAX_RETRY = 1;
   const INITIAL_DIFF_REQUEST_TIMEOUT_MS = 12000;
@@ -211,13 +217,71 @@ function App() {
     startedAt: number;
   };
   type RejectedInitialMatchMap = Record<string, Set<string>>;
+  type P2PTransferMode = 'progressive' | 'bundle';
+  type P2PBundleContentMode = 'gedcom-only' | 'gedcom-and-documents';
+
+  const sendBundleSnapshotToPeer = async (
+    gedcom: GedcomData,
+    documents: Record<string, IndividualDocument[]>
+  ) => {
+    if (p2pModeRef.current !== 'host') return;
+    const includeDocuments = p2pBundleContentModeRef.current === 'gedcom-and-documents';
+    const transferable = includeDocuments
+      ? await toTransferableDocumentsForPeer(documents)
+      : {};
+    const gedcomText = generateGedcom(gedcom);
+    const normalizedGedcomText = generateGedcom(normalizeGedcom(gedcom));
+    const bundleBlob = await createLifeThreadBundle(gedcomText, {
+      version: '1.0',
+      databaseName: databaseNameRef.current,
+      exportedAt: new Date().toISOString(),
+      documentsByIndividualId: transferable,
+      includesDocuments: includeDocuments,
+      normalizedGedcomContent: normalizedGedcomText,
+      normalizationAlgoVersion: NORMALIZATION_ALGO_VERSION,
+    });
+    const serialized = await bundleBlob.text();
+    if (serialized.length <= BUNDLE_SYNC_CHUNK_SIZE) {
+      p2pService.sendMessage('BUNDLE_SYNC', {
+        bundleContent: serialized,
+      });
+      return;
+    }
+    const transferId = `bundle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const totalChunks = Math.ceil(serialized.length / BUNDLE_SYNC_CHUNK_SIZE);
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunk = serialized.slice(index * BUNDLE_SYNC_CHUNK_SIZE, (index + 1) * BUNDLE_SYNC_CHUNK_SIZE);
+      window.setTimeout(() => {
+        p2pService.sendMessage('BUNDLE_SYNC_CHUNK', {
+          transferId,
+          index,
+          totalChunks,
+          chunk,
+        });
+      }, index * 4);
+    }
+  };
 
   const sendP2PSnapshot = (
     gedcom: GedcomData,
     documents: Record<string, IndividualDocument[]>,
-    source: 'sync.sent' | 'sync.refresh'
+    source: 'sync.sent' | 'sync.refresh',
+    options?: { forceBundle?: boolean }
   ) => {
     if (p2pModeRef.current !== 'host') return;
+    const transferMode: P2PTransferMode =
+      options?.forceBundle || p2pTransferModeRef.current === 'bundle'
+        ? 'bundle'
+        : 'progressive';
+    if (transferMode === 'bundle') {
+      setP2PSyncStatusText('applying');
+      void sendBundleSnapshotToPeer(gedcom, documents).finally(() => {
+        window.setTimeout(() => setP2PSyncStatusText('done'), 300);
+        window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+      });
+      logP2PActivity(`${source}.bundle`, 'session', peerId || 'host');
+      return;
+    }
     const gedcomText = generateGedcom(gedcom);
     const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -258,7 +322,38 @@ function App() {
         snapshotDocumentsSendTimerRef.current = null;
       }, docsDelay);
     }
+    const normalizedDelay = Math.max(350, totalChunks * SYNC_CHUNK_SEND_DELAY_MS + 400);
+    window.setTimeout(() => {
+      sendNormalizedSnapshotToPeer(gedcom);
+    }, normalizedDelay);
     logP2PActivity(source, 'session', peerId || 'host');
+  };
+
+  const sendNormalizedSnapshotToPeer = (gedcom: GedcomData) => {
+    if (p2pModeRef.current !== 'host') return;
+    const normalized = normalizeGedcom(gedcom);
+    const serialized = JSON.stringify(normalized);
+    if (serialized.length <= NORMALIZED_SNAPSHOT_CHUNK_SIZE) {
+      p2pService.sendMessage('NORMALIZED_SNAPSHOT', {
+        normalizedGedcom: normalized,
+        algoVersion: NORMALIZATION_ALGO_VERSION,
+      });
+      return;
+    }
+    const transferId = `norm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const totalChunks = Math.ceil(serialized.length / NORMALIZED_SNAPSHOT_CHUNK_SIZE);
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunk = serialized.slice(index * NORMALIZED_SNAPSHOT_CHUNK_SIZE, (index + 1) * NORMALIZED_SNAPSHOT_CHUNK_SIZE);
+      window.setTimeout(() => {
+        p2pService.sendMessage('NORMALIZED_SNAPSHOT_CHUNK', {
+          transferId,
+          index,
+          totalChunks,
+          chunk,
+          algoVersion: NORMALIZATION_ALGO_VERSION,
+        });
+      }, index * 4);
+    }
   };
 
   const computeMediaStats = (documents: Record<string, IndividualDocument[]>) => {
@@ -281,6 +376,29 @@ function App() {
       reader.readAsDataURL(blob);
     });
 
+  const blobImageUrlToDataUrlViaCanvas = async (blobUrl: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth || img.width || 1;
+          canvas.height = img.naturalHeight || img.height || 1;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(null);
+            return;
+          }
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', 0.9));
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = blobUrl;
+    });
+
   const toTransferableDocumentsForPeer = async (
     documents: Record<string, IndividualDocument[]>
   ): Promise<Record<string, IndividualDocument[]>> => {
@@ -295,6 +413,10 @@ function App() {
           const dataUrl = await blobToDataUrl(blob);
           return { ...doc, url: dataUrl, source: 'local' as const };
         } catch {
+          const fallbackDataUrl = await blobImageUrlToDataUrlViaCanvas(doc.url);
+          if (fallbackDataUrl) {
+            return { ...doc, url: fallbackDataUrl, source: 'local' as const };
+          }
           return doc;
         }
       }));
@@ -524,6 +646,14 @@ function App() {
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
+  const [p2pTransferMode, setP2PTransferMode] = useState<P2PTransferMode>(() => {
+    const saved = localStorage.getItem(P2P_TRANSFER_MODE_KEY);
+    return saved === 'progressive' ? 'progressive' : 'bundle';
+  });
+  const [p2pBundleContentMode, setP2PBundleContentMode] = useState<P2PBundleContentMode>(() => {
+    const saved = localStorage.getItem(P2P_BUNDLE_CONTENT_MODE_KEY);
+    return saved === 'gedcom-only' ? 'gedcom-only' : 'gedcom-and-documents';
+  });
   const readInviteTokenFromLocation = (): string | null => {
     const search = new URLSearchParams(window.location.search);
     const fromQuery = search.get('g2invite');
@@ -553,9 +683,16 @@ function App() {
     totalChunks: number;
     applied: boolean;
   } | null>(null);
+  const [inviteNormalizedProgress, setInviteNormalizedProgress] = useState<{
+    receivedChunks: number;
+    totalChunks: number;
+    applied: boolean;
+    fallbackLocal: boolean;
+  } | null>(null);
   const [inviteHasAccepted, setInviteHasAccepted] = useState(false);
   const [inviteRibbonFirstRenderDone, setInviteRibbonFirstRenderDone] = useState(false);
   const [inviteSceneDeferred, setInviteSceneDeferred] = useState(false);
+  const [inviteMediaRecoveryInFlight, setInviteMediaRecoveryInFlight] = useState(false);
   const [p2pVisibilitySettings, setP2PVisibilitySettings] = useState<P2PVisibilitySettings>({
     exposeIdentity: true,
     exposeDates: true,
@@ -573,6 +710,8 @@ function App() {
   // Keep ref to data for P2P sync (closure issue)
   const gedcomDataRef = useRef<GedcomData | null>(null);
   const p2pModeRef = useRef<P2PMode>(null);
+  const p2pTransferModeRef = useRef<P2PTransferMode>(p2pTransferMode);
+  const p2pBundleContentModeRef = useRef<P2PBundleContentMode>(p2pBundleContentMode);
   const p2pSessionUseCaseRef = useRef<P2PSessionUseCase>(null);
   const visibilitySettingsRef = useRef<P2PVisibilitySettings>(p2pVisibilitySettings);
   const documentsRef = useRef<Record<string, IndividualDocument[]>>({});
@@ -581,6 +720,7 @@ function App() {
   const webglLastRecoveryAtRef = useRef(0);
   const webglRecoverySuppressedUntilRef = useRef(0);
   const webglRecoveryTimerRef = useRef<number | null>(null);
+  const inviteWebglRecoveryQueuedRef = useRef(false);
   // Anti-storm: track consecutive rapid recoveries to enforce a long backoff.
   const webglRecoveryCountRef = useRef(0);
   const webglRecoveryWindowStartRef = useRef(0);
@@ -609,8 +749,21 @@ function App() {
       photoItemsTotal?: number;
     };
   }>>({});
+  const incomingNormalizedChunksRef = useRef<Record<string, {
+    totalChunks: number;
+    parts: string[];
+    received: number;
+    algoVersion?: string;
+  }>>({});
+  const incomingBundleChunksRef = useRef<Record<string, {
+    totalChunks: number;
+    parts: string[];
+    received: number;
+  }>>({});
   const syncReceivingInProgressRef = useRef(false);
   const pendingIncomingDocumentsRef = useRef<Record<string, IndividualDocument[]> | null>(null);
+  const normalizedSnapshotAppliedRef = useRef(false);
+  const pendingNormalizationFallbackTimerRef = useRef<number | null>(null);
   const initialDiffContextsRef = useRef<Record<string, InitialDiffContext>>({});
   const initialDiffTimeoutHandlesRef = useRef<Record<string, number>>({});
   const initialDiffSeenProposalKeysRef = useRef<Set<string>>(new Set());
@@ -634,6 +787,9 @@ function App() {
   const inviteReceivedDocumentScopesRef = useRef<Set<string>>(new Set());
   const inviteDocsFlushTimerRef = useRef<number | null>(null);
   const inviteSceneResumeTimerRef = useRef<number | null>(null);
+  const inviteMediaRecoveryRequestedRef = useRef(false);
+  const inviteMediaRecoveryTimerRef = useRef<number | null>(null);
+  const inviteMediaRecoveryAttemptRef = useRef(0);
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
@@ -641,6 +797,14 @@ function App() {
   useEffect(() => { pendingInviteTokenRef.current = pendingInviteToken; }, [pendingInviteToken]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
+  useEffect(() => {
+    p2pTransferModeRef.current = p2pTransferMode;
+    localStorage.setItem(P2P_TRANSFER_MODE_KEY, p2pTransferMode);
+  }, [p2pTransferMode]);
+  useEffect(() => {
+    p2pBundleContentModeRef.current = p2pBundleContentMode;
+    localStorage.setItem(P2P_BUNDLE_CONTENT_MODE_KEY, p2pBundleContentMode);
+  }, [p2pBundleContentMode]);
   useEffect(() => { inviteOnboardingStageRef.current = inviteOnboardingStage; }, [inviteOnboardingStage]);
   useEffect(() => { p2pInvitesRef.current = p2pInvites; }, [p2pInvites]);
   useEffect(() => { activeSessionPeerPolicyRef.current = activeSessionPeerPolicy; }, [activeSessionPeerPolicy]);
@@ -724,7 +888,11 @@ function App() {
       if (snapshotDocumentsSendTimerRef.current !== null) {
         window.clearTimeout(snapshotDocumentsSendTimerRef.current);
       }
+      if (pendingNormalizationFallbackTimerRef.current !== null) {
+        window.clearTimeout(pendingNormalizationFallbackTimerRef.current);
+      }
       incomingDocumentChunksRef.current = {};
+      incomingNormalizedChunksRef.current = {};
       if (inviteDocsFlushTimerRef.current !== null) {
         window.clearTimeout(inviteDocsFlushTimerRef.current);
       }
@@ -901,6 +1069,92 @@ function App() {
     });
   };
 
+  const applyIncomingNormalizedGedcom = (
+    normalizedRaw: unknown,
+    algoVersion?: string
+  ) => {
+    if (!normalizedRaw || typeof normalizedRaw !== 'object') return;
+    if (algoVersion && algoVersion !== NORMALIZATION_ALGO_VERSION) return;
+    const normalized = normalizedRaw as GedcomData;
+    if (!normalized.individuals || !normalized.families) return;
+    normalizedSnapshotAppliedRef.current = true;
+    if (pendingNormalizationFallbackTimerRef.current !== null) {
+      window.clearTimeout(pendingNormalizationFallbackTimerRef.current);
+      pendingNormalizationFallbackTimerRef.current = null;
+    }
+    setNormalizedGedcomData(normalized);
+    setInviteNormalizedProgress((prev) => ({
+      receivedChunks: prev?.totalChunks || prev?.receivedChunks || 1,
+      totalChunks: prev?.totalChunks || prev?.receivedChunks || 1,
+      applied: true,
+      fallbackLocal: false,
+    }));
+  };
+
+  const applyIncomingBundleSnapshot = async (bundleContent: string) => {
+    const file = new File([bundleContent], 'p2p-bundle.lifethread.zip', {
+      type: 'application/json;charset=utf-8',
+    });
+    const { gedcomContent, metadata } = await parseLifeThreadBundle(file);
+    if (!gedcomContent) return;
+    const incomingGedcom = parseGedcom(gedcomContent);
+    if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
+    const normalizedFromBundle = typeof metadata.normalizedGedcomContent === 'string'
+      ? parseGedcom(metadata.normalizedGedcomContent)
+      : null;
+    const hasValidNormalized =
+      !!normalizedFromBundle?.individuals &&
+      !!normalizedFromBundle?.families &&
+      (!metadata.normalizationAlgoVersion || metadata.normalizationAlgoVersion === NORMALIZATION_ALGO_VERSION);
+    syncReceivingInProgressRef.current = false;
+    setP2PSyncStatusText('applying');
+    handleDataLoaded(
+      incomingGedcom,
+      metadata.databaseName || 'Remote P2P Database',
+      {
+        preserveDocuments: true,
+        skipClientNormalizationFallback: hasValidNormalized,
+        incomingNormalizedGedcom: hasValidNormalized ? normalizedFromBundle : null,
+        incomingNormalizationAlgoVersion: metadata.normalizationAlgoVersion,
+      }
+    );
+    const hasBundleDocumentsPayload =
+      !!metadata.documentsByIndividualId &&
+      typeof metadata.documentsByIndividualId === 'object' &&
+      Object.keys(metadata.documentsByIndividualId as Record<string, unknown>).length > 0;
+    if (hasBundleDocumentsPayload) {
+      setDocumentsByIndividualId(normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>));
+    }
+    if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+      setInviteGedcomProgress({
+        receivedChunks: 1,
+        totalChunks: 1,
+        applied: true,
+      });
+      const docsStats = hasBundleDocumentsPayload
+        ? computeMediaStats(normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>))
+        : { documentItems: 0, photoItems: 0 };
+      setInviteMediaProgress({
+        receivedBatches: 1,
+        totalBatches: 1,
+        receivedDocs: docsStats.documentItems,
+        totalDocs: docsStats.documentItems,
+        receivedPhotos: docsStats.photoItems,
+        totalPhotos: docsStats.photoItems,
+      });
+      setInviteNormalizedProgress({
+        receivedChunks: hasValidNormalized ? 1 : 0,
+        totalChunks: hasValidNormalized ? 1 : 0,
+        applied: hasValidNormalized,
+        fallbackLocal: false,
+      });
+    }
+    setP2PSyncStatusText('done');
+    window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+    logP2PActivity('sync.bundle.received', 'session', 'remote');
+    completeInviteOnboarding();
+  };
+
   const showTransientToast = (
     kind: 'success' | 'error',
     message: string,
@@ -914,7 +1168,7 @@ function App() {
   };
 
   const completeInviteOnboarding = () => {
-    if (!pendingInviteToken) return;
+    if (!pendingInviteTokenRef.current) return;
     if (inviteDocsFlushTimerRef.current !== null) {
       window.clearTimeout(inviteDocsFlushTimerRef.current);
       inviteDocsFlushTimerRef.current = null;
@@ -938,13 +1192,6 @@ function App() {
     setRightPanelOpen(true);
     setIsIdentifyingSelf(true);
     setIdentityTabSignal((prev) => prev + 1);
-    if (inviteSceneResumeTimerRef.current !== null) {
-      window.clearTimeout(inviteSceneResumeTimerRef.current);
-    }
-    inviteSceneResumeTimerRef.current = window.setTimeout(() => {
-      setInviteSceneDeferred(false);
-      inviteSceneResumeTimerRef.current = null;
-    }, 1800);
     if (inviteOnboardingDismissTimerRef.current !== null) {
       window.clearTimeout(inviteOnboardingDismissTimerRef.current);
     }
@@ -1475,13 +1722,11 @@ function App() {
     if (pendingInviteRole === 'contributor') return t('topPanel.inviteActionContribute');
     return t('topPanel.inviteActionEdit');
   }, [pendingInviteRole, t]);
-  const hasInviteTokenInLocation = useMemo(() => !!readInviteTokenFromLocation(), []);
-  const hasInviteTokenRawInLocation = useMemo(() => window.location.href.includes('g2invite='), []);
-  const isInviteLandingActive = !!(pendingInviteToken || hasInviteTokenInLocation || hasInviteTokenRawInLocation) && inviteOnboardingStage !== 'ready';
+  const isInviteLandingActive = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
   const inviteLandingDescription = useMemo(() => {
     const template = t('topPanel.inviteLandingText');
-    const inviter = pendingInviteInviterName || 'Un généalogiste';
-    const action = pendingInviteRoleLabel || 'consulter';
+    const inviter = pendingInviteInviterName || t('topPanel.inviteLandingInviterFallback');
+    const action = pendingInviteRoleLabel || t('topPanel.inviteActionView');
     return template.replace('{{inviter}}', inviter).replace('{{action}}', action);
   }, [pendingInviteInviterName, pendingInviteRoleLabel, t]);
   const inviteLandingStatusLabel = useMemo(() => {
@@ -1493,6 +1738,43 @@ function App() {
     if (inviteOnboardingStage === 'completed') return t('topPanel.inviteLandingCompleted');
     return t('topPanel.inviteLandingWaiting');
   }, [inviteOnboardingStage, t]);
+  const inviteLandingSteps = useMemo(() => {
+    const connected =
+      p2pStatus === 'connected' ||
+      inviteOnboardingStage === 'connected' ||
+      inviteOnboardingStage === 'accepted' ||
+      inviteOnboardingStage === 'syncing' ||
+      inviteOnboardingStage === 'completed' ||
+      inviteOnboardingStage === 'ready';
+    const bundleReceived = (inviteGedcomProgress?.receivedChunks || 0) > 0;
+    const gedcomApplied = !!inviteGedcomProgress?.applied;
+    const mediaDone =
+      !inviteMediaProgress ||
+      inviteMediaProgress.totalBatches <= 0 ||
+      inviteMediaProgress.receivedBatches >= inviteMediaProgress.totalBatches;
+    const normalizedDone = !inviteNormalizedProgress || inviteNormalizedProgress.applied;
+    const uiReadyLike =
+      inviteOnboardingStage === 'ready' ||
+      (inviteOnboardingStage === 'completed' && !!rootIndividual && !!selectedIndividual);
+
+    return [
+      { key: 'connection', label: t('topPanel.inviteLandingStepConnection'), status: connected ? 'done' : (inviteOnboardingStage === 'connecting' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+      { key: 'bundle', label: t('topPanel.inviteLandingStepBundle'), status: bundleReceived ? 'done' : (inviteOnboardingStage === 'syncing' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+      { key: 'gedcomApply', label: t('topPanel.inviteLandingStepGedcomApply'), status: gedcomApplied ? 'done' : ((bundleReceived || inviteOnboardingStage === 'syncing') ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+      { key: 'mediaApply', label: t('topPanel.inviteLandingStepMediaApply'), status: mediaDone ? 'done' : (inviteOnboardingStage === 'syncing' || inviteOnboardingStage === 'completed' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+      { key: 'normalizeApply', label: t('topPanel.inviteLandingStepNormalizeApply'), status: normalizedDone ? 'done' : (inviteOnboardingStage === 'syncing' || inviteOnboardingStage === 'completed' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+      { key: 'uiReady', label: t('topPanel.inviteLandingStepUiReady'), status: uiReadyLike ? 'done' : (inviteOnboardingStage === 'completed' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
+    ];
+  }, [
+    t,
+    p2pStatus,
+    inviteOnboardingStage,
+    inviteGedcomProgress,
+    inviteMediaProgress,
+    inviteNormalizedProgress,
+    rootIndividual,
+    selectedIndividual,
+  ]);
   const inviteLandingMediaLabel = useMemo(() => {
     if (!inviteMediaProgress) return null;
     const batchPart = inviteMediaProgress.totalBatches > 0
@@ -1506,6 +1788,17 @@ function App() {
       : `${inviteMediaProgress.receivedPhotos}`;
     return `${t('topPanel.inviteLandingMediaBatches')} ${batchPart} | ${t('topPanel.inviteLandingMediaDocuments')} ${docsPart} | ${t('topPanel.inviteLandingMediaPhotos')} ${photosPart}`;
   }, [inviteMediaProgress, t]);
+  const inviteLandingNormalizedLabel = useMemo(() => {
+    if (!inviteNormalizedProgress) return null;
+    const progress = `${inviteNormalizedProgress.receivedChunks}/${Math.max(inviteNormalizedProgress.totalChunks, 1)}`;
+    if (inviteNormalizedProgress.fallbackLocal) {
+      return `${progress} (${t('topPanel.inviteLandingNormalizeFallback')})`;
+    }
+    if (inviteNormalizedProgress.applied) {
+      return `${progress} (${t('topPanel.syncStatusDone')})`;
+    }
+    return progress;
+  }, [inviteNormalizedProgress, t]);
   const formatSyncStatusLabel = useCallback((raw: string | null): string => {
     if (!raw) return '';
     const sendingMatch = raw.match(/^sending\s+(\d+)\/(\d+)$/i);
@@ -1538,15 +1831,54 @@ function App() {
     }
     return map;
   }, [documentsByIndividualId]);
+  useEffect(() => {
+    if (p2pMode !== 'client') return;
+    const allDocs = Object.values(documentsByIndividualId).flat();
+    const photoDocs = allDocs.filter((d) => d.kind === 'photo' || isImageLikeUrl(d.url));
+    const firstPrefixes = photoDocs.slice(0, 3).map((d) => {
+      if (d.url.startsWith('data:')) return 'data:';
+      if (d.url.startsWith('blob:')) return 'blob:';
+      if (d.url.startsWith('http://') || d.url.startsWith('https://')) return 'http(s):';
+      return 'other';
+    });
+    console.info('[G2][INVITE_PHOTO_DEBUG]', {
+      docsIndividuals: Object.keys(documentsByIndividualId).length,
+      docsTotal: allDocs.length,
+      photosDetected: photoDocs.length,
+      primaryPhotoMapSize: Object.keys(primaryPhotoUrlById).length,
+      firstPhotoUrlPrefixes: firstPrefixes,
+    });
+  }, [p2pMode, documentsByIndividualId, primaryPhotoUrlById]);
   const shouldDeferInviteMediaRendering =
-    p2pMode === 'client' &&
-    !!pendingInviteToken &&
-    inviteOnboardingStage !== 'ready';
+    false;
   const shouldSuspendSceneForInvite =
     p2pMode === 'client' &&
-    (isInviteLandingActive || inviteSceneDeferred);
+    inviteSceneDeferred;
   const renderedPrimaryPhotoUrlById = shouldDeferInviteMediaRendering ? {} : primaryPhotoUrlById;
   const renderedDocumentsByIndividualId = shouldDeferInviteMediaRendering ? {} : documentsByIndividualId;
+
+  const withPrimaryPhotosApplied = useCallback((data: GedcomData | null) => {
+    if (!data) return data;
+    const entries = Object.entries(primaryPhotoUrlById);
+    if (entries.length === 0) return data;
+    let changed = false;
+    const nextIndividuals = { ...data.individuals };
+    for (const [individualId, photoUrl] of entries) {
+      const current = nextIndividuals[individualId];
+      const currentPhotoUrl = (current as any)?.photoUrl as string | undefined;
+      if (!current || currentPhotoUrl === photoUrl) continue;
+      nextIndividuals[individualId] = { ...(current as any), photoUrl } as Individual;
+      changed = true;
+    }
+    if (!changed) return data;
+    return { ...data, individuals: nextIndividuals };
+  }, [primaryPhotoUrlById]);
+
+  useEffect(() => {
+    if (Object.keys(primaryPhotoUrlById).length === 0) return;
+    setOriginalGedcomData((prev) => withPrimaryPhotosApplied(prev));
+    setNormalizedGedcomData((prev) => withPrimaryPhotosApplied(prev));
+  }, [primaryPhotoUrlById, withPrimaryPhotosApplied]);
 
   useEffect(() => {
     if (!livingCandidates.length) return;
@@ -1584,7 +1916,10 @@ function App() {
         (prev === 'idle' || prev === 'error') ? 'connecting' : prev
       );
     } else if (p2pStatus === 'error') {
-      setInviteOnboardingStage((prev) => (prev === 'ready' ? prev : 'error'));
+      setInviteOnboardingStage((prev) => {
+        if (prev === 'ready' || prev === 'completed') return prev;
+        return 'error';
+      });
     }
   }, [pendingInviteToken, inviteOnboardingStage, p2pStatus]);
 
@@ -1599,18 +1934,78 @@ function App() {
   useEffect(() => {
     if (!pendingInviteToken) return;
     if (inviteOnboardingStage !== 'completed') return;
-    const mediaFullyReceived =
-      !inviteMediaProgress ||
-      inviteMediaProgress.totalBatches <= 0 ||
-      inviteMediaProgress.receivedBatches >= inviteMediaProgress.totalBatches;
+    if (p2pModeRef.current !== 'client' || p2pStatus !== 'connected') return;
+    const media = inviteMediaProgress;
+    if (!media) return;
+
+    const hasAnyDocs = Object.keys(documentsByIndividualId).length > 0;
+    if (hasAnyDocs) {
+      if (inviteMediaRecoveryTimerRef.current !== null) {
+        window.clearTimeout(inviteMediaRecoveryTimerRef.current);
+        inviteMediaRecoveryTimerRef.current = null;
+      }
+      inviteMediaRecoveryRequestedRef.current = false;
+      inviteMediaRecoveryAttemptRef.current = 0;
+      if (inviteMediaRecoveryInFlight) setInviteMediaRecoveryInFlight(false);
+      return;
+    }
+
+    const expectedPhotos = media.totalPhotos > 0 || media.receivedPhotos > 0;
+    const mediaTransferCompleted = media.totalBatches > 0 && media.receivedBatches >= media.totalBatches;
+    if (!expectedPhotos || !mediaTransferCompleted) return;
+    if (inviteMediaRecoveryAttemptRef.current >= 3) return;
+    if (inviteMediaRecoveryRequestedRef.current) return;
+
+    inviteMediaRecoveryRequestedRef.current = true;
+    inviteMediaRecoveryAttemptRef.current += 1;
+    const attempt = inviteMediaRecoveryAttemptRef.current;
+    setInviteMediaRecoveryInFlight(true);
+    setP2PSyncStatusText('retry requested');
+    p2pService.sendMessage('BUNDLE_SYNC_REQUEST', {
+      reason: `invite_media_empty_retry_${attempt}`,
+      requesterPeerId: peerId || 'client',
+      requestedAt: new Date().toISOString(),
+    });
+    inviteMediaRecoveryTimerRef.current = window.setTimeout(() => {
+      inviteMediaRecoveryTimerRef.current = null;
+      inviteMediaRecoveryRequestedRef.current = false;
+      setInviteMediaRecoveryInFlight(false);
+    }, 4500);
+  }, [
+    pendingInviteToken,
+    inviteOnboardingStage,
+    p2pStatus,
+    inviteMediaProgress,
+    documentsByIndividualId,
+    inviteMediaRecoveryInFlight,
+    peerId,
+  ]);
+
+  useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage !== 'completed') return;
+    if (!inviteSceneDeferred) return;
+    const gedcomApplied = !!inviteGedcomProgress?.applied;
+    if (!gedcomApplied || isLoading || !rootIndividual || !selectedIndividual) return;
+    setInviteSceneDeferred(false);
+  }, [
+    pendingInviteToken,
+    inviteOnboardingStage,
+    inviteSceneDeferred,
+    inviteGedcomProgress,
+    isLoading,
+    rootIndividual,
+    selectedIndividual,
+  ]);
+
+  useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage !== 'completed') return;
     const gedcomApplied = !!inviteGedcomProgress?.applied;
     const uiStillPreparing =
       inviteSceneDeferred ||
-      !!p2pSyncStatusText ||
       isLoading ||
       !gedcomApplied ||
-      !mediaFullyReceived ||
-      !inviteRibbonFirstRenderDone ||
       !rootIndividual ||
       !selectedIndividual;
     if (uiStillPreparing) {
@@ -1622,6 +2017,11 @@ function App() {
     }
     if (inviteUiReadyTimerRef.current !== null) return;
     inviteUiReadyTimerRef.current = window.setTimeout(() => {
+      if (inviteSceneResumeTimerRef.current !== null) {
+        window.clearTimeout(inviteSceneResumeTimerRef.current);
+        inviteSceneResumeTimerRef.current = null;
+      }
+      setInviteSceneDeferred(false);
       setInviteOnboardingStage('ready');
       setPendingInviteToken(null);
       inviteUiReadyTimerRef.current = null;
@@ -1630,14 +2030,22 @@ function App() {
     pendingInviteToken,
     inviteOnboardingStage,
     inviteSceneDeferred,
-    p2pSyncStatusText,
     inviteGedcomProgress,
-    inviteMediaProgress,
     isLoading,
-    inviteRibbonFirstRenderDone,
     rootIndividual,
     selectedIndividual,
   ]);
+
+  useEffect(() => {
+    if (!pendingInviteToken) return;
+    if (inviteOnboardingStage !== 'completed') return;
+    const forceReadyTimer = window.setTimeout(() => {
+      setInviteSceneDeferred(false);
+      setInviteOnboardingStage('ready');
+      setPendingInviteToken(null);
+    }, 6000);
+    return () => window.clearTimeout(forceReadyTimer);
+  }, [pendingInviteToken, inviteOnboardingStage]);
 
   useEffect(() => {
     if (!pendingInviteToken) return;
@@ -1678,6 +2086,11 @@ function App() {
     setPendingInviteToken(inviteToken);
     setInviteHasAccepted(false);
     setInviteRibbonFirstRenderDone(false);
+    setInviteNormalizedProgress(null);
+    if (pendingNormalizationFallbackTimerRef.current !== null) {
+      window.clearTimeout(pendingNormalizationFallbackTimerRef.current);
+      pendingNormalizationFallbackTimerRef.current = null;
+    }
     inviteAcceptRequestedRef.current = false;
     const claims = parseInviteClaimsUnsafe(inviteToken);
     if (!claims) return;
@@ -1936,7 +2349,11 @@ function App() {
                     window.clearTimeout(syncChunkReceiveTimeoutRef.current);
                     syncChunkReceiveTimeoutRef.current = null;
                   }
-                  handleDataLoaded(incomingGedcom, payload.databaseName || "Remote P2P Database");
+                  handleDataLoaded(
+                    incomingGedcom,
+                    payload.databaseName || "Remote P2P Database",
+                    { preserveDocuments: true }
+                  );
                   if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
                     setInviteGedcomProgress({
                       receivedChunks: 1,
@@ -2033,7 +2450,11 @@ function App() {
                       syncApplyingInProgressRef.current = true;
                       setP2PSyncStatusText('applying');
                       const incomingGedcom = parseGedcom(fullGedcomText);
-                      handleDataLoaded(incomingGedcom, acc.databaseName || "Remote P2P Database");
+                      handleDataLoaded(
+                        incomingGedcom,
+                        acc.databaseName || "Remote P2P Database",
+                        { preserveDocuments: true }
+                      );
                       if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
                         setInviteGedcomProgress({
                           receivedChunks: acc.totalChunks,
@@ -2074,11 +2495,121 @@ function App() {
                     }
                   }
               }
+              if (data.type === 'NORMALIZED_SNAPSHOT' && data.payload) {
+                  const payload = data.payload as {
+                    normalizedGedcom?: GedcomData;
+                    algoVersion?: string;
+                  };
+                  if (payload.normalizedGedcom) {
+                    setInviteNormalizedProgress((prev) => ({
+                      receivedChunks: prev?.totalChunks || prev?.receivedChunks || 1,
+                      totalChunks: prev?.totalChunks || prev?.receivedChunks || 1,
+                      applied: false,
+                      fallbackLocal: false,
+                    }));
+                    applyIncomingNormalizedGedcom(payload.normalizedGedcom, payload.algoVersion);
+                  }
+              }
+              if (data.type === 'NORMALIZED_SNAPSHOT_CHUNK' && data.payload) {
+                  const payload = data.payload as {
+                    transferId?: string;
+                    index?: number;
+                    totalChunks?: number;
+                    chunk?: string;
+                    algoVersion?: string;
+                  };
+                  if (
+                    !payload.transferId ||
+                    typeof payload.index !== 'number' ||
+                    typeof payload.totalChunks !== 'number' ||
+                    typeof payload.chunk !== 'string' ||
+                    payload.totalChunks <= 0 ||
+                    payload.index < 0
+                  ) return;
+                  const key = payload.transferId;
+                  if (!incomingNormalizedChunksRef.current[key]) {
+                    incomingNormalizedChunksRef.current[key] = {
+                      totalChunks: payload.totalChunks,
+                      parts: new Array(payload.totalChunks).fill(''),
+                      received: 0,
+                      algoVersion: payload.algoVersion,
+                    };
+                  }
+                  const acc = incomingNormalizedChunksRef.current[key];
+                  if (payload.index >= acc.totalChunks) return;
+                  if (!acc.parts[payload.index]) {
+                    acc.parts[payload.index] = payload.chunk;
+                    acc.received += 1;
+                    setInviteNormalizedProgress({
+                      receivedChunks: acc.received,
+                      totalChunks: acc.totalChunks,
+                      applied: false,
+                      fallbackLocal: false,
+                    });
+                  }
+                  if (acc.received >= acc.totalChunks) {
+                    const full = acc.parts.join('');
+                    const algoVersion = acc.algoVersion;
+                    delete incomingNormalizedChunksRef.current[key];
+                    try {
+                      const parsed = JSON.parse(full) as GedcomData;
+                      applyIncomingNormalizedGedcom(parsed, algoVersion);
+                    } catch (error) {
+                      console.error('Failed to parse NORMALIZED_SNAPSHOT_CHUNK payload', error);
+                    }
+                  }
+              }
               if (data.type === 'SYNC_GEDCOM_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
                   if (p2pSessionUseCaseRef.current !== 'share') return;
                   setP2PSyncStatusText('peer requested retry');
                   sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
                   logP2PActivity('sync.request.received', 'session', peerId || 'host');
+              }
+              if (data.type === 'BUNDLE_SYNC_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
+                  if (p2pSessionUseCaseRef.current !== 'share') return;
+                  setP2PSyncStatusText('peer requested retry');
+                  sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh', { forceBundle: true });
+                  logP2PActivity('sync.bundle.request.received', 'session', peerId || 'host');
+              }
+              if (data.type === 'BUNDLE_SYNC' && data.payload) {
+                  const payload = data.payload as { bundleContent?: string };
+                  if (!payload.bundleContent || typeof payload.bundleContent !== 'string') return;
+                  void applyIncomingBundleSnapshot(payload.bundleContent);
+              }
+              if (data.type === 'BUNDLE_SYNC_CHUNK' && data.payload) {
+                  const payload = data.payload as {
+                    transferId?: string;
+                    index?: number;
+                    totalChunks?: number;
+                    chunk?: string;
+                  };
+                  if (
+                    !payload.transferId ||
+                    typeof payload.index !== 'number' ||
+                    typeof payload.totalChunks !== 'number' ||
+                    typeof payload.chunk !== 'string' ||
+                    payload.totalChunks <= 0 ||
+                    payload.index < 0
+                  ) return;
+                  const key = payload.transferId;
+                  if (!incomingBundleChunksRef.current[key]) {
+                    incomingBundleChunksRef.current[key] = {
+                      totalChunks: payload.totalChunks,
+                      parts: new Array(payload.totalChunks).fill(''),
+                      received: 0,
+                    };
+                  }
+                  const acc = incomingBundleChunksRef.current[key];
+                  if (payload.index >= acc.totalChunks) return;
+                  if (!acc.parts[payload.index]) {
+                    acc.parts[payload.index] = payload.chunk;
+                    acc.received += 1;
+                  }
+                  if (acc.received >= acc.totalChunks) {
+                    const full = acc.parts.join('');
+                    delete incomingBundleChunksRef.current[key];
+                    void applyIncomingBundleSnapshot(full);
+                  }
               }
               if (data.type === 'DOCUMENTS_SYNC' && data.payload) {
                   const payload = data.payload as {
@@ -2770,7 +3301,7 @@ function App() {
       if (target !== displayMode) {
         // During intentional view switches, old canvases can emit context-lost
         // while unmounting. Ignore recovery in that short window to prevent flicker.
-        webglRecoverySuppressedUntilRef.current = Date.now() + 6000;
+        webglRecoverySuppressedUntilRef.current = Date.now() + 2500;
       }
 
       const wasIn2D = viewMode === '2D';
@@ -2803,7 +3334,10 @@ function App() {
 
   const handleWebGLContextLost = useCallback(() => {
     const now = Date.now();
-    if (pendingInviteToken && inviteOnboardingStageRef.current !== 'ready') return;
+    if (pendingInviteToken && inviteOnboardingStageRef.current !== 'ready') {
+      inviteWebglRecoveryQueuedRef.current = true;
+      return;
+    }
     if (syncReceivingInProgressRef.current || syncApplyingInProgressRef.current) return;
     if (now < webglRecoverySuppressedUntilRef.current) return;
     if (webglRecoveryInFlightRef.current) return;
@@ -2838,6 +3372,22 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const inviteStillBlockingRecovery = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
+    if (inviteStillBlockingRecovery) return;
+    if (!inviteWebglRecoveryQueuedRef.current) return;
+    if (webglRecoveryInFlightRef.current || syncReceivingInProgressRef.current || syncApplyingInProgressRef.current) return;
+    if (webglRecoveryTimerRef.current !== null) return;
+    inviteWebglRecoveryQueuedRef.current = false;
+    webglRecoveryInFlightRef.current = true;
+    webglLastRecoveryAtRef.current = Date.now();
+    webglRecoveryTimerRef.current = window.setTimeout(() => {
+      setWebglRecoveryKey((prev) => prev + 1);
+      webglRecoveryInFlightRef.current = false;
+      webglRecoveryTimerRef.current = null;
+    }, 220);
+  }, [pendingInviteToken, inviteOnboardingStage]);
+
+  useEffect(() => {
     return () => {
       if (webglRecoveryTimerRef.current !== null) {
         window.clearTimeout(webglRecoveryTimerRef.current);
@@ -2853,6 +3403,18 @@ function App() {
       }
       if (inviteUiReadyTimerRef.current !== null) {
         window.clearTimeout(inviteUiReadyTimerRef.current);
+      }
+      if (inviteMediaRecoveryTimerRef.current !== null) {
+        window.clearTimeout(inviteMediaRecoveryTimerRef.current);
+      }
+      if (pendingNormalizationFallbackTimerRef.current !== null) {
+        window.clearTimeout(pendingNormalizationFallbackTimerRef.current);
+      }
+      if (inviteRibbonRenderRaf1Ref.current !== null) {
+        window.cancelAnimationFrame(inviteRibbonRenderRaf1Ref.current);
+      }
+      if (inviteRibbonRenderRaf2Ref.current !== null) {
+        window.cancelAnimationFrame(inviteRibbonRenderRaf2Ref.current);
       }
     };
   }, []);
@@ -2889,16 +3451,72 @@ function App() {
     }
   }, []);
 
-  const handleDataLoaded = (data: GedcomData, name: string = "Imported Database") => {
+  const handleDataLoaded = (
+    data: GedcomData,
+    name: string = "Imported Database",
+    options?: {
+      preserveDocuments?: boolean;
+      skipClientNormalizationFallback?: boolean;
+      incomingNormalizedGedcom?: GedcomData | null;
+      incomingNormalizationAlgoVersion?: string;
+    }
+  ) => {
     setOriginalGedcomData(data);
-
+    normalizedSnapshotAppliedRef.current = false;
+    if (pendingNormalizationFallbackTimerRef.current !== null) {
+      window.clearTimeout(pendingNormalizationFallbackTimerRef.current);
+      pendingNormalizationFallbackTimerRef.current = null;
+    }
     const shouldDeferNormalization =
       p2pModeRef.current === 'client' ||
       Object.keys(data.individuals).length > 15000;
-    scheduleNormalization(data, shouldDeferNormalization);
+    if (p2pModeRef.current === 'client') {
+      const incomingNorm = options?.incomingNormalizedGedcom;
+      const hasCompatibleIncomingNorm =
+        !!incomingNorm?.individuals &&
+        !!incomingNorm?.families &&
+        (!options?.incomingNormalizationAlgoVersion || options.incomingNormalizationAlgoVersion === NORMALIZATION_ALGO_VERSION);
+      if (hasCompatibleIncomingNorm && incomingNorm) {
+        normalizedSnapshotAppliedRef.current = true;
+        setNormalizedGedcomData(incomingNorm);
+        setInviteNormalizedProgress({
+          receivedChunks: 1,
+          totalChunks: 1,
+          applied: true,
+          fallbackLocal: false,
+        });
+      } else {
+        setNormalizedGedcomData(null);
+        setInviteNormalizedProgress({
+          receivedChunks: 0,
+          totalChunks: 0,
+          applied: false,
+          fallbackLocal: false,
+        });
+        if (!options?.skipClientNormalizationFallback) {
+          pendingNormalizationFallbackTimerRef.current = window.setTimeout(() => {
+            if (normalizedSnapshotAppliedRef.current) return;
+            scheduleNormalization(data, true);
+            setInviteNormalizedProgress({
+              receivedChunks: 0,
+              totalChunks: 0,
+              applied: true,
+              fallbackLocal: true,
+            });
+          }, 7000);
+        }
+      }
+    } else {
+      scheduleNormalization(data, shouldDeferNormalization);
+    }
 
     setDatabaseName(name);
-    setDocumentsByIndividualId({});
+    // P2P sync: do not wipe documents here — DOCUMENTS_SYNC may already have been applied
+    // before the last GEDCOM chunk is applied; embedded docs are merged by the SYNC handler
+    // immediately after this call when present.
+    if (!options?.preserveDocuments) {
+      setDocumentsByIndividualId({});
+    }
     setActiveInfoPage(null); // Close info pages on data load
     
     // UI RESET: Ensure Panels are CLOSED so user sees the scene immediately
@@ -3612,11 +4230,27 @@ function App() {
     inviteAcceptRequestedRef.current = true;
     setInviteRibbonFirstRenderDone(false);
     inviteReceivedDocumentScopesRef.current.clear();
+    inviteMediaRecoveryRequestedRef.current = false;
+    inviteMediaRecoveryAttemptRef.current = 0;
+    if (inviteMediaRecoveryTimerRef.current !== null) {
+      window.clearTimeout(inviteMediaRecoveryTimerRef.current);
+      inviteMediaRecoveryTimerRef.current = null;
+    }
+    setInviteMediaRecoveryInFlight(false);
+    incomingNormalizedChunksRef.current = {};
+    incomingBundleChunksRef.current = {};
+    normalizedSnapshotAppliedRef.current = false;
     setInviteSceneDeferred(true);
     setInviteGedcomProgress({
       receivedChunks: 0,
       totalChunks: 0,
       applied: false,
+    });
+    setInviteNormalizedProgress({
+      receivedChunks: 0,
+      totalChunks: 0,
+      applied: false,
+      fallbackLocal: false,
     });
     setInviteMediaProgress({
       receivedBatches: 0,
@@ -4740,7 +5374,9 @@ function App() {
                 <div className="font-semibold">{inviteLandingStatusLabel}</div>
                 {(inviteOnboardingStage !== 'idle' || p2pStatus !== 'disconnected') && (
                   <div className="mt-2 space-y-1">
-                    {p2pSyncStatusText && <div>Sync: {syncStatusLabel}</div>}
+                    {p2pSyncStatusText && (
+                      <div>{t('topPanel.inviteLandingSyncDetail').replace('{{detail}}', syncStatusLabel)}</div>
+                    )}
                     {inviteGedcomProgress && (
                       <div>
                         {t('topPanel.inviteLandingGedcom')}: {inviteGedcomProgress.receivedChunks}/{Math.max(inviteGedcomProgress.totalChunks, 1)}
@@ -4749,12 +5385,28 @@ function App() {
                     )}
                     {!inviteGedcomProgress && remotePeerHasData !== null && <div>{t('topPanel.inviteLandingGedcom')}: {remotePeerHasData ? t('topPanel.loaded') : t('topPanel.empty')}</div>}
                     {inviteLandingMediaLabel && <div>{t('topPanel.inviteLandingMedia')}: {inviteLandingMediaLabel}</div>}
+                    {inviteLandingNormalizedLabel && <div>{t('topPanel.inviteLandingNormalized')}: {inviteLandingNormalizedLabel}</div>}
                     {inviteOnboardingStage === 'completed' && !inviteRibbonFirstRenderDone && (
                       <div>{t('topPanel.inviteLandingUiPreparing')}</div>
                     )}
                     {inviteOnboardingStage === 'connected' && !inviteAcceptRequestedRef.current && (
                       <div>{t('topPanel.inviteLandingWaitingAcceptAction')}</div>
                     )}
+                    <div className="mt-3 space-y-1 text-left">
+                      {inviteLandingSteps.map((step) => {
+                        const prefix =
+                          step.status === 'done'
+                            ? t('topPanel.inviteLandingStepDone')
+                            : step.status === 'active'
+                              ? t('topPanel.inviteLandingStepActive')
+                              : t('topPanel.inviteLandingStepPending');
+                        return (
+                          <div key={step.key}>
+                            {prefix} {step.label}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -4916,6 +5568,10 @@ function App() {
         onConnectP2P={handleConnectP2P}
         onStartShare={handleStartShare}
         onStartCompare={handleStartCompare}
+        transferMode={p2pTransferMode}
+        onChangeTransferMode={setP2PTransferMode}
+        bundleContentMode={p2pBundleContentMode}
+        onChangeBundleContentMode={setP2PBundleContentMode}
         activityEvents={p2pActivityEvents}
         proposals={p2pProposals}
         visibilitySettings={p2pVisibilitySettings}

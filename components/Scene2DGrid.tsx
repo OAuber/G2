@@ -109,6 +109,7 @@ function extractYearFromDate(input?: string): number | null {
 function isImageLikeUrl(url: string): boolean {
   if (!url) return false;
   if (url.startsWith('data:image/')) return true;
+  if (url.startsWith('blob:')) return true;
   return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
 }
 

@@ -31,6 +31,10 @@ interface TopPanelProps {
   onConnectP2P: (hostId: string) => void;
   onStartShare: () => void;
   onStartCompare: () => void;
+  transferMode: 'progressive' | 'bundle';
+  onChangeTransferMode: (mode: 'progressive' | 'bundle') => void;
+  bundleContentMode: 'gedcom-only' | 'gedcom-and-documents';
+  onChangeBundleContentMode: (mode: 'gedcom-only' | 'gedcom-and-documents') => void;
   activityEvents: ActivityLogEvent[];
   proposals: Array<{
     proposalId: string;
@@ -88,6 +92,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onConnectP2P,
   onStartShare,
   onStartCompare,
+  transferMode,
+  onChangeTransferMode,
+  bundleContentMode,
+  onChangeBundleContentMode,
   activityEvents,
   proposals,
   visibilitySettings,
@@ -301,6 +309,32 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {p2pStatus !== 'disconnected' && (
           <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {showShareAction && (
+              <label className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
+                <span>{t('topPanel.transferModeLabel')}</span>
+                <select
+                  value={transferMode}
+                  onChange={(e) => onChangeTransferMode(e.target.value as 'progressive' | 'bundle')}
+                  className={`text-[10px] rounded border px-1 py-0.5 ${inputBg}`}
+                >
+                  <option value="progressive">{t('topPanel.transferModeProgressive')}</option>
+                  <option value="bundle">{t('topPanel.transferModeBundle')}</option>
+                </select>
+              </label>
+            )}
+            {showShareAction && transferMode === 'bundle' && (
+              <label className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
+                <span>{t('topPanel.bundleContentLabel')}</span>
+                <select
+                  value={bundleContentMode}
+                  onChange={(e) => onChangeBundleContentMode(e.target.value as 'gedcom-only' | 'gedcom-and-documents')}
+                  className={`text-[10px] rounded border px-1 py-0.5 ${inputBg}`}
+                >
+                  <option value="gedcom-only">{t('topPanel.bundleContentGedcomOnly')}</option>
+                  <option value="gedcom-and-documents">{t('topPanel.bundleContentGedcomAndDocuments')}</option>
+                </select>
+              </label>
+            )}
             {showShareAction && (
               <button
                 onClick={onStartShare}
