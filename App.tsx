@@ -5048,18 +5048,14 @@ function App() {
   };
   const renderBrandMark = (compact = false) => (
     <span
-      className={`inline-flex items-start font-black tracking-tight ${compact ? 'text-2xl md:text-3xl' : 'text-3xl md:text-4xl'} ${
+      className={`inline-flex items-baseline font-black tracking-tight ${compact ? 'text-2xl md:text-3xl' : 'text-3xl md:text-4xl'} ${
         isDarkMode ? 'text-slate-200' : 'text-slate-800'
       }`}
     >
       G
-      <sup
-        className={`-ml-1 md:-ml-1.5 align-super font-semibold ${compact ? 'text-xs md:text-sm' : 'text-lg md:text-xl'} ${
-          isDarkMode ? 'text-slate-500' : 'text-slate-400'
-        }`}
-      >
+      <span className="font-black text-slate-300">
         2
-      </sup>
+      </span>
     </span>
   );
 
@@ -5474,74 +5470,99 @@ function App() {
           <>
             {activeInfoPage ? renderInfoPage() : (
               <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
-                <div className="min-h-full flex flex-col items-center justify-center p-4 md:p-8 text-center">
-                    <h1 className="mb-2 tracking-tight pt-10 md:pt-0">{renderBrandMark()}</h1>
-                    <h2 className="text-lg md:text-xl font-light mb-6 md:mb-8 opacity-80">{t('landing.subtitle')}</h2>
-                    
-                    <div className="max-w-2xl text-sm md:text-lg font-light leading-relaxed opacity-70 mb-8 md:mb-12">
-                        {t('landing.intro')}
-                    </div>
-                    
-                    <div className="flex flex-col items-center gap-6 font-bold text-xs tracking-widest uppercase opacity-80 z-10 pb-10">
-                        <button onClick={handleInitIdentifySelf} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                            {t('landing.actions.identify')}
-                        </button>
-                        <div className="flex gap-2 items-center">
-                            <button onClick={() => setLeftPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                {t('landing.actions.importFamily')}
-                            </button>
-                            <span className="opacity-50">{t('landing.actions.or')}</span>
-                            <button onClick={handleInitCreation} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                {t('landing.actions.createIndividuals')}
-                            </button>
-                        </div>
-                        
-                        <div className="flex gap-2 items-center">
-                            <button onClick={() => setBottomPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                {t('landing.actions.visualize')}
-                            </button>
-                            <span className="opacity-50">{t('landing.actions.and')}</span>
-                            <button onClick={() => setTopPanelOpen(true)} className="cursor-pointer hover:text-blue-500 transition-colors border-b border-transparent hover:border-blue-500/50">
-                                {t('landing.actions.share')}
-                            </button>
-                        </div>
+                <div className="min-h-full flex flex-col items-center justify-center gap-5 md:gap-6 p-6 md:p-10 text-center">
 
-                        <div className="mt-8 flex gap-4 opacity-70">
-                        <button onClick={() => setActiveInfoPage('about')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.about')}</button>
-                        <span>-</span>
-                        <button onClick={() => setIsHelpOpen(true)} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.help')}</button>
-                        <span>-</span>
-                        <button onClick={() => setActiveInfoPage('contribute')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.contribute')}</button>
-                        <span>-</span>
-                        <button onClick={() => setActiveInfoPage('contact')} className="hover:opacity-100 hover:text-blue-500 transition-colors">{t('landing.links.contact')}</button>
-                        </div>
-                    </div>
+                  {/* G2 wordmark */}
+                  <div className="mt-8 md:mt-0 flex flex-col items-center gap-1">
+                    <h1 className={`inline-flex items-baseline font-black tracking-tight leading-none select-none text-7xl md:text-9xl ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+                      G<span className="font-black text-slate-300">2</span>
+                    </h1>
+                    <p className={`text-xs md:text-sm font-light tracking-[0.25em] uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {t('landing.subtitle')}
+                    </p>
+                  </div>
 
-                    <button
-                      onClick={toggleLanguage}
-                      className={`fixed top-5 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full border shadow-lg backdrop-blur-sm z-[240] text-xs font-bold tracking-wider opacity-85 hover:opacity-100 transition-colors ${
-                        isDarkMode
-                          ? 'border-slate-700 bg-black/75 text-slate-300 hover:bg-neutral-900'
-                          : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
-                      }`}
-                      title={t('app.language.switchTo')}
-                      aria-label={t('app.language.switchTo')}
-                    >
-                      {language.toUpperCase()}
-                    </button>
+                  {/* SVG Logo — entre le sous-titre et le tagline */}
+                  <div className={isDarkMode ? 'drop-shadow-xl' : 'drop-shadow-md'}>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" className="w-24 h-24 md:w-36 md:h-36" role="img" aria-label="G2">
+                      {isDarkMode && <rect width="64" height="64" rx="12" fill="#000000"/>}
+                      <line x1="16" y1="16" x2="48" y2="48" stroke="#f472b6" strokeWidth="7" strokeLinecap="round"/>
+                      <line x1="48" y1="16" x2="16" y2="48" stroke="#60a5fa" strokeWidth="7" strokeLinecap="round"/>
+                    </svg>
+                  </div>
 
+                  {/* Tagline */}
+                  <p className={`text-xs tracking-[0.2em] uppercase font-light ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+                    {t('landing.tagline')}
+                  </p>
+
+                  {/* Theme + Language toggles — icônes seules, bulles rondes */}
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={() => setIsDarkMode(!isDarkMode)}
-                      className={`fixed bottom-5 right-5 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[240] opacity-80 hover:opacity-100 transition-colors ${
+                      className={`w-8 h-8 rounded-full border flex items-center justify-center transition-colors ${
                         isDarkMode
-                          ? 'border-slate-700 bg-black/75 text-slate-300 hover:bg-neutral-900'
-                          : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+                          ? 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                          : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
                       }`}
                       title={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
-                      aria-label={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
                     >
-                      {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                      {isDarkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
                     </button>
+                    <button
+                      onClick={toggleLanguage}
+                      className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-semibold transition-colors ${
+                        isDarkMode
+                          ? 'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                          : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
+                      }`}
+                      title={t('app.language.switchTo')}
+                    >
+                      {language}
+                    </button>
+                  </div>
+
+                  {/* Action rows */}
+                  <div className="flex flex-col items-center gap-3">
+                    <div className={`flex items-center gap-2 md:gap-4 text-xs md:text-sm font-bold tracking-[0.2em] uppercase ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                      <button onClick={() => setLeftPanelOpen(true)} className="hover:text-pink-400 transition-colors cursor-pointer">
+                        {t('landing.actions.import')}
+                      </button>
+                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
+                      <button onClick={handleInitCreation} className="hover:text-pink-400 transition-colors cursor-pointer">
+                        {t('landing.actions.create')}
+                      </button>
+                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
+                      <button onClick={() => setBottomPanelOpen(true)} className="hover:text-pink-400 transition-colors cursor-pointer">
+                        {t('landing.actions.visualize')}
+                      </button>
+                    </div>
+                    <div className={`flex items-center gap-2 md:gap-4 text-xs md:text-sm font-bold tracking-[0.2em] uppercase ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                      <button onClick={handleInitIdentifySelf} className="hover:text-blue-400 transition-colors cursor-pointer">
+                        {t('landing.actions.identify')}
+                      </button>
+                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
+                      <button onClick={() => setTopPanelOpen(true)} className="hover:text-blue-400 transition-colors cursor-pointer">
+                        {t('landing.actions.certify')}
+                      </button>
+                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
+                      <button onClick={() => setTopPanelOpen(true)} className="hover:text-blue-400 transition-colors cursor-pointer">
+                        {t('landing.actions.share')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Footer links */}
+                  <div className={`flex items-center gap-2 text-xs tracking-widest uppercase pb-8 ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+                    <button onClick={() => setActiveInfoPage('about')} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.about')}</button>
+                    <span>·</span>
+                    <button onClick={() => setIsHelpOpen(true)} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.help')}</button>
+                    <span>·</span>
+                    <button onClick={() => setActiveInfoPage('contribute')} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.contribute')}</button>
+                    <span>·</span>
+                    <button onClick={() => setActiveInfoPage('contact')} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.contact')}</button>
+                  </div>
+
                 </div>
               </div>
             )}

@@ -68,17 +68,15 @@ const en = {
     processing: 'Processing...',
   },
   landing: {
-    subtitle: 'Distributed genealogy, owned by genealogists',
-    intro:
-      'Create, edit, and visualize trees of any size in 2D and 3D (tested with 40K individuals), enriched with photos and documents. Publish unknown-root ancestors, discover potential P2P matches, and keep full control over what you share, what you validate, and what remains private.',
+    subtitle: 'Generation by Generation',
+    tagline: 'For humans, by humans',
     actions: {
-      identify: 'IDENTIFY YOURSELF',
-      importFamily: 'IMPORT FAMILY',
-      createIndividuals: 'CREATE INDIVIDUALS',
+      import: 'IMPORT',
+      create: 'CREATE',
       visualize: 'VISUALIZE',
+      identify: 'IDENTIFY',
+      certify: 'CERTIFY',
       share: 'SHARE',
-      or: 'or',
-      and: 'and',
     },
     links: {
       about: 'About',
@@ -90,11 +88,11 @@ const en = {
   info: {
     about: {
       title: 'About',
-      p1: 'G2 (pronounced Gdeux, Getou, or Djeetoo) is built for genealogists who need both depth and scale: create, edit, and explore family trees in 2D and 3D, from small research sets to large collections (tested with 40,000 individuals).',
-      p2: 'Your data stays under your control. No central platform, no locked silo, no dependency on a third-party gatekeeper. Exchanges happen peer to peer, with visibility rules chosen by users.',
-      p3: 'You can publish ancestors with unknown roots. These records can attempt automatic matching across the P2P network, while final investigation and validation remain a genealogist decision.',
-      p4: 'G2 does not aim to build a universal genealogy tree. Its ambition is a Web of Trust (WoT) connecting genealogists and the people represented in their databases, inspired by the G1 free-currency WoT. If this WoT proves robust and viral enough over time, it could eventually support the creation of a G2 free currency.',
-      p5: 'G2 is free software. Its concept is also a free artwork, in continuity with the Arbre project initiated by Olivier Auber in the early 2000s.',
+      p1: 'G2 (pronounced G-deux, Getou, or Djeetoo) is a space where family memory takes shape. Create, navigate, and share genealogical trees in 2D and 3D — from a handful of people to tens of thousands (tested with 40,000 individuals), enriched with photos and documents.',
+      p2: 'Your data is yours. No central platform, no locked cloud, no invisible intermediary. Exchanges happen peer to peer, with full control over what you share, what you validate, and what remains private.',
+      p3: 'G2 understands that some ancestors leave no traceable roots. These records can be published openly, exposed to potential matches across the P2P network — while all investigation and validation remain a genealogist\'s decision.',
+      p4: 'G2 carries a long artistic and technical lineage: the Arbre project initiated by Olivier Auber in the early 2000s, and the open principles of the G1 Libre currency Web of Trust. It holds these ideas gently — at human scale, generation by generation.',
+      p5: 'G2 is free software. It is also, in its own way, a living artwork.',
     },
     contribute: {
       title: 'Contribute',
