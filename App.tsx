@@ -5470,20 +5470,20 @@ function App() {
           <>
             {activeInfoPage ? renderInfoPage() : (
               <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
-                <div className="min-h-full flex flex-col items-center justify-center gap-5 md:gap-6 p-6 md:p-10 text-center">
+                <div className="min-h-full flex flex-col items-center justify-center gap-3 md:gap-4 p-6 md:p-10 text-center">
 
                   {/* G2 wordmark */}
                   <div className="mt-8 md:mt-0 flex flex-col items-center gap-1">
                     <h1 className={`inline-flex items-baseline font-black tracking-tight leading-none select-none text-7xl md:text-9xl ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>
                       G<span className="font-black text-slate-300">2</span>
                     </h1>
-                    <p className={`text-xs md:text-sm font-light tracking-[0.25em] uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                    <p className={`text-[10px] md:text-xs font-light tracking-[0.25em] uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                       {t('landing.subtitle')}
                     </p>
                   </div>
 
                   {/* SVG Logo — entre le sous-titre et le tagline */}
-                  <div className={isDarkMode ? 'drop-shadow-xl' : 'drop-shadow-md'}>
+                  <div className={`-my-1 ${isDarkMode ? 'drop-shadow-xl' : 'drop-shadow-md'}`}>
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" className="w-24 h-24 md:w-36 md:h-36" role="img" aria-label="G2">
                       {isDarkMode && <rect width="64" height="64" rx="12" fill="#000000"/>}
                       <line x1="16" y1="16" x2="48" y2="48" stroke="#f472b6" strokeWidth="7" strokeLinecap="round"/>
@@ -5492,7 +5492,7 @@ function App() {
                   </div>
 
                   {/* Tagline */}
-                  <p className={`text-xs tracking-[0.2em] uppercase font-light ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+                  <p className={`text-[10px] md:text-xs tracking-[0.2em] uppercase font-light ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                     {t('landing.tagline')}
                   </p>
 
