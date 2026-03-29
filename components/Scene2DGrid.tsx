@@ -306,9 +306,13 @@ const ScrollZoomControls: React.FC<{
   const dragging = useRef(false);
   const lastX = useRef(0);
   const lastY = useRef(0);
+  const lastTouchDist = useRef<number | null>(null);
 
   useEffect(() => {
     const canvas = gl.domElement;
+    // Empêche le navigateur mobile d'intercepter les gestes touch comme zoom de page
+    canvas.style.touchAction = 'none';
+
     const applyZoomDelta = (ortho: THREE.OrthographicCamera, deltaY: number) => {
       const prevZoom = ortho.zoom;
       const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prevZoom * (1 - deltaY * 0.001)));
@@ -335,7 +339,64 @@ const ScrollZoomControls: React.FC<{
       applyZoomDelta(ortho, e.deltaY);
     };
 
+    const getTouchDist = (t1: Touch, t2: Touch) =>
+      Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+
+    const onTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 2) {
+        lastTouchDist.current = getTouchDist(e.touches[0], e.touches[1]);
+        dragging.current = false;
+      } else if (e.touches.length === 1) {
+        dragging.current = true;
+        lastX.current = e.touches[0].clientX;
+        lastY.current = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const ortho = camera as THREE.OrthographicCamera;
+      if (e.touches.length === 2 && lastTouchDist.current !== null) {
+        const newDist = getTouchDist(e.touches[0], e.touches[1]);
+        const scale = lastTouchDist.current / newDist; // >1 = zoom arrière, <1 = zoom avant
+        const syntheticDeltaY = (scale - 1) * 500;
+        lastTouchDist.current = newDist;
+        if (onWheelZoomIntent?.({ deltaY: syntheticDeltaY, currentZoom: ortho.zoom })) {
+          return;
+        }
+        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, ortho.zoom / scale));
+        if (nextZoom !== ortho.zoom) {
+          ortho.zoom = nextZoom;
+          ortho.updateProjectionMatrix();
+        }
+      } else if (e.touches.length === 1 && dragging.current) {
+        const dx = e.touches[0].clientX - lastX.current;
+        const dy = e.touches[0].clientY - lastY.current;
+        if (enableHorizontalPan) {
+          camera.position.x -= dx / ortho.zoom;
+        }
+        camera.position.y += dy / ortho.zoom;
+        lastX.current = e.touches[0].clientX;
+        lastY.current = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) lastTouchDist.current = null;
+      if (e.touches.length === 0) {
+        dragging.current = false;
+      } else if (e.touches.length === 1) {
+        // Re-ancrage pour éviter un saut lors du passage 2→1 doigt
+        dragging.current = true;
+        lastX.current = e.touches[0].clientX;
+        lastY.current = e.touches[0].clientY;
+      }
+    };
+
+    // Pointer Events uniquement pour souris / stylet (le touch est géré ci-dessus)
     const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
       if (e.button !== 0 && e.button !== 2) return;
       dragging.current = true;
       lastX.current = e.clientX;
@@ -344,6 +405,7 @@ const ScrollZoomControls: React.FC<{
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
       if (!dragging.current) return;
       const ortho = camera as THREE.OrthographicCamera;
       const dx = e.clientX - lastX.current;
@@ -357,6 +419,7 @@ const ScrollZoomControls: React.FC<{
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
       if (!dragging.current) return;
       dragging.current = false;
       canvas.releasePointerCapture(e.pointerId);
@@ -364,6 +427,9 @@ const ScrollZoomControls: React.FC<{
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('wheel', onWindowWheel, { passive: true });
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd);
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
@@ -372,6 +438,9 @@ const ScrollZoomControls: React.FC<{
     return () => {
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('wheel', onWindowWheel);
+      canvas.removeEventListener('touchstart', onTouchStart);
+      canvas.removeEventListener('touchmove', onTouchMove);
+      canvas.removeEventListener('touchend', onTouchEnd);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);

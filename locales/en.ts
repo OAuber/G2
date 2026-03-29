@@ -88,11 +88,11 @@ const en = {
   info: {
     about: {
       title: 'About',
-      p1: 'G2 (pronounced G-deux, Getou, or Djeetoo) is a space where family memory takes shape. Create, navigate, and share genealogical trees in 2D and 3D — from a handful of people to tens of thousands (tested with 40,000 individuals), enriched with photos and documents.',
-      p2: 'Your data is yours. No central platform, no locked cloud, no invisible intermediary. Exchanges happen peer to peer, with full control over what you share, what you validate, and what remains private.',
-      p3: 'G2 understands that some ancestors leave no traceable roots. These records can be published openly, exposed to potential matches across the P2P network — while all investigation and validation remain a genealogist\'s decision.',
-      p4: 'G2 carries a long artistic and technical lineage: the Arbre project initiated by Olivier Auber in the early 2000s, and the open principles of the G1 Libre currency Web of Trust. It holds these ideas gently — at human scale, generation by generation.',
-      p5: 'G2 is free software. It is also, in its own way, a living artwork.',
+      p1: 'G2 (pronounced Djee-too) is a space where personal and collective memory takes shape. Create, navigate, and share genealogical trees in 2D and 3D — from a handful of people to tens of thousands, enriched with photos and documents.',
+      p2: 'Your data is yours. No central platform, no locked cloud, no invisible intermediary. No Artificial Intelligence. No fake identities. Exchanges happen peer to peer, with full control over what you share, what you validate, and what remains private.',
+      p3: "Some ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility.",
+      p4: "G2 is developed by Olivier Auber, researcher in art and cognitive sciences. It carries a long lineage: the Arbre project, the Ğ1 libre currency Web of Trust (Duniter), and ongoing research on money in the era of AGI (BGI Nexus).",
+      p5: 'G2 is free software that carries these ideas gently — at human scale, generation by generation. It is, in its own way, an open and ever-evolving collective artwork.',
     },
     contribute: {
       title: 'Contribute',

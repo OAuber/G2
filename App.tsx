@@ -5065,15 +5065,56 @@ function App() {
      const contentByPage: Record<'about' | 'contribute' | 'contact', { title: string; body: React.ReactNode }> = {
        about: {
         title: t('info.about.title'),
-         body: (
-           <>
-            <p>{t('info.about.p1')}</p>
-            <p>{t('info.about.p2')}</p>
-            <p>{t('info.about.p3')}</p>
-            <p>{t('info.about.p4')}</p>
-            <p>{t('info.about.p5')}</p>
-           </>
-         ),
+         body: (() => {
+           const fr = language === 'fr';
+           const lnk = 'underline hover:text-blue-500 transition-colors';
+           return (
+             <>
+               <p>{fr
+                 ? "G2 (prononcez G-deux, Getou) est un espace où la mémoire personnelle et collective prennent forme. Créez, parcourez et partagez des arbres généalogiques en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents."
+                 : "G2 (pronounced G-deux, Getou, Djee-too) is a space where personal and collective memory takes shape. Create, navigate, and share genealogical trees in 2D and 3D — from a handful of people to tens of thousands, enriched with photos and documents."
+               }</p>
+               <p>{fr
+                 ? "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas d'Intelligence Artificielle. Pas de fausses identités. Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé."
+                 : "Your data is yours. No central platform, no locked cloud, no invisible intermediary. No Artificial Intelligence. No fake identities. Exchanges happen peer to peer, with full control over what you share, what you validate, and what remains private."
+               }</p>
+               <p>{fr
+                 ? "Certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité."
+                 : "Some ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility."
+               }</p>
+               <p className="text-left">
+                 {fr
+                   ? <>G2 est développé par Olivier Auber, chercheur en art et sciences cognitives, auteur de <em>ANOPTIKON</em>, une exploration de l'internet invisible<sup className="text-blue-400 text-xs ml-px">1</sup>. Il s'inscrit dans une longue lignée artistique et technique :</>
+                   : <>G2 is developed by Olivier Auber, researcher in art and cognitive sciences, author of <em>ANOPTIKON</em>, an exploration of the invisible internet<sup className="text-blue-400 text-xs ml-px">1</sup>. It carries a long artistic and technical lineage:</>
+                 }
+                 <ul className="mt-2 space-y-1.5 ml-2">
+                   <li>— {fr
+                     ? <>le {'\u00AB'}centre de la disparition{'\u00BB'} et son Arbre 3D pair-à-pair<sup className="text-blue-400 text-xs ml-px">2</sup>, initiés au début des années 2000 ;</>
+                     : <>the "centre of disappearance" and its peer-to-peer 3D Tree<sup className="text-blue-400 text-xs ml-px">2</sup>, initiated in the early 2000s;</>
+                   }</li>
+                   <li>— {fr
+                     ? <>les principes de la toile de confiance de la monnaie libre Ğ1, mis en œuvre par le logiciel Duniter<sup className="text-blue-400 text-xs ml-px">3</sup>, aux prémices desquels il a participé dans les années 2010 ;</>
+                     : <>the Web of Trust principles of the Ğ1 libre currency, implemented by the Duniter software<sup className="text-blue-400 text-xs ml-px">3</sup>, in which he participated from the early 2010s;</>
+                   }</li>
+                   <li>— {fr
+                     ? <>une recherche en cours (2026) sur les transformations radicales de la monnaie à l'ère de l'Intelligence Artificielle Générale (IAG), dans le cadre du groupe BGI Nexus<sup className="text-blue-400 text-xs ml-px">4</sup>.</>
+                     : <>ongoing research (2026) on the radical transformations of money in the era of Artificial General Intelligence (AGI), within the BGI Nexus group<sup className="text-blue-400 text-xs ml-px">4</sup>.</>
+                   }</li>
+                 </ul>
+               </p>
+               <p>{fr
+                 ? "G2 est un logiciel libre qui tente de porter ces idées doucement — à échelle humaine, génération par génération. C'est, à sa manière, une œuvre collective ouverte et en devenir."
+                 : "G2 is free software that carries these ideas gently — at human scale, generation by generation. It is, in its own way, an open and ever-evolving collective artwork."
+               }</p>
+               <div className="mt-4 pt-3 border-t border-current/20 text-left text-xs opacity-60 space-y-1.5">
+                 <p><sup>1</sup>{' '}{fr ? "ANOPTIKON, une exploration de l'internet invisible, Fyp 2019. " : "ANOPTIKON, an exploration of the invisible internet, Fyp 2019. "}<a className={lnk} href="https://anoptikon.com" target="_blank" rel="noopener noreferrer">anoptikon.com</a></p>
+                 <p><sup>2</sup>{' '}{fr ? 'Petite histoire du "centre de la disparition" et du projet Arbre (Wayback Machine). ' : 'History of the "centre of disappearance" and the Arbre project (Wayback Machine). '}<a className={lnk} href="https://web.archive.org/web/20080212005110/http://arbre.km2.net/wakka.php?wiki=PetiteHistoire" target="_blank" rel="noopener noreferrer">arbre.km2.net</a></p>
+                 <p><sup>3</sup>{' '}{fr ? "Duniter, logiciel de la monnaie libre Ğ1. " : "Duniter, software for the Ğ1 libre currency. "}<a className={lnk} href="https://duniter.org/" target="_blank" rel="noopener noreferrer">duniter.org</a></p>
+                 <p><sup>4</sup>{' '}{fr ? '"Symmetrical Money for BGI", groupe BGI Nexus. ' : '"Symmetrical Money for BGI", BGI Nexus group. '}<a className={lnk} href="https://docs.google.com/presentation/d/178JpsLpbPO53oZAdDd2alGcQG-OCP5RBwMYFKacPz6k/edit?usp=sharing" target="_blank" rel="noopener noreferrer">Google Slides</a></p>
+               </div>
+             </>
+           );
+         })(),
        },
        contribute: {
         title: t('info.contribute.title'),
