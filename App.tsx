@@ -766,6 +766,8 @@ function App() {
   const webglRecoverySuppressedUntilRef = useRef(0);
   const webglRecoveryTimerRef = useRef<number | null>(null);
   const inviteWebglRecoveryQueuedRef = useRef(false);
+  // Verrou synchrone anti double-tap : bloque handleSetDisplayMode jusqu'au prochain render
+  const isSwitchingModeRef = useRef(false);
   // Anti-storm: track consecutive rapid recoveries to enforce a long backoff.
   const webglRecoveryCountRef = useRef(0);
   const webglRecoveryWindowStartRef = useRef(0);
@@ -836,6 +838,9 @@ function App() {
   const inviteMediaRecoveryTimerRef = useRef<number | null>(null);
   const inviteMediaRecoveryAttemptRef = useRef(0);
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
+  // Libère le verrou anti double-tap dès que le mode ou l'animation change
+  useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget]);
+
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
@@ -3342,7 +3347,8 @@ function App() {
   };
 
   const handleSetDisplayMode = (target: DisplayMode) => {
-      if (flyTarget !== null) return;
+      if (flyTarget !== null || isSwitchingModeRef.current) return;
+      isSwitchingModeRef.current = true;
       if (target !== displayMode) {
         // During intentional view switches, old canvases can emit context-lost
         // while unmounting. Ignore recovery in that short window to prevent flicker.
@@ -5071,34 +5077,34 @@ function App() {
            return (
              <>
                <p>{fr
-                 ? "G2 (prononcez G-deux, Getou) est un espace où la mémoire personnelle et collective prennent forme. Créez, parcourez et partagez des arbres généalogiques en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents."
-                 : "G2 (pronounced G-deux, Getou, Djee-too) is a space where personal and collective memory takes shape. Create, navigate, and share genealogical trees in 2D and 3D — from a handful of people to tens of thousands, enriched with photos and documents."
+                 ? "G2 vous propose de construire et d'explorer un espace où  mémoire personnelle et mémoire collective prennent formes et s'entremêlent de manière totalement nouvelle. Vous pouvez créer, parcourir et partager des arbres généalogiques et relationnels en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents qui racontent votre histoire commune. Vous pouvez, si vous le désirez entrer en relation avec d'autres, qui comme vous, explorent leur espace mémoriel, et ainsi construire de nouveaux liens et de nouvelles histoires."
+                 : "G2 invites you to build and explore a space where personal and collective memory take shape and intertwine in a completely new way. You can create, browse, and share family and relationship trees in 2D and 3D—ranging from a few individuals to tens of thousands—enriched with photos and documents that tell your shared story. If you wish, you can connect with others who, like you, are exploring their own memory space, and in doing so, build new connections and new stories."
                }</p>
                <p>{fr
-                 ? "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas d'Intelligence Artificielle. Pas de fausses identités. Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé."
-                 : "Your data is yours. No central platform, no locked cloud, no invisible intermediary. No Artificial Intelligence. No fake identities. Exchanges happen peer to peer, with full control over what you share, what you validate, and what remains private."
+                 ? "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas de fausses identités. Pas d'Intelligence Artificielle pour vous pille. Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé."
+                 : "Your data belongs to you. No central platform, no closed cloud, no invisible middlemen. No fake identities. No artificial intelligence to exploit you. Everything happens peer-to-peer, giving you complete control over what you share, what you approve, and what stays private."
                }</p>
                <p>{fr
-                 ? "Certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité."
-                 : "Some ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility."
+                 ? "Par exemple, certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité."
+                 : "For example, ome ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility."
                }</p>
                <p className="text-left">
                  {fr
-                   ? <>G2 est développé par Olivier Auber, chercheur en art et sciences cognitives, auteur de <em>ANOPTIKON</em>, une exploration de l'internet invisible<sup className="text-blue-400 text-xs ml-px">1</sup>. Il s'inscrit dans une longue lignée artistique et technique :</>
-                   : <>G2 is developed by Olivier Auber, researcher in art and cognitive sciences, author of <em>ANOPTIKON</em>, an exploration of the invisible internet<sup className="text-blue-400 text-xs ml-px">1</sup>. It carries a long artistic and technical lineage:</>
+                   ? <>G2 est développé par Olivier Auber, chercheur en art et sciences cognitives, auteur de <em>ANOPTIKON</em>, une exploration de l'internet invisible<sup className="text-blue-400 text-xs ml-px">1</sup>. Le projet s'inscrit dans une longue lignée artistique et technique :</>
+                   : <>G2 is developed by Olivier Auber, researcher in art and cognitive sciences, author of <em>ANOPTIKON</em>, an exploration of the invisible internet<sup className="text-blue-400 text-xs ml-px">1</sup>. The project carries a long artistic and technical lineage:</>
                  }
                  <ul className="mt-2 space-y-1.5 ml-2">
                    <li>— {fr
-                     ? <>le {'\u00AB'}centre de la disparition{'\u00BB'} et son Arbre 3D pair-à-pair<sup className="text-blue-400 text-xs ml-px">2</sup>, initiés au début des années 2000 ;</>
-                     : <>the "centre of disappearance" and its peer-to-peer 3D Tree<sup className="text-blue-400 text-xs ml-px">2</sup>, initiated in the early 2000s;</>
+                     ? <>le {'\u00AB'}centre de la disparition{'\u00BB'} et son Arbre 3D pair-à-pair<sup className="text-blue-400 text-xs ml-px">2</sup>, au début des années 2000 ;</>
+                     : <>the "centre of disappearance" and its peer-to-peer 3D Tree<sup className="text-blue-400 text-xs ml-px">2</sup>, in the early 2000s;</>
                    }</li>
                    <li>— {fr
-                     ? <>les principes de la toile de confiance de la monnaie libre Ğ1, mis en œuvre par le logiciel Duniter<sup className="text-blue-400 text-xs ml-px">3</sup>, aux prémices desquels il a participé dans les années 2010 ;</>
-                     : <>the Web of Trust principles of the Ğ1 libre currency, implemented by the Duniter software<sup className="text-blue-400 text-xs ml-px">3</sup>, in which he participated from the early 2010s;</>
+                     ? <>les principes de la toile de confiance de la monnaie libre Ğ1, mis en œuvre par le logiciel Duniter<sup className="text-blue-400 text-xs ml-px">3</sup>, initié dans les années 2010 ;</>
+                     : <>the Web of Trust principles of the Ğ1 libre currency, implemented by the Duniter software<sup className="text-blue-400 text-xs ml-px">3</sup>, initiated in the early 2010s;</>
                    }</li>
                    <li>— {fr
                      ? <>une recherche en cours (2026) sur les transformations radicales de la monnaie à l'ère de l'Intelligence Artificielle Générale (IAG), dans le cadre du groupe BGI Nexus<sup className="text-blue-400 text-xs ml-px">4</sup>.</>
-                     : <>ongoing research (2026) on the radical transformations of money in the era of Artificial General Intelligence (AGI), within the BGI Nexus group<sup className="text-blue-400 text-xs ml-px">4</sup>.</>
+                     : <>an ongoing research (2026) on the radical transformations of money in the era of Artificial General Intelligence (AGI), within the BGI Nexus group<sup className="text-blue-400 text-xs ml-px">4</sup>.</>
                    }</li>
                  </ul>
                </p>

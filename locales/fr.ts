@@ -88,11 +88,6 @@ const fr = {
   info: {
     about: {
       title: 'À propos',
-      p1: "G2 (prononcez G-deux ou Getou) ouvre un espace où la mémoire personnelle et collective prennent forme. Créez, parcourez et partagez des arbres généalogiques en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents.",
-      p2: "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas d'Intelligence Artificielle. Pas de fausses identités. Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé.",
-      p3: "Certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité.",
-      p4: "G2 est développé par Olivier Auber, chercheur en art et sciences cognitives. Il s'inscrit dans une longue lignée : le projet Arbre, la toile de confiance de la monnaie libre Ğ1 (Duniter), et une recherche en cours sur la monnaie à l'ère de l'IAG (BGI Nexus).",
-      p5: "G2 est un logiciel libre qui tente de porter ces idées doucement — à échelle humaine, génération par génération. C'est, à sa manière, une œuvre collective ouverte et en devenir.",
     },
     contribute: {
       title: 'Contribuer',

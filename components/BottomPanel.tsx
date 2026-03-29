@@ -128,6 +128,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   const btnActive = isDarkMode
     ? `${btnBase} bg-neutral-700 border-slate-600 text-white shadow-md`
     : `${btnBase} bg-slate-200 border-slate-300 text-slate-800 shadow-sm`;
+  const btnTouch = { touchAction: 'manipulation' as const };
 
   const handleSliderChange = useCallback((key: keyof LayoutParams, value: number) => {
     if (!onSetLayoutParams) return;
@@ -205,6 +206,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                       onClick={() => onSetDisplayMode(vb.mode)}
                       disabled={isAnimating}
                       title={t(vb.titleKey)}
+                      style={btnTouch}
                       className={displayMode === vb.mode ? btnActive : btnDefault}
                     >
                       <Icon />
@@ -215,10 +217,10 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
                 <div className={`w-px h-6 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`} />
 
                 {/* Buttons 6-7: ancestor/descendant toggles */}
-                <button onClick={toggleAsc} disabled={isAnimating} title={t('bottomPanel.ascendants')} className={ascClass}>
+                <button onClick={toggleAsc} disabled={isAnimating} title={t('bottomPanel.ascendants')} style={btnTouch} className={ascClass}>
                   <IconAsc />
                 </button>
-                <button onClick={toggleDesc} disabled={isAnimating} title={t('bottomPanel.descendants')} className={descClass}>
+                <button onClick={toggleDesc} disabled={isAnimating} title={t('bottomPanel.descendants')} style={btnTouch} className={descClass}>
                   <IconDesc />
                 </button>
 
@@ -229,6 +231,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
             <button
               onClick={onOpenHelp}
               title={t('bottomPanel.help')}
+              style={btnTouch}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors ${isDarkMode ? 'bg-black border-slate-700 text-slate-200 hover:bg-neutral-900' : 'bg-slate-200 border-slate-300 text-slate-800 hover:bg-slate-300'}`}
             >
               <HelpCircle className="w-3.5 h-3.5" />
@@ -259,6 +262,7 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
               ))}
               {!isDefault && (
                 <button onClick={handleReset}
+                  style={btnTouch}
                   className={`text-[10px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500' : 'border-slate-300 text-slate-500 hover:text-slate-800 hover:border-slate-400'}`}
                 >
                   {t('bottomPanel.reset')}
