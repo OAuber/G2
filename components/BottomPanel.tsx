@@ -41,7 +41,11 @@ interface BottomPanelProps {
 
 const Icon2DIndividual = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-    <rect x="9" y="3" width="6" height="18" rx="1.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+    <rect x="8" y="1" width="8" height="22" rx="1" fill="#94a3b8"/>
+    <line x1="8" y1="2" x2="16" y2="2" stroke="#0f172a" strokeWidth="1"/>
+    <line x1="8" y1="22" x2="16" y2="22" stroke="white" strokeWidth="1" strokeOpacity="0.85"/>
+    <rect x="12.5" y="9" width="5" height="2" rx="0.5" fill="#ef4444"/>
+    <rect x="12.5" y="13" width="5" height="2" rx="0.5" fill="#60a5fa"/>
   </svg>
 );
 
@@ -79,13 +83,13 @@ const Icon3DFree = () => (
 
 const IconAsc = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-    <polygon points="12,3 3,21 21,21" fill="white" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+    <polyline points="4,18 12,6 20,18" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
 
 const IconDesc = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-    <polygon points="12,21 3,3 21,3" fill="white" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+    <polyline points="4,6 12,18 20,6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
 
@@ -94,8 +98,8 @@ const IconDesc = () => (
 const VIEW_BUTTONS: { mode: DisplayMode; icon: React.FC; titleKey: string }[] = [
   { mode: '2d-individual', icon: Icon2DIndividual, titleKey: 'bottomPanel.view2dIndividual' },
   { mode: '2d-grid',       icon: Icon2DGrid,       titleKey: 'bottomPanel.view2dGrid' },
-  { mode: '3d-individual', icon: Icon3DIndividual, titleKey: 'bottomPanel.view3dCloseup' },
   { mode: '3d-top',        icon: Icon3DTop,        titleKey: 'bottomPanel.view3dTop' },
+  { mode: '3d-individual', icon: Icon3DIndividual, titleKey: 'bottomPanel.view3dCloseup' },
   { mode: '3d-free',       icon: Icon3DFree,       titleKey: 'bottomPanel.view3dFree' },
 ];
 
@@ -128,6 +132,12 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
   const btnActive = isDarkMode
     ? `${btnBase} bg-neutral-700 border-slate-600 text-white shadow-md`
     : `${btnBase} bg-slate-200 border-slate-300 text-slate-800 shadow-sm`;
+  const btnAscActive = isDarkMode
+    ? `${btnBase} border-transparent text-white hover:bg-neutral-800`
+    : `${btnBase} border-transparent text-slate-800 hover:bg-slate-100`;
+  const btnAscDefault = isDarkMode
+    ? `${btnBase} border-transparent text-slate-500 hover:text-white hover:bg-neutral-800`
+    : `${btnBase} border-transparent text-slate-300 hover:text-slate-800 hover:bg-slate-100`;
   const btnTouch = { touchAction: 'manipulation' as const };
 
   const handleSliderChange = useCallback((key: keyof LayoutParams, value: number) => {
@@ -170,8 +180,8 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
 
   const ascOn = autoLayoutMode === 'ancestors' || autoLayoutMode === 'all';
   const descOn = autoLayoutMode === 'descendants' || autoLayoutMode === 'all';
-  const ascClass = ascOn ? btnActive : btnDefault;
-  const descClass = descOn ? btnActive : btnDefault;
+  const ascClass = ascOn ? btnAscActive : btnAscDefault;
+  const descClass = descOn ? btnAscActive : btnAscDefault;
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-[100] pointer-events-none">
