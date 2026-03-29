@@ -84,7 +84,7 @@ interface Scene2DGridProps {
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
   singleIndividual?: boolean;
-  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free' | 'individual') => void;
   onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
   onWebGLContextLost?: () => void;
 }
@@ -463,7 +463,7 @@ interface GridContentProps {
   isDarkMode: boolean;
   relationshipRevealEnabled: boolean;
   singleIndividual?: boolean;
-  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free' | 'individual') => void;
   onPhotoOverlayChange?: (overlay: {
     url: string;
     inset: { top: number; right: number; bottom: number; left: number };
@@ -1944,80 +1944,82 @@ const GridContent: React.FC<GridContentProps> = ({
           </Html>
         )}
         {singleIndividual && !isHover && !!onExpandAndSwitch3D && (
-          <>
-            <Text
-              position={[cx - (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.76}
-              color={textColor}
-              outlineWidth={outlineW}
-              outlineColor="#000000"
-              anchorX="right"
-              anchorY="middle"
-              onClick={(e: SceneMouseEvent) => {
-                e.stopPropagation();
-                onExpandAndSwitch3D('descendants', 'top');
-              }}
-              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('descendants'); }}
-              onPointerOut={() => { document.body.style.cursor = 'default'; }}
-            >
-              2D
-            </Text>
-            <Text
-              position={[cx + (3.2 * YEAR), cy + rH / 2 + (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.76}
-              color={textColor}
-              outlineWidth={outlineW}
-              outlineColor="#000000"
-              anchorX="left"
-              anchorY="middle"
-              onClick={(e: SceneMouseEvent) => {
-                e.stopPropagation();
-                onExpandAndSwitch3D('descendants', 'free');
-              }}
-              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('descendants'); }}
-              onPointerOut={() => { document.body.style.cursor = 'default'; }}
-            >
-              3D
-            </Text>
-          </>
+          <Html position={[cx, cy + rH / 2 + (1.5 * YEAR), 0]} center>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))' }}>
+              {(['top', 'individual', 'free'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onExpandAndSwitch3D('descendants', mode); }}
+                  onMouseEnter={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('descendants'); }}
+                  onMouseLeave={() => { document.body.style.cursor = 'default'; }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '3px', opacity: 0.9, display: 'flex' }}
+                >
+                  {mode === 'top' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <rect x="3" y="6" width="18" height="4" rx="1" fill="none" stroke={isDarkMode ? '#e2e8f0' : '#1e293b'} strokeWidth="0.8"/>
+                      <rect x="3" y="6" width="9" height="4" fill="#f9a8d4" opacity="0.8"/>
+                      <rect x="12" y="6" width="9" height="4" fill="#93c5fd" opacity="0.8"/>
+                      <rect x="5" y="14" width="18" height="4" rx="1" fill="none" stroke={isDarkMode ? '#e2e8f0' : '#1e293b'} strokeWidth="0.8"/>
+                      <rect x="5" y="14" width="9" height="4" fill="#f9a8d4" opacity="0.8"/>
+                      <rect x="14" y="14" width="9" height="4" fill="#93c5fd" opacity="0.8"/>
+                    </svg>
+                  )}
+                  {mode === 'individual' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <line x1="12" y1="4" x2="12" y2="20" stroke="#f9a8d4" strokeWidth="2.5" strokeLinecap="round"/>
+                      <line x1="4" y1="12" x2="20" y2="12" stroke="#93c5fd" strokeWidth="2.5" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                  {mode === 'free' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <line x1="5" y1="19" x2="19" y2="5" stroke="#f9a8d4" strokeWidth="2.5" strokeLinecap="round"/>
+                      <line x1="19" y1="19" x2="5" y2="5" stroke="#93c5fd" strokeWidth="2.5" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </button>
+              ))}
+            </div>
+          </Html>
         )}
         {singleIndividual && !isHover && !!onExpandAndSwitch3D && (
-          <>
-            <Text
-              position={[cx - (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.76}
-              color={textColor}
-              outlineWidth={outlineW}
-              outlineColor="#000000"
-              anchorX="right"
-              anchorY="middle"
-              onClick={(e: SceneMouseEvent) => {
-                e.stopPropagation();
-                onExpandAndSwitch3D('ancestors', 'top');
-              }}
-              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('ancestors'); }}
-              onPointerOut={() => { document.body.style.cursor = 'default'; }}
-            >
-              2D
-            </Text>
-            <Text
-              position={[cx + (3.2 * YEAR), cy - rH / 2 - (1.22 * YEAR), 0]}
-              fontSize={childFs * 0.76}
-              color={textColor}
-              outlineWidth={outlineW}
-              outlineColor="#000000"
-              anchorX="left"
-              anchorY="middle"
-              onClick={(e: SceneMouseEvent) => {
-                e.stopPropagation();
-                onExpandAndSwitch3D('ancestors', 'free');
-              }}
-              onPointerOver={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('ancestors'); }}
-              onPointerOut={() => { document.body.style.cursor = 'default'; }}
-            >
-              3D
-            </Text>
-          </>
+          <Html position={[cx, cy - rH / 2 - (1.5 * YEAR), 0]} center>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))' }}>
+              {(['top', 'individual', 'free'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onExpandAndSwitch3D('ancestors', mode); }}
+                  onMouseEnter={() => { document.body.style.cursor = 'pointer'; setHovered3DAction('ancestors'); }}
+                  onMouseLeave={() => { document.body.style.cursor = 'default'; }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '3px', opacity: 0.9, display: 'flex' }}
+                >
+                  {mode === 'top' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <rect x="3" y="6" width="18" height="4" rx="1" fill="none" stroke={isDarkMode ? '#e2e8f0' : '#1e293b'} strokeWidth="0.8"/>
+                      <rect x="3" y="6" width="9" height="4" fill="#f9a8d4" opacity="0.8"/>
+                      <rect x="12" y="6" width="9" height="4" fill="#93c5fd" opacity="0.8"/>
+                      <rect x="5" y="14" width="18" height="4" rx="1" fill="none" stroke={isDarkMode ? '#e2e8f0' : '#1e293b'} strokeWidth="0.8"/>
+                      <rect x="5" y="14" width="9" height="4" fill="#f9a8d4" opacity="0.8"/>
+                      <rect x="14" y="14" width="9" height="4" fill="#93c5fd" opacity="0.8"/>
+                    </svg>
+                  )}
+                  {mode === 'individual' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <line x1="12" y1="4" x2="12" y2="20" stroke="#f9a8d4" strokeWidth="2.5" strokeLinecap="round"/>
+                      <line x1="4" y1="12" x2="20" y2="12" stroke="#93c5fd" strokeWidth="2.5" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                  {mode === 'free' && (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                      <line x1="5" y1="19" x2="19" y2="5" stroke="#f9a8d4" strokeWidth="2.5" strokeLinecap="round"/>
+                      <line x1="19" y1="19" x2="5" y2="5" stroke="#93c5fd" strokeWidth="2.5" strokeLinecap="round"/>
+                    </svg>
+                  )}
+                </button>
+              ))}
+            </div>
+          </Html>
         )}
       </group>
     );

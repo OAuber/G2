@@ -3795,10 +3795,14 @@ function App() {
       setSelectedIdsFor2D(newIds);
   };
 
-  const handleExpandAndSwitch3D = (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => {
+  const handleExpandAndSwitch3D = (direction: 'ancestors' | 'descendants', mode: 'top' | 'free' | 'individual') => {
     if (!selectedIndividual) return;
     handleExpandFamily(selectedIndividual.id, direction);
-    handleSetDisplayMode(mode === 'top' ? '3d-top' : '3d-free');
+    const displayTarget = mode === 'top' ? '3d-top' : mode === 'individual' ? '3d-individual' : '3d-free';
+    handleSetDisplayMode(displayTarget);
+    // handleSetDisplayMode pose autoLayoutMode='all' ; on le corrige ici
+    // (React 18 batchant les setState, ce dernier appel gagne)
+    setAutoLayoutMode(direction);
   };
 
   // Callback to sync 3D view visibility with 2D selection
