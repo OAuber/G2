@@ -234,9 +234,17 @@ const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (selectedId && isOpen) {
        setTimeout(() => {
+           const container = scrollRef.current;
            const element = document.getElementById(`sidebar-item-${selectedId}`);
-           if (element) {
-               element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+           if (container && element) {
+               // Scroll uniquement dans le conteneur de la sidebar pour éviter
+               // que scrollIntoView() remonte jusqu'au viewport et fasse disparaître les onglets
+               const containerRect = container.getBoundingClientRect();
+               const elementRect = element.getBoundingClientRect();
+               const offset = elementRect.top - containerRect.top;
+               container.scrollTop = container.scrollTop + offset
+                   - container.clientHeight / 2
+                   + element.clientHeight / 2;
            }
        }, 50);
     }
