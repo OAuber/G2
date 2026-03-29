@@ -133,11 +133,11 @@ const BottomPanel: React.FC<BottomPanelProps> = ({
     ? `${btnBase} bg-neutral-700 border-slate-600 text-white shadow-md`
     : `${btnBase} bg-slate-200 border-slate-300 text-slate-800 shadow-sm`;
   const btnAscActive = isDarkMode
-    ? `${btnBase} border-transparent text-white hover:bg-neutral-800`
-    : `${btnBase} border-transparent text-slate-800 hover:bg-slate-100`;
+    ? `${btnBase} border-transparent text-white`
+    : `${btnBase} border-transparent text-slate-800`;
   const btnAscDefault = isDarkMode
-    ? `${btnBase} border-transparent text-slate-500 hover:text-white hover:bg-neutral-800`
-    : `${btnBase} border-transparent text-slate-300 hover:text-slate-800 hover:bg-slate-100`;
+    ? `${btnBase} border-transparent text-slate-500`
+    : `${btnBase} border-transparent text-slate-300`;
   const btnTouch = { touchAction: 'manipulation' as const };
 
   const handleSliderChange = useCallback((key: keyof LayoutParams, value: number) => {

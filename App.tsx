@@ -5089,17 +5089,26 @@ function App() {
            return (
              <>
                <p>{fr
-                 ? "G2 vous propose de construire et d'explorer un espace où  mémoire personnelle et mémoire collective prennent formes et s'entremêlent de manière totalement nouvelle. Vous pouvez créer, parcourir et partager des arbres généalogiques et relationnels en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents qui racontent votre histoire commune. Vous pouvez, si vous le désirez entrer en relation avec d'autres, qui comme vous, explorent leur espace mémoriel, et ainsi construire de nouveaux liens et de nouvelles histoires."
-                 : "G2 invites you to build and explore a space where personal and collective memory take shape and intertwine in a completely new way. You can create, browse, and share family and relationship trees in 2D and 3D—ranging from a few individuals to tens of thousands—enriched with photos and documents that tell your shared story. If you wish, you can connect with others who, like you, are exploring their own memory space, and in doing so, build new connections and new stories."
+                 ? "G2 vous propose de construire et d'explorer un espace où mémoire personnelle et mémoire collective prennent formes et s'entremêlent de manière totalement nouvelle."
+                 : "G2 invites you to build and explore a space where personal and collective memory take shape and intertwine in a completely new way."
                }</p>
                <p>{fr
-                 ? "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas de fausses identités. Pas d'Intelligence Artificielle pour vous pille. Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé."
-                 : "Your data belongs to you. No central platform, no closed cloud, no invisible middlemen. No fake identities. No artificial intelligence to exploit you. Everything happens peer-to-peer, giving you complete control over what you share, what you approve, and what stays private."
+                 ? "Vous pouvez créer, parcourir et partager des arbres généalogiques et relationnels en 2D et 3D — de quelques individus à des dizaines de milliers, enrichis de photos et de documents qui racontent votre histoire commune."
+                 : "You can create, browse, and share family and relationship trees in 2D and 3D — from a handful of people to tens of thousands, enriched with photos and documents that tell your shared story."
                }</p>
                <p>{fr
-                 ? "Par exemple, certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité."
-                 : "For example, ome ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility."
+                 ? "Vous pouvez aussi, si vous le désirez, entrer en relation avec d'autres qui, comme vous, explorent leur espace mémoriel, et ainsi construire de nouveaux liens et de nouvelles histoires."
+                 : "You can also, if you wish, connect with others who, like you, are exploring their own memory space, and in doing so build new connections and new stories."
                }</p>
+               <p>{fr
+                 ? "Vos données vous appartiennent. Aucune plateforme centrale, aucun nuage fermé, aucun intermédiaire invisible. Pas de fausses identités. Pas d'Intelligence Artificielle pour vous piller."
+                 : "Your data belongs to you. No central platform, no closed cloud, no invisible middlemen. No fake identities. No artificial intelligence to exploit you."
+               }</p>
+               <p>{fr
+                 ? "Les échanges se font en pair à pair, avec un contrôle total sur ce que vous partagez, ce que vous validez et ce qui reste privé. Par exemple, certains ancêtres n'ont aucune racine connue. Grâce à G2, vous pouvez les publier et les exposer à des correspondances potentielles sur le réseau pair-à-pair — mais toute l'enquête et la validation relève de votre responsabilité."
+                 : "Everything happens peer-to-peer, giving you complete control over what you share, what you approve, and what stays private. For example, some ancestors have no known roots. With G2, you can publish them and expose them to potential matches on the peer-to-peer network — but all investigation and validation remains your responsibility."
+               }</p>
+               <p className="tracking-[0.3em] text-center opacity-40 select-none">* * *</p>
                <p className="text-left">
                  {fr
                    ? <>G2 est développé par Olivier Auber, chercheur en art et sciences cognitives, auteur de <em>ANOPTIKON</em>, une exploration de l'internet invisible<sup className="text-blue-400 text-xs ml-px">1</sup>. Le projet s'inscrit dans une longue lignée artistique et technique :</>
