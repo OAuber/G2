@@ -841,6 +841,14 @@ function App() {
   // Libère le verrou anti double-tap dès que le mode ou l'animation change
   useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget]);
 
+  // Sécurité : si l'animation de vol 3D ne se termine pas (app backgroundée, contexte perdu…)
+  // forcer flyTarget à null après 6s pour éviter que les boutons restent disabled indéfiniment
+  useEffect(() => {
+    if (flyTarget === null) return;
+    const id = window.setTimeout(() => setFlyTarget(null), 6000);
+    return () => window.clearTimeout(id);
+  }, [flyTarget]);
+
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
@@ -3348,12 +3356,12 @@ function App() {
 
   const handleSetDisplayMode = (target: DisplayMode) => {
       if (flyTarget !== null || isSwitchingModeRef.current) return;
+      // Si le mode cible est déjà actif, ne pas toucher au ref (évite un verrou permanent)
+      if (target === displayMode) return;
       isSwitchingModeRef.current = true;
-      if (target !== displayMode) {
-        // During intentional view switches, old canvases can emit context-lost
-        // while unmounting. Ignore recovery in that short window to prevent flicker.
-        webglRecoverySuppressedUntilRef.current = Date.now() + 2500;
-      }
+      // During intentional view switches, old canvases can emit context-lost
+      // while unmounting. Ignore recovery in that short window to prevent flicker.
+      webglRecoverySuppressedUntilRef.current = Date.now() + 2500;
 
       const wasIn2D = viewMode === '2D';
       const goingTo3D = target.startsWith('3d');
