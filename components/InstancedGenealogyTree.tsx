@@ -931,7 +931,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   };
 
   const handleBoxHover = (e: ThreeEvent<MouseEvent>) => {
-      e.stopPropagation();
+      // Ne pas stopPropagation ici : les tirets de naissance (traitsMesh) sont
+      // derrière le ruban quand la caméra est du côté gauche ; sans propagation
+      // leur handleTraitPointerMove ne serait jamais atteint.
+      // handleTraitPointerMove a son propre stopPropagation quand il est au 1er plan.
       document.body.style.cursor = isTopViewActive ? 'auto' : 'pointer';
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
           const node = nodes[e.instanceId];

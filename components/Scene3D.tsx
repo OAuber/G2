@@ -50,7 +50,13 @@ function cameraFarForScene(sceneSize: number): number {
     return Math.max(200000, sceneSize * 40);
 }
 
-function computeModePosition(mode: CameraMode, ct: Vector3, sceneSize: number, selectedGender: Gender | null): Vector3 {
+function computeModePosition(
+    mode: CameraMode,
+    ct: Vector3,
+    sceneSize: number,
+    selectedGender: Gender | null,
+    treeDirection?: 'ancestors' | 'descendants' | null,
+): Vector3 {
     if (mode === 'top') {
         const dist = topViewPerspDistance(sceneSize);
         return new Vector3(ct.x, ct.y + dist, ct.z);
@@ -59,10 +65,13 @@ function computeModePosition(mode: CameraMode, ct: Vector3, sceneSize: number, s
         // Close-up framing with explicit camera offsets.
         // `ct.x` is centered on the ribbon (width = INDIVIDUAL_WIDTH),
         // so birth point is at x = ct.x - INDIVIDUAL_WIDTH / 2.
+        // X offset depends on tree direction: camera looks toward descendants (−70)
+        // or toward ancestors (+80, default).
         const birthX = ct.x - INDIVIDUAL_WIDTH / 2;
         const zOffset = selectedGender === Gender.Female ? -90 : 90;
+        const xOffset = treeDirection === 'descendants' ? -90 : 100;
         return new Vector3(
-            birthX + 80,
+            birthX + xOffset,
             ct.y,
             ct.z + zOffset
         );
@@ -86,6 +95,8 @@ const CameraController: React.FC<{
   individualCenter: Vector3;
   sceneSize: number;
   selectedGender: Gender | null;
+  selectedId?: string | null;
+  treeDirection?: 'ancestors' | 'descendants' | null;
   manualFocusTarget: Vector3 | null;
   manualFocusSource: Vector3 | null;
   manualFocusGender: Gender | null;
@@ -99,6 +110,8 @@ const CameraController: React.FC<{
   individualCenter,
   sceneSize,
   selectedGender,
+  selectedId,
+  treeDirection,
   manualFocusTarget,
   manualFocusSource,
   manualFocusGender,
@@ -107,6 +120,7 @@ const CameraController: React.FC<{
   onFlyComplete,
 }) => {
   const lastTarget = useRef(new Vector3());
+  const lastSelectedIdRef = useRef<string | null | undefined>(selectedId);
   const lastManualFocusNonceRef = useRef(0);
 
   // Animation refs
@@ -173,7 +187,7 @@ const CameraController: React.FC<{
         animStartLookAt.current.copy(startLookAt);
         animEndLookAt.current.copy(endLookAt);
         const startPos = state.camera.position.clone();
-        const endPos = computeModePosition(flyTarget, endLookAt, sceneSize, selectedGender);
+        const endPos = computeModePosition(flyTarget, endLookAt, sceneSize, selectedGender, treeDirection);
         animEndPos.current.copy(endPos);
 
         animStartDist.current = startPos.distanceTo(startLookAt);
@@ -255,7 +269,7 @@ const CameraController: React.FC<{
       } else {
         // Close-up and free share close-up-like movement for child focus.
         focusEndPos.current.copy(
-          computeModePosition('individual', manualFocusTarget, sceneSize, manualFocusGender ?? selectedGender)
+          computeModePosition('individual', manualFocusTarget, sceneSize, manualFocusGender ?? selectedGender, treeDirection)
         );
         focusUseConnectorPathRef.current = !!manualFocusSource;
         if (focusUseConnectorPathRef.current && manualFocusSource) {
@@ -430,36 +444,45 @@ const CameraController: React.FC<{
       state.camera.updateProjectionMatrix();
       ctrl.target.copy(holdLookAt.current || centerTarget);
       ctrl.update();
+      // Sync lastTarget so the next frame doesn't trigger a spurious focus animation
+      lastTarget.current.copy(ctrl.target);
       holdPos.current = null;
       holdLookAt.current = null;
       holdUp.current = null;
       return;
     }
 
-    // Sync orbit target when it changes (new individual selected)
+    // Sync orbit target when it changes (new individual selected).
+    // Only animate when the selected individual actually changed — not when
+    // autoLayoutMode or other layout props shift centerTarget without a real
+    // selection change (e.g. BottomPanel asc/desc toggles).
     const currentLookAt = lookAtForMode(cameraMode);
     if (!lastTarget.current.equals(currentLookAt)) {
-      focusStartPos.current.copy(state.camera.position);
-      focusStartLookAt.current.copy(ctrl.target);
-      focusEndLookAt.current.copy(currentLookAt);
-      if (cameraMode === 'top') {
-        focusEndPos.current.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
-      } else {
-        // In close-up and free, use close-up style movement toward selected child.
-        focusEndPos.current.copy(computeModePosition('individual', currentLookAt, sceneSize, selectedGender));
-      }
-      focusUseConnectorPathRef.current = false;
-      focusDurationRef.current = FOCUS_DURATION_DEFAULT;
-      focusProgress.current = 0;
-      isFocusing.current = true;
-      lastTarget.current.copy(currentLookAt);
-      if (cameraMode === 'top') {
-        const orthoCam = state.camera as any;
-        if (orthoCam.isOrthographicCamera) {
-          orthoCam.zoom = topViewOrthoZoom(sceneSize);
-          orthoCam.updateProjectionMatrix();
+      const selectionChanged = selectedId !== lastSelectedIdRef.current;
+      if (selectionChanged) {
+        lastSelectedIdRef.current = selectedId;
+        focusStartPos.current.copy(state.camera.position);
+        focusStartLookAt.current.copy(ctrl.target);
+        focusEndLookAt.current.copy(currentLookAt);
+        if (cameraMode === 'top') {
+          focusEndPos.current.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
+        } else {
+          focusEndPos.current.copy(computeModePosition('individual', currentLookAt, sceneSize, selectedGender, treeDirection));
+        }
+        focusUseConnectorPathRef.current = false;
+        focusDurationRef.current = FOCUS_DURATION_DEFAULT;
+        focusProgress.current = 0;
+        isFocusing.current = true;
+        if (cameraMode === 'top') {
+          const orthoCam = state.camera as any;
+          if (orthoCam.isOrthographicCamera) {
+            orthoCam.zoom = topViewOrthoZoom(sceneSize);
+            orthoCam.updateProjectionMatrix();
+          }
         }
       }
+      // Always update lastTarget so drift doesn't accumulate
+      lastTarget.current.copy(currentLookAt);
     }
   });
 
@@ -647,6 +670,7 @@ interface Scene3DProps {
   setExtraIndividuals: React.Dispatch<React.SetStateAction<RenderedPerson[]>>;
   autoLayoutMode?: 'none' | 'ancestors' | 'descendants' | 'all';
   onSetAutoLayoutMode?: (mode: 'none' | 'ancestors' | 'descendants' | 'all') => void;
+  treeDirection?: 'ancestors' | 'descendants' | null;
   layoutParams?: LayoutParams;
   topViewLabelMaxZSpan?: number;
   labelFontSize?: number;
@@ -675,6 +699,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   setExtraIndividuals,
   autoLayoutMode = 'none',
   onSetAutoLayoutMode,
+  treeDirection = null,
   layoutParams,
   topViewLabelMaxZSpan = 500,
   labelFontSize = 3,
@@ -1097,6 +1122,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             individualCenter={individualCenter}
             sceneSize={sceneSize}
             selectedGender={selectedGender}
+            selectedId={selectedId}
+            treeDirection={treeDirection}
             manualFocusTarget={manualFocusTarget}
             manualFocusSource={manualFocusSource}
             manualFocusGender={manualFocusGender}

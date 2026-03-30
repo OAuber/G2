@@ -634,6 +634,7 @@ function App() {
 
   // Auto Layout State
   const [autoLayoutMode, setAutoLayoutMode] = useState<'none' | 'ancestors' | 'descendants' | 'all'>('all');
+  const [treeDirection, setTreeDirection] = useState<'ancestors' | 'descendants' | null>(null);
   const [layoutParams, setLayoutParams] = useState<LayoutParams>({ ...DEFAULT_LAYOUT_PARAMS });
   
   // Info Pages State
@@ -3803,6 +3804,7 @@ function App() {
     // handleSetDisplayMode pose autoLayoutMode='all' ; on le corrige ici
     // (React 18 batchant les setState, ce dernier appel gagne)
     setAutoLayoutMode(direction);
+    setTreeDirection(direction);
   };
 
   // Callback to sync 3D view visibility with 2D selection
@@ -5410,6 +5412,7 @@ function App() {
             setExtraIndividuals={setSceneExtras}
             autoLayoutMode={autoLayoutMode}
             onSetAutoLayoutMode={setAutoLayoutMode}
+            treeDirection={treeDirection}
             layoutParams={layoutParams}
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
