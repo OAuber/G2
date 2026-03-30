@@ -15,8 +15,8 @@ interface InstancedTreeProps {
   onTopViewFadedIdsChange?: (ids: string[]) => void;
   onNodeClick?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
-  onChildLabelClick?: (childId: string) => void;
-  onMotherLabelClick?: (motherId: string) => void;
+  onChildLabelClick?: (childId: string, parentId: string) => void;
+  onMotherLabelClick?: (motherId: string, childNodeId: string) => void;
   isDarkMode?: boolean;
   relationshipRevealEnabled?: boolean;
   cameraMode?: CameraMode;
@@ -924,6 +924,42 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
   const handleBoxClick = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
+
+      // Quand la caméra est du côté gauche du ruban, le raycast frappe le ruban
+      // avant le tiret de naissance (child dash). Si un slot de tiret est actif
+      // sur ce même nœud, on route le clic vers onChildLabelClick plutôt que
+      // vers onNodeClick, pour préserver le comportement attendu.
+      const clickedNode = e.instanceId !== undefined ? nodes[e.instanceId] : undefined;
+
+      // Tiret de naissance enfant actif sur ce nœud → router vers child click
+      if (!isTopViewActive && clickedNode && activeChildSlotKey?.startsWith(clickedNode.id + ':')) {
+          let childId: string | null = null;
+          if (activeChildHoverId) {
+              childId = activeChildHoverId;
+          } else {
+              const labels = childLabelsDataRef.current.filter(l => l.slotKey === activeChildSlotKey);
+              if (labels.length === 1) childId = labels[0].childId;
+          }
+          if (childId) {
+              onChildLabelClick?.(childId, clickedNode.id);
+              return;
+          }
+      }
+
+      // Trait de naissance actif sur ce nœud → router vers mother click
+      if (!isTopViewActive && clickedNode && activeBirthNodeId === clickedNode.id) {
+          const indi = data?.individuals[clickedNode.id];
+          const familyChildId = indi?.familyChildId;
+          if (familyChildId) {
+              const fam = data?.families[familyChildId];
+              const motherId = fam?.wifeId ?? fam?.husbandId;
+              if (motherId) {
+                  onMotherLabelClick?.(motherId, clickedNode.id);
+                  return;
+              }
+          }
+      }
+
       if (isTopViewActive) return;
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
           onNodeClick?.(nodes[e.instanceId].id);
@@ -1012,7 +1048,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               if (info.type === 'child') {
                   const childId = resolveClickableChildFromSlot(info);
                   if (childId) {
-                      onChildLabelClick?.(childId);
+                      onChildLabelClick?.(childId, info.nodeId);
                   }
                   return;
               }
@@ -1024,7 +1060,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                         )
                       : undefined;
                   if (motherId) {
-                      onMotherLabelClick?.(motherId);
+                      onMotherLabelClick?.(motherId, info.nodeId);
                   }
                   return;
               }
@@ -1529,7 +1565,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                     renderOrder={999}
                     onClick={(e: ThreeEvent<MouseEvent>) => {
                         e.stopPropagation();
-                        onMotherLabelClick?.(motherId);
+                        onMotherLabelClick?.(motherId, node.id);
                     }}
                     onPointerOver={(e: ThreeEvent<PointerEvent>) => {
                         e.stopPropagation();
@@ -1646,7 +1682,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                               renderOrder={999}
                               onClick={(e: ThreeEvent<MouseEvent>) => {
                                   e.stopPropagation();
-                                  onChildLabelClick?.(label.childId);
+                                  onChildLabelClick?.(label.childId, label.slotKey.split(':')[0]);
                               }}
                               onPointerOver={(e: ThreeEvent<PointerEvent>) => {
                                   e.stopPropagation();

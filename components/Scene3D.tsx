@@ -157,6 +157,8 @@ const CameraController: React.FC<{
   const topFocusTargetZoomRef = useRef<number | null>(null);
   const FOCUS_DURATION_DEFAULT = 0.85;
   const FOCUS_DURATION_CONNECTOR = 1.8;
+  const CONNECTOR_OVERSHOOT = 20;     // dépassement quand la caméra "recule" (cible entre dans le champ)
+  const CONNECTOR_ADVANCE_INSET = 20; // arrêt en deçà quand la caméra "avance" (évite de dépasser la cible)
   const TOP_FOCUS_DURATION = 3.8; // extra-slow top-view lateral movement
   const TOP_FOCUS_MIN_PULSE_DEPTH = 0.2; // stronger baseline pulse for short travel
   const TOP_FOCUS_MAX_PULSE_DEPTH = 0.96; // extreme pulse for very long travel
@@ -267,31 +269,43 @@ const CameraController: React.FC<{
           topFocusZoomPulseActiveRef.current = true;
         }
       } else {
-        // Close-up and free share close-up-like movement for child focus.
-        focusEndPos.current.copy(
-          computeModePosition('individual', manualFocusTarget, sceneSize, manualFocusGender ?? selectedGender, treeDirection)
-        );
-        focusUseConnectorPathRef.current = !!manualFocusSource;
-        if (focusUseConnectorPathRef.current && manualFocusSource) {
-          const connectorLen = manualFocusTarget.clone().sub(manualFocusSource).length();
-          focusConnectorLengthRef.current = connectorLen;
-          // Adaptive duration for long connectors to avoid early stop.
+        // Déplacement parallèle au connecteur :
+        // la caméra et son point cible se translatent du même vecteur,
+        // préservant l'orientation courante.
+        if (manualFocusSource) {
+          const connector = manualFocusTarget.clone().sub(manualFocusSource);
+          const connectorLen = connector.length();
+          const connectorDir = connector.clone().normalize();
+
+          // Avancement (connecteur dans le sens de la vue) vs recul (à contre-sens).
+          // La vue courante est définie par lookAt - cameraPos.
+          const viewDir = focusStartLookAt.current.clone().sub(focusStartPos.current).normalize();
+          const isAdvancing = viewDir.dot(connectorDir) > 0;
+
+          // Avancement : on s'arrête un peu avant la cible (INSET) pour ne pas la dépasser.
+          // Recul : on dépasse la cible (OVERSHOOT) pour qu'elle entre dans le champ de vision.
+          const travelDist = isAdvancing
+            ? Math.max(1, connectorLen - CONNECTOR_ADVANCE_INSET)
+            : connectorLen + CONNECTOR_OVERSHOOT;
+          const displacement = connectorDir.clone().multiplyScalar(travelDist);
+
+          focusEndLookAt.current.copy(focusStartLookAt.current.clone().add(displacement));
+          focusEndPos.current.copy(focusStartPos.current.clone().add(displacement));
+
           focusDurationRef.current = Math.min(6.0, Math.max(
             FOCUS_DURATION_CONNECTOR,
-            FOCUS_DURATION_CONNECTOR + connectorLen * 0.01
+            FOCUS_DURATION_CONNECTOR + travelDist * 0.01
           ));
         } else {
-          focusConnectorLengthRef.current = 0;
+          // Pas de connecteur connu : approche simple vers la cible.
+          focusEndPos.current.copy(
+            computeModePosition('individual', manualFocusTarget, sceneSize, manualFocusGender ?? selectedGender, treeDirection)
+          );
+          focusEndLookAt.current.copy(manualFocusTarget);
           focusDurationRef.current = FOCUS_DURATION_DEFAULT;
         }
-        if (focusUseConnectorPathRef.current && manualFocusSource) {
-          // "Birth dash" reference from source ribbon center.
-          focusBirthLookAt.current.set(
-            manualFocusSource.x - (INDIVIDUAL_WIDTH / 2),
-            manualFocusSource.y,
-            manualFocusSource.z
-          );
-        }
+        focusUseConnectorPathRef.current = false; // lerp simple (pas de chemin birth-dash)
+        focusConnectorLengthRef.current = 0;
       }
       focusStartOffset.current.copy(focusStartPos.current.clone().sub(focusStartLookAt.current));
       focusEndOffset.current.copy(focusEndPos.current.clone().sub(focusEndLookAt.current));
@@ -1051,31 +1065,31 @@ const Scene3D: React.FC<Scene3DProps> = ({
       if (indi) onIndividualClick(indi);
   }, [data, onIndividualClick]);
 
-  const handleChildLabelClick = useCallback((childId: string) => {
+  const handleChildLabelClick = useCallback((childId: string, parentId: string) => {
       const nodeInfo = layoutNodeCenterById.get(childId);
       if (!nodeInfo) return;
-      const sourceId = selectedId || rootIndividual?.id || '';
-      const sourceInfo = layoutNodeCenterById.get(sourceId);
+      // Source = le ruban parent dont le tiret de naissance a été cliqué
+      const sourceInfo = layoutNodeCenterById.get(parentId);
       setManualFocusTarget(nodeInfo.center.clone());
       setManualFocusSource(sourceInfo ? sourceInfo.center.clone() : null);
       setManualFocusGender(nodeInfo.gender);
       setManualFocusKind('child');
       focusNonceRef.current += 1;
       setManualFocusNonce(focusNonceRef.current);
-  }, [layoutNodeCenterById, selectedId, rootIndividual]);
+  }, [layoutNodeCenterById]);
 
-  const handleMotherLabelClick = useCallback((motherId: string) => {
+  const handleMotherLabelClick = useCallback((motherId: string, childNodeId: string) => {
       const nodeInfo = layoutNodeCenterById.get(motherId);
       if (!nodeInfo) return;
-      const sourceId = selectedId || rootIndividual?.id || '';
-      const sourceInfo = layoutNodeCenterById.get(sourceId);
+      // Source = l'enfant dont le trait de naissance a été cliqué
+      const sourceInfo = layoutNodeCenterById.get(childNodeId);
       setManualFocusTarget(nodeInfo.center.clone());
       setManualFocusSource(sourceInfo ? sourceInfo.center.clone() : null);
       setManualFocusGender(nodeInfo.gender);
       setManualFocusKind('mother');
       focusNonceRef.current += 1;
       setManualFocusNonce(focusNonceRef.current);
-  }, [layoutNodeCenterById, selectedId, rootIndividual]);
+  }, [layoutNodeCenterById]);
 
   return (
     <Canvas
