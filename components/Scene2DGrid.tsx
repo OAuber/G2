@@ -288,8 +288,8 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
       individual: indi,
       lifespan,
       birthYear,
-      hasBirthDate: !!indi.birthDate?.year,
-      hasDeathDate: !!indi.deathDate?.year,
+      hasBirthDate: !!indi.birthDate?.year && !indi.birthDate?.isCalculated,
+      hasDeathDate: !!indi.deathDate?.year && !indi.deathDate?.isCalculated,
       traits,
     };
   });

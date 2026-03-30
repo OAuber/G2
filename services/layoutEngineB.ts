@@ -822,8 +822,9 @@ export class GenealogyLayoutEngineB {
         }
 
         const traits: LayoutNode['traits'] = [];
-        if (indi.birthDate?.year) traits.push({ type: 'birth', offset: 0 });
-        if (indi.deathDate?.year) traits.push({ type: 'death', offset: lifespan });
+        // N'afficher les marqueurs naissance/décès que pour les dates réelles (non calculées)
+        if (indi.birthDate?.year && !indi.birthDate?.isCalculated) traits.push({ type: 'birth', offset: 0 });
+        if (indi.deathDate?.year && !indi.deathDate?.isCalculated) traits.push({ type: 'death', offset: lifespan });
 
         if (indi.familySpouseIds) {
             for (const famId of indi.familySpouseIds) {
@@ -876,8 +877,8 @@ export class GenealogyLayoutEngineB {
             generation: Math.round(x / this.cfg.GENERATION_PITCH),
             birthYear, lifespan,
             gender: indi.gender,
-            hasBirthDate: !!indi.birthDate?.year,
-            hasDeathDate: !!indi.deathDate?.year,
+            hasBirthDate: !!indi.birthDate?.year && !indi.birthDate?.isCalculated,
+            hasDeathDate: !!indi.deathDate?.year && !indi.deathDate?.isCalculated,
             traits,
         });
     }
