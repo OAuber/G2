@@ -16,7 +16,7 @@ interface Scene2DIndividualProps {
     isPrimaryPhoto?: boolean;
   }[]>;
   onIndividualClick: (indi: Individual) => void;
-  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free') => void;
+  onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'individual' | 'free') => void;
   isDarkMode: boolean;
   relationshipRevealEnabled?: boolean;
   sortMode?: SortMode;
