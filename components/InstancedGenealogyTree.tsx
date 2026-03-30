@@ -143,7 +143,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       metalness: 0.1,
       opacity: 0.5,
       transparent: true,
-      depthWrite: true,
+      // Same as path ribbons: avoid depth veil that hides troika labels in free/close-up views.
+      depthWrite: false,
       side: THREE.DoubleSide,
     });
     mat.onBeforeCompile = (shader) => {
@@ -173,7 +174,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           metalness: 0.1,
           transparent: true,
           opacity: DEFAULT_RIBBON_OPACITY,
-          depthWrite: true,
+          depthWrite: false,
           side: THREE.DoubleSide
       });
 
@@ -236,14 +237,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   useLayoutEffect(() => {
       if (!pathMaterial) return;
       pathMaterial.opacity = isTopView ? TOP_VIEW_RIBBON_OPACITY : DEFAULT_RIBBON_OPACITY;
-      // In top-view, avoid depth-write veil on transparent ribbons.
-      pathMaterial.depthWrite = !isTopView;
       pathMaterial.needsUpdate = true;
   }, [isTopView, pathMaterial]);
-  useLayoutEffect(() => {
-      boxMaterial.depthWrite = !isTopView;
-      boxMaterial.needsUpdate = true;
-  }, [isTopView, boxMaterial]);
 
   const traitMaterial = useMemo(() => new THREE.MeshBasicMaterial({ color: 0xffffff }), []);
   
@@ -583,11 +578,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     const pathAlpha = pathGeometry.getAttribute('aInstanceAlpha') as THREE.InstancedBufferAttribute | null;
     if (!boxAlpha || !pathAlpha) return;
     const hiddenAlpha = 0.06;
+    const DECEASED_ALPHA = 0.52; // opacité réduite pour les personnes manifestement décédées
+    const DECEASED_BIRTH_THRESHOLD = new Date().getFullYear() - 120; // né il y a > 120 ans
     const fadedIds: string[] = [];
     for (let i = 0; i < nodes.length; i++) {
-      const id = nodes[i].id;
+      const node = nodes[i];
+      const id = node.id;
       const shouldFade = isTopViewActive && hoveredNamePartnerIds.has(id) && id !== hoveredNameId;
-      const a = shouldFade ? hiddenAlpha : 1;
+      const isManifestlyDeceased = node.hasDeathDate || node.birthYear < DECEASED_BIRTH_THRESHOLD;
+      const a = shouldFade ? hiddenAlpha : isManifestlyDeceased ? DECEASED_ALPHA : 1;
       boxAlpha.setX(i, a);
       pathAlpha.setX(i, a);
       if (shouldFade) fadedIds.push(id);
@@ -1171,7 +1170,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const deathStr = dYear ? `${dYear}${dCal ? '\n(CAL)' : ''}` : '?';
 
       const alwaysOnTop = (m: any) => {
-          if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; }
+          if (!m?.material) return;
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mat of mats) {
+              if (mat) {
+                  mat.depthWrite = false;
+                  mat.depthTest = false;
+              }
+          }
       };
 
       const bottomY = p.y - (height / 2);
@@ -1647,7 +1653,16 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const textColor = isDarkMode ? '#ffffff' : '#000000';
       const outlineW = isDarkMode ? 0.1 : 0;
       const fs = labelFontSize * 0.48;
-      const alwaysVisible = (m: any) => { if (m?.material) { m.material.depthWrite = false; m.material.depthTest = false; } };
+      const alwaysVisible = (m: any) => {
+          if (!m?.material) return;
+          const mats = Array.isArray(m.material) ? m.material : [m.material];
+          for (const mat of mats) {
+              if (mat) {
+                  mat.depthWrite = false;
+                  mat.depthTest = false;
+              }
+          }
+      };
 
       return (
           <group>
