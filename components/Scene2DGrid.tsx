@@ -89,6 +89,8 @@ interface Scene2DGridProps {
   /** Zoom ortho à la transition (évite le saut de taille de ruban entre vues). */
   orthoZoomHandoff?: { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null;
   onOrthoZoomHandoffConsumed?: () => void;
+  /** Échantillon du zoom orthographique (vue individuelle) pour l’intro 3D top. */
+  onOrthoZoomSample?: (zoom: number) => void;
   onWebGLContextLost?: () => void;
 }
 
@@ -140,10 +142,17 @@ const MARGIN    = 5 * YEAR;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
-const GRID_TO_INDIVIDUAL_SWITCH_ZOOM = GRID_DEFAULT_ZOOM * 1.2;
-const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
 /** Un cran de molette (aligné sur la rampe reveal) — handoff grille ↔ individuel. */
 export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
+/**
+ * Basculer grille → individuel quelques crans avant l’ancien seuil fixe : pour les rubans très
+ * longs (longue durée de vie), un zoom trop poussé plaçait les boutons Html haut/bas hors viewport
+ * au moment du switch. Chaque cran = {@link WHEEL_ZOOM_IN_STEP_FACTOR}.
+ */
+const GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS = 4;
+const GRID_TO_INDIVIDUAL_SWITCH_ZOOM =
+  (GRID_DEFAULT_ZOOM * 1.2) / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS);
+const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
 const GRID_REVEAL_START_ZOOM =
   GRID_TO_INDIVIDUAL_SWITCH_ZOOM / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
 const GRID_REVEAL_START_OPACITY = 1;
@@ -481,6 +490,7 @@ interface GridContentProps {
     reveal: number;
   } | null) => void;
   onIndividualDefaultZoomChange?: (zoom: number) => void;
+  onOrthoZoomSample?: (zoom: number) => void;
 }
 
 interface PhotoOverlayLayerProps {
@@ -533,7 +543,7 @@ const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
 );
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, orthoZoomHandoff, onOrthoZoomHandoffConsumed, onPhotoOverlayChange, onIndividualDefaultZoomChange,
+  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, orthoZoomHandoff, onOrthoZoomHandoffConsumed, onPhotoOverlayChange, onIndividualDefaultZoomChange, onOrthoZoomSample,
 }) => {
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -853,6 +863,18 @@ const GridContent: React.FC<GridContentProps> = ({
     prevSingleIndividualRef.current = singleIndividual;
   }, [singleIndividual]);
 
+  // Grille → individuel au zoom : souvent aucun pointermove tant que la souris ne bouge pas ;
+  // hoveredIdx reste alors sur un index grille (ex. 5) alors qu’il n’y a qu’un ruban → ruban
+  // « sélectionné » masqué par la condition hoveredIdx === selectedIdx, ou état incohérent.
+  useLayoutEffect(() => {
+    if (!singleIndividual || ribbonData.length === 0) return;
+    if (hoveredIdx >= ribbonData.length) {
+      hoveredRef.current = -1;
+      setHoveredIdx(-1);
+      setHovered3DAction(null);
+    }
+  }, [singleIndividual, ribbonData.length, hoveredIdx]);
+
   /* ---- Colors & fading (sync, before first paint) ---- */
 
   useLayoutEffect(() => {
@@ -989,7 +1011,12 @@ const GridContent: React.FC<GridContentProps> = ({
     anchorIndexRef.current = anchorIndex;
 
     colsRef.current = cols;
-    startTransition(() => setLayoutCols(cols));
+    // En vue un seul ruban, éviter le lag de startTransition sur layoutCols (labels / Html).
+    if (singleIndividual && ribbonData.length === 1) {
+      setLayoutCols(cols);
+    } else {
+      startTransition(() => setLayoutCols(cols));
+    }
 
     const dummy = new THREE.Object3D();
     let traitIdx = 0;
@@ -1261,6 +1288,7 @@ const GridContent: React.FC<GridContentProps> = ({
         clearSelectedRevealOpacity();
         if (isAtZoomLimit) setIsAtZoomLimit(false);
       }
+      onOrthoZoomSample?.(ortho.zoom);
       initializedRef.current = true;
       return;
     } else {
@@ -2158,6 +2186,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   onRequest2DModeSwitch,
   orthoZoomHandoff = null,
   onOrthoZoomHandoffConsumed,
+  onOrthoZoomSample,
   onWebGLContextLost,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
@@ -2325,6 +2354,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           onOrthoZoomHandoffConsumed={onOrthoZoomHandoffConsumed}
           onPhotoOverlayChange={handlePhotoOverlayChange}
           onIndividualDefaultZoomChange={handleIndividualDefaultZoomChange}
+          onOrthoZoomSample={onOrthoZoomSample}
         />
       </Canvas>
 
