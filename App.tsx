@@ -4,7 +4,7 @@ import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 import Scene3D from './components/Scene3D';
 import Scene2DIndividual from './components/Scene2DIndividual';
-import Scene2DGrid from './components/Scene2DGrid';
+import Scene2DGrid, { WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
@@ -664,6 +664,10 @@ function App() {
   const [dragMode, setDragMode] = useState<DragMode>('descendants');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('2d-grid');
   const [flyTarget, setFlyTarget] = useState<CameraMode | null>(null);
+  /** Transition de zoom ortho entre vue grille 2D et vue individu (évite le saut de taille du ruban). */
+  const [twoDOrthoHandoff, setTwoDOrthoHandoff] = useState<
+    { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null
+  >(null);
 
   const viewMode: ViewMode = displayMode.startsWith('3d') ? '3D' : '2D';
   const cameraMode: CameraMode = displayMode === '3d-individual' ? 'individual'
@@ -3416,6 +3420,9 @@ function App() {
       if (flyTarget !== null || isSwitchingModeRef.current) return;
       // Si le mode cible est déjà actif, ne pas toucher au ref (évite un verrou permanent)
       if (target === displayMode) return;
+      if (!target.startsWith('2d')) {
+        setTwoDOrthoHandoff(null);
+      }
       isSwitchingModeRef.current = true;
       // During intentional view switches, old canvases can emit context-lost
       // while unmounting. Ignore recovery in that short window to prevent flicker.
@@ -3447,6 +3454,23 @@ function App() {
       }
 
       setDisplayMode(target);
+  };
+
+  const clearTwoDOrthoHandoff = useCallback(() => {
+    setTwoDOrthoHandoff(null);
+  }, []);
+
+  const handle2DViewModeSwitch = (mode: '2d-grid' | '2d-individual', opts?: { orthoZoom?: number }) => {
+    if (opts?.orthoZoom != null) {
+      if (mode === '2d-individual') {
+        setTwoDOrthoHandoff({ role: 'enteringIndividual', zoom: opts.orthoZoom });
+      } else {
+        setTwoDOrthoHandoff({ role: 'enteringGrid', zoom: opts.orthoZoom / WHEEL_ZOOM_IN_STEP_FACTOR });
+      }
+    } else {
+      setTwoDOrthoHandoff(null);
+    }
+    handleSetDisplayMode(mode);
   };
 
   const handleWebGLContextLost = useCallback(() => {
@@ -5496,7 +5520,9 @@ function App() {
             documentsByIndividualId={renderedDocumentsByIndividualId}
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
-            onRequest2DModeSwitch={handleSetDisplayMode}
+            onRequest2DModeSwitch={handle2DViewModeSwitch}
+            orthoZoomHandoff={twoDOrthoHandoff}
+            onOrthoZoomHandoffConsumed={clearTwoDOrthoHandoff}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}
@@ -5515,7 +5541,9 @@ function App() {
             documentsByIndividualId={renderedDocumentsByIndividualId}
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
-            onRequest2DModeSwitch={handleSetDisplayMode}
+            onRequest2DModeSwitch={handle2DViewModeSwitch}
+            orthoZoomHandoff={twoDOrthoHandoff}
+            onOrthoZoomHandoffConsumed={clearTwoDOrthoHandoff}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}

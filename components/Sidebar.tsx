@@ -16,8 +16,6 @@ const SORT_OPTIONS: { value: SortMode; key: string }[] = [
   { value: 'death-asc',  key: 'sidebar.sort.deathAsc' },
   { value: 'lifespan',   key: 'sidebar.sort.lifespan' },
   { value: 'name',       key: 'sidebar.sort.name' },
-  { value: 'doc-online', key: 'sidebar.sort.docOnline' },
-  { value: 'doc-offline', key: 'sidebar.sort.docOffline' },
 ];
 
 const FILTER_OPTIONS: { value: FilterTag; key: string; color: string; requiresSelected?: boolean }[] = [
@@ -29,6 +27,8 @@ const FILTER_OPTIONS: { value: FilterTag; key: string; color: string; requiresSe
   { value: 'calculated-dates',key: 'sidebar.filters.calculatedDates', color: 'text-yellow-400' },
   { value: 'no-parents',      key: 'sidebar.filters.noParents',       color: 'text-orange-400' },
   { value: 'no-spouse',       key: 'sidebar.filters.noSpouse',        color: 'text-violet-400' },
+  { value: 'doc-online',      key: 'sidebar.filters.docOnline',       color: 'text-sky-400' },
+  { value: 'doc-offline',     key: 'sidebar.filters.docOffline',      color: 'text-teal-400' },
   { value: 'selected-ancestors',   key: 'sidebar.filters.selectedAncestors',   color: 'text-cyan-400', requiresSelected: true },
   { value: 'selected-descendants', key: 'sidebar.filters.selectedDescendants', color: 'text-lime-400', requiresSelected: true },
 ];
@@ -96,12 +96,16 @@ export function computeLineageFilterSets(
   return { ancestors, descendants };
 }
 
+/** Document minimal pour les filtres / tri (pièces jointes G2). */
+export type SortDocumentRef = { source?: string; url?: string };
+
 export function matchesFilters(
   indi: Individual,
   filters: Set<FilterTag>,
   context?: {
     selectedId?: string | null;
     lineageSets?: { ancestors: Set<string>; descendants: Set<string> };
+    documentsByIndividualId?: Record<string, SortDocumentRef[]>;
   },
 ): boolean {
   if (filters.size === 0) return true;
@@ -115,6 +119,12 @@ export function matchesFilters(
       case 'calculated-dates': if (indi.birthDate?.isCalculated || indi.deathDate?.isCalculated) return true; break;
       case 'no-parents':       if (!indi.familyChildId) return true; break;
       case 'no-spouse':        if (!indi.familySpouseIds?.length) return true; break;
+      case 'doc-online':
+        if (hasOnlineDocument(context?.documentsByIndividualId?.[indi.id])) return true;
+        break;
+      case 'doc-offline':
+        if (hasOfflineDocument(context?.documentsByIndividualId?.[indi.id])) return true;
+        break;
       case 'selected-ancestors':
         if (context?.selectedId && context.lineageSets?.ancestors.has(indi.id)) return true;
         break;
@@ -125,9 +135,6 @@ export function matchesFilters(
   }
   return false;
 }
-
-/** Document minimal pour le tri (aligné sur les pièces jointes G2). */
-export type SortDocumentRef = { source?: string; url?: string };
 
 function hasOnlineDocument(docs: SortDocumentRef[] | undefined): boolean {
   if (!docs?.length) return false;
@@ -154,7 +161,6 @@ function nameCompare(a: Individual, b: Individual): number {
 export function applySortMode(
   list: Individual[],
   mode: SortMode,
-  documentsByIndividualId?: Record<string, SortDocumentRef[]>,
 ): Individual[] {
   const sorted = [...list];
   switch (mode) {
@@ -174,24 +180,6 @@ export function applySortMode(
         const lB = (b.deathDate?.year ?? (b.birthDate?.year ?? 0) + 80) - (b.birthDate?.year ?? 0);
         return lB - lA;
       });
-    case 'doc-online': {
-      const score = (p: Individual) =>
-        hasOnlineDocument(documentsByIndividualId?.[p.id]) ? 1 : 0;
-      return sorted.sort((a, b) => {
-        const d = score(b) - score(a);
-        if (d !== 0) return d;
-        return nameCompare(a, b);
-      });
-    }
-    case 'doc-offline': {
-      const score = (p: Individual) =>
-        hasOfflineDocument(documentsByIndividualId?.[p.id]) ? 1 : 0;
-      return sorted.sort((a, b) => {
-        const d = score(b) - score(a);
-        if (d !== 0) return d;
-        return nameCompare(a, b);
-      });
-    }
     default:
       return sorted;
   }
@@ -234,7 +222,7 @@ interface SidebarProps {
   programVersionLabel: string;
   onProgramCheckUpdates: () => void;
   onProgramApplyUpdate: () => void;
-  /** Pour tri « Doc. online / offline » (fiches enrichies, pièces jointes locales). */
+  /** Pour filtres « Doc. en ligne / hors ligne ». */
   documentsByIndividualId?: Record<string, SortDocumentRef[]>;
 }
 
@@ -391,10 +379,12 @@ const Sidebar: React.FC<SidebarProps> = ({
     const lineageSets = computeLineageFilterSets(data, selectedId);
 
     if (activeFilters.size > 0) {
-      list = list.filter(p => matchesFilters(p, activeFilters, { selectedId, lineageSets }));
+      list = list.filter(p =>
+        matchesFilters(p, activeFilters, { selectedId, lineageSets, documentsByIndividualId }),
+      );
     }
 
-    const sorted = applySortMode(list, sortMode || 'birth-asc', documentsByIndividualId);
+    const sorted = applySortMode(list, sortMode || 'birth-asc');
 
     if (!searchTerm) {
         const slice = sorted.slice(0, 200);

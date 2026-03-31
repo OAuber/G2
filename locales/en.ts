@@ -172,8 +172,6 @@ const en = {
       deathAsc: 'Death ↑',
       lifespan: 'Lifespan ↓',
       name: 'Name A→Z',
-      docOnline: 'Doc. online first',
-      docOffline: 'Doc. offline first',
       title: 'Sort',
       menu: 'Sort & Filters',
       fallback: 'Birth ↓',
@@ -190,6 +188,8 @@ const en = {
       noSpouse: 'No spouse',
       selectedAncestors: 'Ancestors of selection',
       selectedDescendants: 'Descendants of selection',
+      docOnline: 'With online document(s)',
+      docOffline: 'With offline / local document(s)',
     },
   },
   topPanel: {

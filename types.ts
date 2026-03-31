@@ -18,9 +18,7 @@ export type SortMode =
   | 'birth-desc'
   | 'death-asc'
   | 'death-desc'
-  | 'lifespan'
-  | 'doc-online'
-  | 'doc-offline';
+  | 'lifespan';
 export type FilterTag =
   | 'manual'
   | 'male'
@@ -31,7 +29,9 @@ export type FilterTag =
   | 'no-parents'
   | 'no-spouse'
   | 'selected-ancestors'
-  | 'selected-descendants';
+  | 'selected-descendants'
+  | 'doc-online'
+  | 'doc-offline';
 export interface LayoutParams {
   generationPitch: number;
   minGap: number;

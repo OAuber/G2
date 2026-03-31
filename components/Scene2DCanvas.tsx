@@ -123,7 +123,7 @@ const Scene2DCanvas: React.FC<Scene2DCanvasProps> = ({
 
     // Sort
     const sortedList = [...list].sort((a, b) => {
-      if (sortMode === 'name' || sortMode === 'doc-online' || sortMode === 'doc-offline') {
+      if (sortMode === 'name') {
         const nameA = `${a.surname} ${a.givenName}`;
         const nameB = `${b.surname} ${b.givenName}`;
         return nameA.localeCompare(nameB);

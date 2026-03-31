@@ -23,7 +23,9 @@ interface Scene2DIndividualProps {
   activeFilters?: Set<FilterTag>;
   leftPanelOpen?: boolean;
   rightPanelOpen?: boolean;
-  onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
+  onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual', opts?: { orthoZoom?: number }) => void;
+  orthoZoomHandoff?: { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null;
+  onOrthoZoomHandoffConsumed?: () => void;
   onWebGLContextLost?: () => void;
 }
 

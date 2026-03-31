@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useRef, useMemo, useCallback, useEffect, useLayoutEffect, useState, startTransition } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
 import { OrthographicCamera, Text, Html, Image as DreiImage } from '@react-three/drei';
 import * as THREE from 'three';
@@ -85,7 +85,10 @@ interface Scene2DGridProps {
   rightPanelOpen?: boolean;
   singleIndividual?: boolean;
   onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free' | 'individual') => void;
-  onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual') => void;
+  onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual', opts?: { orthoZoom?: number }) => void;
+  /** Zoom ortho à la transition (évite le saut de taille de ruban entre vues). */
+  orthoZoomHandoff?: { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null;
+  onOrthoZoomHandoffConsumed?: () => void;
   onWebGLContextLost?: () => void;
 }
 
@@ -139,7 +142,8 @@ const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
 const GRID_TO_INDIVIDUAL_SWITCH_ZOOM = GRID_DEFAULT_ZOOM * 1.2;
 const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
-const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1; // from applyZoomDelta with a standard wheel notch (~deltaY=-100)
+/** Un cran de molette (aligné sur la rampe reveal) — handoff grille ↔ individuel. */
+export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
 const GRID_REVEAL_START_ZOOM =
   GRID_TO_INDIVIDUAL_SWITCH_ZOOM / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
 const GRID_REVEAL_START_OPACITY = 1;
@@ -469,6 +473,8 @@ interface GridContentProps {
   relationshipRevealEnabled: boolean;
   singleIndividual?: boolean;
   onExpandAndSwitch3D?: (direction: 'ancestors' | 'descendants', mode: 'top' | 'free' | 'individual') => void;
+  orthoZoomHandoff?: { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null;
+  onOrthoZoomHandoffConsumed?: () => void;
   onPhotoOverlayChange?: (overlay: {
     url: string;
     inset: { top: number; right: number; bottom: number; left: number };
@@ -527,7 +533,7 @@ const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
 );
 
 const GridContent: React.FC<GridContentProps> = ({
-  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, onPhotoOverlayChange, onIndividualDefaultZoomChange,
+  individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, orthoZoomHandoff, onOrthoZoomHandoffConsumed, onPhotoOverlayChange, onIndividualDefaultZoomChange,
 }) => {
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -545,6 +551,8 @@ const GridContent: React.FC<GridContentProps> = ({
   const prevZoomRef = useRef<number | null>(null);
   const needsCenterRef = useRef(false);
   const shouldApplyGridDefaultZoomRef = useRef(true);
+  const seedZoomFromGridRef = useRef<number | null>(null);
+  const pendingGridZoomFromIndividualRef = useRef<number | null>(null);
   const prevSingleIndividualRef = useRef(singleIndividual);
   const prevSelectedIdRef = useRef(selectedId);
   const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
@@ -560,6 +568,9 @@ const GridContent: React.FC<GridContentProps> = ({
   const revealOpacityAttrRef = useRef<THREE.InstancedBufferAttribute | null>(null);
   const prevRevealIndicesRef = useRef<Set<number>>(new Set());
   const prevGridPhotoSigRef = useRef<string>('');
+  const anchorIndexRef = useRef(0);
+  /** Retarder le montage des textures WebGL pour laisser la caméra / rubans se stabiliser (photos en ligne). */
+  const [gridTexturesMountReady, setGridTexturesMountReady] = useState(false);
   const [gridPhotoPlanes, setGridPhotoPlanes] = useState<Array<{ key: string; url: string; cx: number; cy: number; h: number }>>([]);
   const [hoveredDocId, setHoveredDocId] = useState<string | null>(null);
   const [windowPhotoOverrideUrl, setWindowPhotoOverrideUrl] = useState<string | null>(null);
@@ -712,6 +723,19 @@ const GridContent: React.FC<GridContentProps> = ({
     }
   }, [selectedId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setGridTexturesMountReady(true);
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, []);
+
   /* ---- Geometries ---- */
 
   const ribbonGeometry = useMemo(() => {
@@ -809,7 +833,7 @@ const GridContent: React.FC<GridContentProps> = ({
     setWindowPhotoOverrideUrl(null);
   }, [selectedId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (selectedId && selectedId !== prevSelectedIdRef.current) {
       needsCenterRef.current = true;
       if (!singleIndividual) {
@@ -830,6 +854,19 @@ const GridContent: React.FC<GridContentProps> = ({
   }, [singleIndividual]);
 
   /* ---- Colors & fading (sync, before first paint) ---- */
+
+  useLayoutEffect(() => {
+    if (!orthoZoomHandoff) return;
+    const okForIndividual = singleIndividual && orthoZoomHandoff.role === 'enteringIndividual';
+    const okForGrid = !singleIndividual && orthoZoomHandoff.role === 'enteringGrid';
+    if (okForIndividual) {
+      seedZoomFromGridRef.current = orthoZoomHandoff.zoom;
+    } else if (okForGrid) {
+      pendingGridZoomFromIndividualRef.current = orthoZoomHandoff.zoom;
+    } else {
+      onOrthoZoomHandoffConsumed?.();
+    }
+  }, [orthoZoomHandoff, singleIndividual, onOrthoZoomHandoffConsumed]);
 
   useLayoutEffect(() => {
     const mesh = ribbonMeshRef.current;
@@ -895,10 +932,21 @@ const GridContent: React.FC<GridContentProps> = ({
 
     const applyGridDefaultZoomIfNeeded = () => {
       if (!singleIndividual && shouldApplyGridDefaultZoomRef.current) {
-        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, GRID_DEFAULT_ZOOM));
-        if (Math.abs(nextZoom - ortho.zoom) > 1e-6) {
-          ortho.zoom = nextZoom;
-          ortho.updateProjectionMatrix();
+        const pending = pendingGridZoomFromIndividualRef.current;
+        if (pending != null) {
+          const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pending));
+          if (Math.abs(nextZoom - ortho.zoom) > 1e-6) {
+            ortho.zoom = nextZoom;
+            ortho.updateProjectionMatrix();
+          }
+          pendingGridZoomFromIndividualRef.current = null;
+          onOrthoZoomHandoffConsumed?.();
+        } else {
+          const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, GRID_DEFAULT_ZOOM));
+          if (Math.abs(nextZoom - ortho.zoom) > 1e-6) {
+            ortho.zoom = nextZoom;
+            ortho.updateProjectionMatrix();
+          }
         }
         shouldApplyGridDefaultZoomRef.current = false;
       }
@@ -919,7 +967,8 @@ const GridContent: React.FC<GridContentProps> = ({
       }
     }
 
-    if (!needsReflow && initializedRef.current && !singleIndividual) {
+    const skipMatrixReflow = !needsReflow && initializedRef.current && !singleIndividual;
+    if (skipMatrixReflow) {
       // Keep selected individual centered while zooming in grid mode,
       // regardless of pointer position.
       if (zoomChanged && selectedIdx >= 0) {
@@ -928,9 +977,7 @@ const GridContent: React.FC<GridContentProps> = ({
         ortho.position.x = col * STEP_X;
         ortho.position.y = -row * STEP_Y;
       }
-      return;
-    }
-
+    } else {
     // Anchor: keep the top-most visible item stable during reflow
     const oldCols = colsRef.current;
     let anchorIndex = 0;
@@ -939,9 +986,10 @@ const GridContent: React.FC<GridContentProps> = ({
       const topRow = Math.max(0, Math.round((CELL_H / 2 - viewTop) / STEP_Y));
       anchorIndex = Math.min(ribbonData.length - 1, topRow * oldCols);
     }
+    anchorIndexRef.current = anchorIndex;
 
     colsRef.current = cols;
-    setLayoutCols(cols);
+    startTransition(() => setLayoutCols(cols));
 
     const dummy = new THREE.Object3D();
     let traitIdx = 0;
@@ -1016,6 +1064,7 @@ const GridContent: React.FC<GridContentProps> = ({
     traitsMesh.count = traitIdx;
     traitsMesh.instanceMatrix.needsUpdate = true;
     if (traitsMesh.instanceColor) traitsMesh.instanceColor.needsUpdate = true;
+    }
 
     // Camera
     if (singleIndividual && ribbonData.length === 1) {
@@ -1072,9 +1121,19 @@ const GridContent: React.FC<GridContentProps> = ({
         baseH: frustumHAtZoom1,
       };
 
+      const seedFromGrid = seedZoomFromGridRef.current;
+      let initialZoom = minFitZoom;
+      if (seedFromGrid != null) {
+        // Un cran de zoom de plus qu’en grille au basculement (continuité sens « zoom avant »).
+        const zoomFromGridOneStepIn = seedFromGrid * WHEEL_ZOOM_IN_STEP_FACTOR;
+        initialZoom = Math.max(minFitZoom, zoomFromGridOneStepIn);
+        seedZoomFromGridRef.current = null;
+        onOrthoZoomHandoffConsumed?.();
+      }
+
       if (!initializedRef.current || viewportChanged) {
-        if (!initializedRef.current || ortho.zoom < minFitZoom) {
-          ortho.zoom = minFitZoom;
+        if (!initializedRef.current || ortho.zoom < initialZoom) {
+          ortho.zoom = initialZoom;
           ortho.updateProjectionMatrix();
         }
         ortho.position.set(centerX, centerY, 100);
@@ -1219,7 +1278,9 @@ const GridContent: React.FC<GridContentProps> = ({
         }
         applyGridDefaultZoomIfNeeded();
         initializedRef.current = true;
-      } else if (!centeredSelectedThisFrame) {
+      } else if (!skipMatrixReflow && !centeredSelectedThisFrame) {
+        // Uniquement après un reflow de grille : recentrage au zoom ou conservation du défilement.
+        // Si skipMatrixReflow, le centrage sélection / zoom est géré plus haut (needsCenterRef + bloc zoom).
         if (zoomChanged && selectedIdx >= 0) {
           // On zoom (including reflow), always keep selected centered.
           const selectedRow = Math.floor(selectedIdx / cols);
@@ -1227,7 +1288,7 @@ const GridContent: React.FC<GridContentProps> = ({
           ortho.position.x = selectedCol * STEP_X;
           ortho.position.y = -selectedRow * STEP_Y;
         } else {
-          const newRow = Math.floor(anchorIndex / cols);
+          const newRow = Math.floor(anchorIndexRef.current / cols);
           // Preserve user free horizontal pan in grid mode.
           ortho.position.y = -newRow * STEP_Y + CELL_H / 2 + MARGIN - visH / 2;
         }
@@ -1279,14 +1340,14 @@ const GridContent: React.FC<GridContentProps> = ({
         const nextSig = nextPlanes.map((p) => `${p.key}:${p.cx.toFixed(2)}:${p.cy.toFixed(2)}:${p.h.toFixed(2)}`).join('|');
         if (nextSig !== prevGridPhotoSigRef.current) {
           prevGridPhotoSigRef.current = nextSig;
-          setGridPhotoPlanes(nextPlanes);
+          startTransition(() => setGridPhotoPlanes(nextPlanes));
         }
       } else {
         onPhotoOverlayChange?.(null);
         clearSelectedRevealOpacity();
         if (prevGridPhotoSigRef.current !== '') {
           prevGridPhotoSigRef.current = '';
-          setGridPhotoPlanes([]);
+          startTransition(() => setGridPhotoPlanes([]));
         }
       }
     }
@@ -2039,7 +2100,7 @@ const GridContent: React.FC<GridContentProps> = ({
   return (
     <>
       <group>
-        {!singleIndividual && gridPhotoPlanes.map((p) => (
+        {!singleIndividual && gridTexturesMountReady && gridPhotoPlanes.map((p) => (
           <DreiImage
             key={p.key}
             url={p.url}
@@ -2066,7 +2127,10 @@ const GridContent: React.FC<GridContentProps> = ({
           onPointerLeave={handleTraitPointerLeave}
           onClick={handleTraitClick}
         />
-        {selectedIdx >= 0 && <RibbonLabel index={selectedIdx} isHover={false} isSelectedPinned={true} />}
+        {selectedIdx >= 0 &&
+          (singleIndividual || hoveredIdx < 0 || hoveredIdx === selectedIdx) && (
+            <RibbonLabel index={selectedIdx} isHover={false} isSelectedPinned={true} />
+          )}
         {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
           <RibbonLabel index={hoveredIdx} isHover={true} />
         )}
@@ -2092,6 +2156,8 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   singleIndividual = false,
   onExpandAndSwitch3D,
   onRequest2DModeSwitch,
+  orthoZoomHandoff = null,
+  onOrthoZoomHandoffConsumed,
   onWebGLContextLost,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
@@ -2112,7 +2178,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
     if (modeSwitchLockRef.current || !onRequest2DModeSwitch) return false;
     if (!singleIndividual && deltaY < 0 && currentZoom >= GRID_TO_INDIVIDUAL_SWITCH_ZOOM) {
       modeSwitchLockRef.current = true;
-      onRequest2DModeSwitch('2d-individual');
+      onRequest2DModeSwitch?.('2d-individual', { orthoZoom: currentZoom });
       return true;
     }
     // In individual view, dezoom should first return progressively to the
@@ -2121,7 +2187,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       const baselineZoom = individualDefaultZoomRef.current;
       if (baselineZoom !== null && currentZoom <= baselineZoom * 1.02) {
         modeSwitchLockRef.current = true;
-        onRequest2DModeSwitch('2d-grid');
+        onRequest2DModeSwitch?.('2d-grid', { orthoZoom: currentZoom });
         return true;
       }
       return false;
@@ -2191,9 +2257,11 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       list = all.filter(i => selectedIds.has(i.id));
     }
     if (activeFilters && activeFilters.size > 0) {
-      list = list.filter(i => matchesFilters(i, activeFilters, { selectedId, lineageSets }));
+      list = list.filter(i =>
+        matchesFilters(i, activeFilters, { selectedId, lineageSets, documentsByIndividualId }),
+      );
     }
-    return applySortMode(list, sortMode, documentsByIndividualId);
+    return applySortMode(list, sortMode);
   }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId, documentsByIndividualId]);
 
   if (!data) return null;
@@ -2253,6 +2321,8 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           relationshipRevealEnabled={relationshipRevealEnabled}
           singleIndividual={singleIndividual}
           onExpandAndSwitch3D={onExpandAndSwitch3D}
+          orthoZoomHandoff={orthoZoomHandoff}
+          onOrthoZoomHandoffConsumed={onOrthoZoomHandoffConsumed}
           onPhotoOverlayChange={handlePhotoOverlayChange}
           onIndividualDefaultZoomChange={handleIndividualDefaultZoomChange}
         />
