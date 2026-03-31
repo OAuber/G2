@@ -168,6 +168,8 @@ function App() {
     source: 'local' | 'online';
     kind: 'photo' | 'document';
     date?: string;
+    /** Texte libre ou URL (crédit / provenance, ex. « Wikipedia » ou lien). */
+    sourceAttribution?: string;
     isPrimaryPhoto?: boolean;
   };
 
@@ -214,6 +216,9 @@ function App() {
             onlinePhotoAutoSeq += 1;
             title = `${baseSlug}_${String(onlinePhotoAutoSeq).padStart(2, '0')}`;
           }
+          const rawAttr = (doc as Record<string, unknown>).sourceAttribution;
+          const sourceAttribution =
+            typeof rawAttr === 'string' && rawAttr.trim() !== '' ? rawAttr.trim() : undefined;
           return {
             id: typeof doc.id === 'string' ? doc.id : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             title,
@@ -221,6 +226,7 @@ function App() {
             source,
             kind,
             date: typeof doc.date === 'string' ? doc.date : undefined,
+            sourceAttribution,
             isPrimaryPhoto,
           } as IndividualDocument;
         })
@@ -562,6 +568,12 @@ function App() {
             ...patch.patch,
             kind: nextKind,
             date: patch.patch?.date === '' ? undefined : (patch.patch?.date ?? doc.date),
+            sourceAttribution:
+              patch.patch?.sourceAttribution === ''
+                ? undefined
+                : typeof patch.patch?.sourceAttribution === 'string'
+                  ? patch.patch.sourceAttribution.trim() || undefined
+                  : doc.sourceAttribution,
           };
         });
       } else if (patch.operation === 'remove' && patch.docId) {
@@ -1155,6 +1167,12 @@ function App() {
             ...patch,
             kind: nextKind,
             date: patch.date === '' ? undefined : (typeof patch.date === 'string' ? patch.date : doc.date),
+            sourceAttribution:
+              patch.sourceAttribution === ''
+                ? undefined
+                : typeof patch.sourceAttribution === 'string'
+                  ? patch.sourceAttribution.trim() || undefined
+                  : doc.sourceAttribution,
           };
         });
       } else if (payload.operation === 'remove' && payload.docId) {
@@ -4608,6 +4626,7 @@ function App() {
       source: 'local' | 'online';
       kind: 'photo' | 'document';
       date?: string;
+      sourceAttribution?: string;
     }
   ) => {
     const inferredKind: 'photo' | 'document' =
@@ -4617,6 +4636,7 @@ function App() {
       ...doc,
       kind: inferredKind,
       isPrimaryPhoto: false,
+      sourceAttribution: doc.sourceAttribution?.trim() || undefined,
     };
     let addedDoc: IndividualDocument | null = null;
     setDocumentsByIndividualId((prev) => {
@@ -4676,6 +4696,7 @@ function App() {
       source?: 'local' | 'online';
       kind?: 'photo' | 'document';
       date?: string;
+      sourceAttribution?: string;
     }
   ) => {
     let patchToSend: Partial<IndividualDocument> | null = null;
@@ -4693,6 +4714,10 @@ function App() {
             ...patch,
             kind: nextKind,
             date: patch.date === '' ? undefined : (patch.date ?? doc.date),
+            sourceAttribution:
+              patch.sourceAttribution !== undefined
+                ? (patch.sourceAttribution.trim() === '' ? undefined : patch.sourceAttribution.trim())
+                : doc.sourceAttribution,
           };
           patchToSend = {
             title: updated.title,
@@ -4700,6 +4725,7 @@ function App() {
             source: updated.source,
             kind: updated.kind,
             date: updated.date,
+            sourceAttribution: updated.sourceAttribution,
             isPrimaryPhoto: updated.isPrimaryPhoto,
           };
           return updated;

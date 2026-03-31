@@ -1,9 +1,70 @@
 import { SelfIdentityPublic } from '../types';
 
+/** Champs persistés pour chaque média dans l’archive .lifethread (export, import, bundle P2P). */
+export type BundleIndividualDocument = {
+  id: string;
+  title: string;
+  url: string;
+  source: 'local' | 'online';
+  kind: 'photo' | 'document';
+  date?: string;
+  /** Crédit / provenance (texte ou URL), même modèle que dans l’app. */
+  sourceAttribution?: string;
+  isPrimaryPhoto?: boolean;
+};
+
+/**
+ * Copie uniquement les champs prévus pour le bundle, dont `sourceAttribution`,
+ * afin qu’ils ne soient pas perdus lors d’un futur refactor des objets en mémoire.
+ */
+export function serializeDocumentsByIndividualIdForBundle(
+  input: Record<string, unknown> | null | undefined
+): Record<string, BundleIndividualDocument[]> {
+  if (!input || typeof input !== 'object') return {};
+  const out: Record<string, BundleIndividualDocument[]> = {};
+  for (const [individualId, rawList] of Object.entries(input)) {
+    if (!Array.isArray(rawList)) continue;
+    const docs: BundleIndividualDocument[] = [];
+    for (const raw of rawList) {
+      if (!raw || typeof raw !== 'object') continue;
+      const d = raw as Record<string, unknown>;
+      const url = typeof d.url === 'string' ? d.url : '';
+      if (!url) continue;
+      const id =
+        typeof d.id === 'string' && d.id
+          ? d.id
+          : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const title = typeof d.title === 'string' ? d.title : 'Untitled';
+      const source: 'local' | 'online' =
+        d.source === 'local' || d.source === 'online' ? d.source : 'online';
+      const kind: 'photo' | 'document' =
+        d.kind === 'photo' || d.kind === 'document' ? d.kind : 'document';
+      const date = typeof d.date === 'string' && d.date ? d.date : undefined;
+      const sa = d.sourceAttribution;
+      const sourceAttribution =
+        typeof sa === 'string' && sa.trim() !== '' ? sa.trim() : undefined;
+      const isPrimaryPhoto = d.isPrimaryPhoto === true;
+      docs.push({
+        id,
+        title,
+        url,
+        source,
+        kind,
+        ...(date ? { date } : {}),
+        ...(sourceAttribution ? { sourceAttribution } : {}),
+        ...(isPrimaryPhoto ? { isPrimaryPhoto: true } : {}),
+      });
+    }
+    out[individualId] = docs;
+  }
+  return out;
+}
+
 export interface LifeThreadBundleMetadata {
   version?: string;
   databaseName?: string;
   exportedAt?: string;
+  /** Tableaux de {@link BundleIndividualDocument} après sérialisation dans {@link createLifeThreadBundle}. */
   documentsByIndividualId?: Record<string, unknown>;
   includesDocuments?: boolean;
   normalizedGedcomContent?: string;
@@ -31,10 +92,16 @@ export async function createLifeThreadBundle(
   gedcomContent: string,
   metadata: LifeThreadBundleMetadata
 ): Promise<Blob> {
+  const meta: LifeThreadBundleMetadata = { ...(metadata || {}) };
+  if (meta.documentsByIndividualId != null && typeof meta.documentsByIndividualId === 'object') {
+    meta.documentsByIndividualId = serializeDocumentsByIndividualIdForBundle(
+      meta.documentsByIndividualId as Record<string, unknown>
+    );
+  }
   const payload: LifeThreadBundlePayload = {
     lifethreadBundle: true,
     gedcomContent,
-    metadata: metadata || {},
+    metadata: meta,
   };
   const content = JSON.stringify(payload);
   return new Blob([content], { type: 'application/json;charset=utf-8' });

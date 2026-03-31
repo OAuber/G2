@@ -1,9 +1,32 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { User, Plus, Trash2, Edit, Link2, X } from 'lucide-react';
+import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { useI18n } from '../i18n';
+
+/** Provenance / crédit (texte ou URL affichée sous la photo principale). */
+function DocumentSourceAttribution({ text, className }: { text: string; className?: string }) {
+  const s = text.trim();
+  if (!s) return null;
+  const asUrl = /^https?:\/\//i.test(s);
+  return (
+    <p className={className}>
+      {asUrl ? (
+        <a
+          href={s}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-slate-500/40 underline-offset-2 break-all hover:decoration-slate-400"
+        >
+          {s}
+        </a>
+      ) : (
+        <span>{s}</span>
+      )}
+    </p>
+  );
+}
 
 export interface NewPersonData {
   givenName: string;
@@ -87,6 +110,7 @@ interface DetailsPanelProps {
     source: 'local' | 'online';
     kind: 'photo' | 'document';
     date?: string;
+    sourceAttribution?: string;
     isPrimaryPhoto?: boolean;
   }>;
   onOpenReviewProposal?: (proposalId: string) => void;
@@ -96,6 +120,7 @@ interface DetailsPanelProps {
     source: 'local' | 'online';
     kind: 'photo' | 'document';
     date?: string;
+    sourceAttribution?: string;
   }) => void;
   onUpdateDocument?: (individualId: string, docId: string, patch: {
     title?: string;
@@ -103,6 +128,7 @@ interface DetailsPanelProps {
     source?: 'local' | 'online';
     kind?: 'photo' | 'document';
     date?: string;
+    sourceAttribution?: string;
   }) => void;
   onRemoveDocument?: (individualId: string, docId: string) => void;
   onSetPrimaryPhoto?: (individualId: string, docId: string) => void;
@@ -367,6 +393,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     source: 'local' | 'online';
     kind: 'photo' | 'document';
     date: string;
+    sourceAttribution: string;
     file: File | null;
   }>({
     title: '',
@@ -374,12 +401,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     source: 'local',
     kind: 'photo',
     date: '',
+    sourceAttribution: '',
     file: null,
   });
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [isSubmittingDocument, setIsSubmittingDocument] = useState(false);
   const [editingDocTitle, setEditingDocTitle] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
+  const [editingDocAttribution, setEditingDocAttribution] = useState('');
   const [identityCandidateId, setIdentityCandidateId] = useState('');
   const [exportPassword, setExportPassword] = useState('');
   const [importPassword, setImportPassword] = useState('');
@@ -594,10 +623,27 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     }
   }, [activeTab, reviewProposal?.proposalId, reviewProposals, onOpenReviewProposal]);
 
-  const primaryPhoto = useMemo(
-    () => documents.find((d) => (d.kind === 'photo' || d.url.startsWith('data:image/')) && d.isPrimaryPhoto),
+  const photoDocuments = useMemo(
+    () => documents.filter((d) => d.kind === 'photo' || d.url.startsWith('data:image/')),
     [documents]
   );
+  const [photoGalleryIndex, setPhotoGalleryIndex] = useState(0);
+  const galleryIndividualRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = individual?.id ?? null;
+    if (id !== galleryIndividualRef.current) {
+      galleryIndividualRef.current = id;
+      const photos = documents.filter((d) => d.kind === 'photo' || d.url.startsWith('data:image/'));
+      const pi = photos.findIndex((d) => d.isPrimaryPhoto);
+      setPhotoGalleryIndex(pi >= 0 ? pi : 0);
+    } else {
+      setPhotoGalleryIndex((i) => {
+        if (photoDocuments.length === 0) return 0;
+        return Math.min(Math.max(0, i), photoDocuments.length - 1);
+      });
+    }
+  }, [individual?.id, documents, photoDocuments]);
+  const galleryPhoto = photoDocuments[photoGalleryIndex];
   const selectedIndividualId = individual?.id || null;
   const isSelectedSelf = !!selfIdentity && !!selectedIndividualId && selfIdentity.individualId === selectedIndividualId;
   const showClaimBlock = !selfIdentity;
@@ -840,10 +886,61 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {primaryPhoto && (
+              {galleryPhoto && (
                 <div className={`${cardBg} rounded-lg p-3`}>
-                  <div className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>{t('details.primaryPhoto')}</div>
-                  <img src={primaryPhoto.url} alt={primaryPhoto.title} className="w-full h-40 object-cover rounded border border-slate-600/30" />
+                  <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem]">
+                    <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.photosGallery')}</div>
+                    {photoDocuments.length > 1 && (
+                      <div className="flex items-center gap-0.5 shrink-0" role="group" aria-label={t('details.photosGallery')}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPhotoGalleryIndex((i) => (i <= 0 ? photoDocuments.length - 1 : i - 1))
+                          }
+                          className={`p-1 rounded border ${isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'} ${subTextClass}`}
+                          aria-label={t('details.photoPrevious')}
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <span
+                          className={`text-[10px] font-mono tabular-nums px-1.5 min-w-[2.75rem] text-center ${subTextClass}`}
+                        >
+                          {photoGalleryIndex + 1}/{photoDocuments.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPhotoGalleryIndex((i) => (i >= photoDocuments.length - 1 ? 0 : i + 1))
+                          }
+                          className={`p-1 rounded border ${isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'} ${subTextClass}`}
+                          aria-label={t('details.photoNext')}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <a
+                    href={galleryPhoto.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={t('details.openImageOriginal')}
+                    className={`block rounded border overflow-hidden focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                      isDarkMode ? 'border-slate-600/50' : 'border-slate-400/40'
+                    } cursor-pointer`}
+                  >
+                    <img
+                      src={galleryPhoto.url}
+                      alt={galleryPhoto.title}
+                      className="w-full h-40 object-cover"
+                    />
+                  </a>
+                  {galleryPhoto.sourceAttribution?.trim() ? (
+                    <DocumentSourceAttribution
+                      text={galleryPhoto.sourceAttribution}
+                      className={`text-xs mt-2 leading-snug ${textClass} opacity-90`}
+                    />
+                  ) : null}
                 </div>
               )}
 
@@ -899,6 +996,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   value={docForm.date}
                   onChange={(e) => setDocForm((prev) => ({ ...prev, date: e.target.value }))}
                 />
+                <label className={`block text-xs font-bold uppercase tracking-wider mt-1 ${subTextClass}`}>
+                  {t('details.sourceAttribution')}
+                </label>
+                <input
+                  placeholder={t('details.sourceAttributionPlaceholder')}
+                  className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                  value={docForm.sourceAttribution}
+                  onChange={(e) => setDocForm((prev) => ({ ...prev, sourceAttribution: e.target.value }))}
+                />
                 <button
                   type="button"
                   disabled={isSubmittingDocument || !docForm.title || (docForm.source === 'online' ? !docForm.url : !docForm.file)}
@@ -927,8 +1033,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         source: docForm.source,
                         kind: inferredKind,
                         date: docForm.date || undefined,
+                        sourceAttribution: docForm.sourceAttribution.trim() || undefined,
                       });
-                      setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', file: null });
+                      const willShowInGallery =
+                        inferredKind === 'photo' || resolvedUrl.startsWith('data:image/');
+                      if (willShowInGallery) {
+                        setPhotoGalleryIndex(photoDocuments.length);
+                      }
+                      setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', sourceAttribution: '', file: null });
                     } finally {
                       setIsSubmittingDocument(false);
                     }
@@ -959,6 +1071,16 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                               value={editingDocTitle}
                               onChange={(e) => setEditingDocTitle(e.target.value)}
                             />
+                            <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                              {t('details.sourceAttribution')}
+                            </label>
+                            <input
+                              type="text"
+                              placeholder={t('details.sourceAttributionPlaceholder')}
+                              className={`w-full rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
+                              value={editingDocAttribution}
+                              onChange={(e) => setEditingDocAttribution(e.target.value)}
+                            />
                             <div className="flex items-center gap-2">
                             <input
                               type="date"
@@ -973,10 +1095,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                 onUpdateDocument?.(individual.id, doc.id, {
                                   title: editingDocTitle.trim() || doc.title,
                                   date: editingDocDate || undefined,
+                                  sourceAttribution: editingDocAttribution.trim(),
                                 });
+                                const pi = photoDocuments.findIndex((d) => d.id === doc.id);
+                                if (pi >= 0) setPhotoGalleryIndex(pi);
                                 setEditingDocId(null);
                                 setEditingDocTitle('');
                                 setEditingDocDate('');
+                                setEditingDocAttribution('');
                               }}
                               className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
                             >
@@ -988,6 +1114,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                 setEditingDocId(null);
                                 setEditingDocTitle('');
                                 setEditingDocDate('');
+                                setEditingDocAttribution('');
                               }}
                               className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
                             >
@@ -1005,11 +1132,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                               setEditingDocId(null);
                               setEditingDocTitle('');
                               setEditingDocDate('');
+                              setEditingDocAttribution('');
                               return;
                             }
                             setEditingDocId(doc.id);
                             setEditingDocTitle(doc.title || '');
                             setEditingDocDate(doc.date || '');
+                            setEditingDocAttribution(doc.sourceAttribution || '');
                           }}
                           className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
                         >
