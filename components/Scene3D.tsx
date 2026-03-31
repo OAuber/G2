@@ -524,6 +524,11 @@ const RibbonPhotoOverlays3D: React.FC<{
     if (!url) return false;
     if (url.startsWith('data:image/')) return true;
     if (url.startsWith('blob:')) return true;
+    const u = url.trim();
+    if (u.startsWith('http://') || u.startsWith('https://')) {
+      if (/upload\.wikimedia\.org/i.test(u)) return true;
+      if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u)) return true;
+    }
     return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
   }, []);
 

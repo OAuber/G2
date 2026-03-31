@@ -8,7 +8,7 @@ import Scene2DGrid from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
-import { generateGedcom, parseDate, parseGedcom } from './services/gedcomParser';
+import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
 import { ActivityLogEvent } from './services/p2pDomain';
@@ -37,6 +37,29 @@ const P2P_BUNDLE_CONTENT_MODE_KEY = 'g2:p2pBundleContentMode:v1';
 const AUTOSAVE_DB_NAME = 'g2-autosave-db';
 const AUTOSAVE_STORE_NAME = 'snapshots';
 const AUTOSAVE_RECORD_KEY = 'latest';
+
+/** Base Prénom_Nom pour titres auto des photos en ligne (comme un nom de fichier). */
+function displayNameSlugForOnlineDocTitle(
+  individualId: string,
+  individuals: Record<string, Individual> | null | undefined,
+): string {
+  const indi = individuals?.[individualId];
+  if (!indi) return individualId.replace(/^@+|@+$/g, '') || 'unknown';
+  const g = (indi.givenName || '').trim();
+  const s = (indi.surname || '').trim();
+  const combined = `${g} ${s}`.trim();
+  if (combined) return combined.replace(/\s+/g, '_');
+  const n = (indi.name || '').replace(/\//g, '').trim().replace(/\s+/g, '_');
+  if (n) return n;
+  return individualId.replace(/^@+|@+$/g, '') || 'unknown';
+}
+
+function shouldReplaceOnlinePhotoTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t || t === 'Untitled') return true;
+  if (t.startsWith('Wikipedia (')) return true;
+  return false;
+}
 
 type AutoSaveSnapshot = {
   savedAt: string;
@@ -152,17 +175,25 @@ function App() {
     if (!url) return false;
     if (url.startsWith('data:image/')) return true;
     if (url.startsWith('blob:')) return true;
+    const u = url.trim();
+    if (u.startsWith('http://') || u.startsWith('https://')) {
+      if (/upload\.wikimedia\.org/i.test(u)) return true;
+      if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u)) return true;
+    }
     return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
   };
 
   const normalizeDocumentsByIndividual = (
-    input: Record<string, unknown> | null | undefined
+    input: Record<string, unknown> | null | undefined,
+    individuals?: Record<string, Individual> | null,
   ): Record<string, IndividualDocument[]> => {
     if (!input || typeof input !== 'object') return {};
     const normalized: Record<string, IndividualDocument[]> = {};
 
     for (const [individualId, rawDocs] of Object.entries(input)) {
       if (!Array.isArray(rawDocs)) continue;
+      const baseSlug = displayNameSlugForOnlineDocTitle(individualId, individuals);
+      let onlinePhotoAutoSeq = 0;
       const docs = rawDocs
         .map((raw) => {
           if (!raw || typeof raw !== 'object') return null;
@@ -175,9 +206,17 @@ function App() {
             doc.source === 'local' || doc.source === 'online' ? doc.source : 'online';
           const isPrimaryPhoto =
             (doc.isPrimaryPhoto === true || (doc as { isPrimary?: boolean }).isPrimary === true) && kind === 'photo';
+          let title: string = typeof doc.title === 'string' ? doc.title : 'Untitled';
+          const isOnlinePhoto =
+            kind === 'photo' &&
+            (source === 'online' || url.startsWith('http://') || url.startsWith('https://'));
+          if (isOnlinePhoto && shouldReplaceOnlinePhotoTitle(title)) {
+            onlinePhotoAutoSeq += 1;
+            title = `${baseSlug}_${String(onlinePhotoAutoSeq).padStart(2, '0')}`;
+          }
           return {
             id: typeof doc.id === 'string' ? doc.id : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            title: typeof doc.title === 'string' ? doc.title : 'Untitled',
+            title,
             url,
             source,
             kind,
@@ -500,7 +539,10 @@ function App() {
       const current = snapshot[patch.individualId] || [];
       let next = current;
       if (patch.operation === 'add' && patch.doc) {
-        const normalized = normalizeDocumentsByIndividual({ [patch.individualId]: [patch.doc] })[patch.individualId] || [];
+        const normalized =
+          normalizeDocumentsByIndividual({ [patch.individualId]: [patch.doc] }, gedcomDataRef.current?.individuals)[
+            patch.individualId
+          ] || [];
         const incoming = normalized[0];
         if (incoming) {
           const deduped = current.filter((d) => d.id !== incoming.id);
@@ -1039,7 +1081,7 @@ function App() {
   };
 
   const applyIncomingDocuments = (documentsRaw: Record<string, unknown>, merge: boolean = false) => {
-    const docs = normalizeDocumentsByIndividual(documentsRaw);
+    const docs = normalizeDocumentsByIndividual(documentsRaw, gedcomDataRef.current?.individuals);
     if (syncReceivingInProgressRef.current) {
       pendingIncomingDocumentsRef.current = merge && pendingIncomingDocumentsRef.current
         ? { ...pendingIncomingDocumentsRef.current, ...docs }
@@ -1086,7 +1128,10 @@ function App() {
       const current = prev[individualId] || [];
       let next = current;
       if (payload.operation === 'add' && payload.doc) {
-        const normalized = normalizeDocumentsByIndividual({ [individualId]: [payload.doc] })[individualId] || [];
+        const normalized =
+          normalizeDocumentsByIndividual({ [individualId]: [payload.doc] }, gedcomDataRef.current?.individuals)[
+            individualId
+          ] || [];
         const incoming = normalized[0];
         if (!incoming) return prev;
         const deduped = current.filter((d) => d.id !== incoming.id);
@@ -1182,7 +1227,12 @@ function App() {
       typeof metadata.documentsByIndividualId === 'object' &&
       Object.keys(metadata.documentsByIndividualId as Record<string, unknown>).length > 0;
     if (hasBundleDocumentsPayload) {
-      setDocumentsByIndividualId(normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>));
+      setDocumentsByIndividualId(
+        normalizeDocumentsByIndividual(
+          metadata.documentsByIndividualId as Record<string, unknown>,
+          incomingGedcom.individuals,
+        ),
+      );
     }
     if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
       setInviteGedcomProgress({
@@ -1191,7 +1241,12 @@ function App() {
         applied: true,
       });
       const docsStats = hasBundleDocumentsPayload
-        ? computeMediaStats(normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>))
+        ? computeMediaStats(
+            normalizeDocumentsByIndividual(
+              metadata.documentsByIndividualId as Record<string, unknown>,
+              incomingGedcom.individuals,
+            ),
+          )
         : { documentItems: 0, photoItems: 0 };
       setInviteMediaProgress({
         receivedBatches: 1,
@@ -2327,7 +2382,9 @@ function App() {
                   showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1500);
                 }
                 if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
-                  const fallbackStats = computeMediaStats(normalizeDocumentsByIndividual(payload.documentsByIndividualId));
+                  const fallbackStats = computeMediaStats(
+                    normalizeDocumentsByIndividual(payload.documentsByIndividualId, gedcomDataRef.current?.individuals),
+                  );
                   const docsInPayload = payload.documentItemsInPayload ?? fallbackStats.documentItems;
                   const photosInPayload = payload.photoItemsInPayload ?? fallbackStats.photoItems;
                   const docsTotal = payload.documentItemsTotal ?? fallbackStats.documentItems;
@@ -4042,7 +4099,15 @@ function App() {
     try {
       const { gedcomContent, metadata } = await parseLifeThreadBundle(file);
       const parsedData = parseGedcom(gedcomContent);
-      const normalizedDocs = normalizeDocumentsByIndividual(metadata.documentsByIndividualId as Record<string, unknown>);
+      logGedcomImportDiagnostics(
+        'import bundle',
+        gedcomContent,
+        Object.keys(parsedData.individuals).length,
+      );
+      const normalizedDocs = normalizeDocumentsByIndividual(
+        metadata.documentsByIndividualId as Record<string, unknown>,
+        parsedData.individuals,
+      );
       handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.lifethread\.zip$/i, ''));
       setDocumentsByIndividualId(normalizedDocs);
       if (metadata.selfIdentity && typeof metadata.selfIdentity === 'object') {
@@ -4073,7 +4138,9 @@ function App() {
       setDatabaseName(snapshot.databaseName || 'My Family Tree');
       setOriginalGedcomData(snapshot.originalGedcomData);
       setNormalizedGedcomData(normalizeGedcom(snapshot.originalGedcomData));
-      setDocumentsByIndividualId(normalizeDocumentsByIndividual(snapshot.documentsByIndividualId));
+      setDocumentsByIndividualId(
+        normalizeDocumentsByIndividual(snapshot.documentsByIndividualId, snapshot.originalGedcomData.individuals),
+      );
       if (snapshot.selfIdentity?.individualId && snapshot.selfIdentity?.deviceKeyId) {
         setSelfIdentity(snapshot.selfIdentity);
       }
@@ -5382,6 +5449,7 @@ function App() {
         programVersionLabel={buildLabel}
         onProgramCheckUpdates={handleProgramCheckUpdates}
         onProgramApplyUpdate={handleProgramApplyUpdate}
+        documentsByIndividualId={renderedDocumentsByIndividualId}
       />
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>

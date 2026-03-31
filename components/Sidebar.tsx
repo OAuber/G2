@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff, Sparkles, SlidersHorizontal, Check, Save } from 'lucide-react';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
-import { parseGedcom } from '../services/gedcomParser';
+import { logGedcomImportDiagnostics, parseGedcom } from '../services/gedcomParser';
+import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { getDemoGedcom } from '../services/demoData';
 import { useI18n } from '../i18n';
 
@@ -15,6 +16,8 @@ const SORT_OPTIONS: { value: SortMode; key: string }[] = [
   { value: 'death-asc',  key: 'sidebar.sort.deathAsc' },
   { value: 'lifespan',   key: 'sidebar.sort.lifespan' },
   { value: 'name',       key: 'sidebar.sort.name' },
+  { value: 'doc-online', key: 'sidebar.sort.docOnline' },
+  { value: 'doc-offline', key: 'sidebar.sort.docOffline' },
 ];
 
 const FILTER_OPTIONS: { value: FilterTag; key: string; color: string; requiresSelected?: boolean }[] = [
@@ -123,11 +126,40 @@ export function matchesFilters(
   return false;
 }
 
-export function applySortMode(list: Individual[], mode: SortMode): Individual[] {
+/** Document minimal pour le tri (aligné sur les pièces jointes G2). */
+export type SortDocumentRef = { source?: string; url?: string };
+
+function hasOnlineDocument(docs: SortDocumentRef[] | undefined): boolean {
+  if (!docs?.length) return false;
+  return docs.some((d) => {
+    if (d.source === 'online') return true;
+    const u = d.url?.trim() ?? '';
+    return u.startsWith('http://') || u.startsWith('https://');
+  });
+}
+
+function hasOfflineDocument(docs: SortDocumentRef[] | undefined): boolean {
+  if (!docs?.length) return false;
+  return docs.some((d) => {
+    if (d.source === 'local') return true;
+    const u = d.url?.trim() ?? '';
+    return u.startsWith('blob:') || u.startsWith('data:') || u.startsWith('file:');
+  });
+}
+
+function nameCompare(a: Individual, b: Individual): number {
+  return `${a.surname} ${a.givenName}`.localeCompare(`${b.surname} ${b.givenName}`);
+}
+
+export function applySortMode(
+  list: Individual[],
+  mode: SortMode,
+  documentsByIndividualId?: Record<string, SortDocumentRef[]>,
+): Individual[] {
   const sorted = [...list];
   switch (mode) {
     case 'name':
-      return sorted.sort((a, b) => `${a.surname} ${a.givenName}`.localeCompare(`${b.surname} ${b.givenName}`));
+      return sorted.sort((a, b) => nameCompare(a, b));
     case 'birth-asc':
       return sorted.sort((a, b) => (a.birthDate?.year ?? 9999) - (b.birthDate?.year ?? 9999));
     case 'birth-desc':
@@ -142,6 +174,24 @@ export function applySortMode(list: Individual[], mode: SortMode): Individual[] 
         const lB = (b.deathDate?.year ?? (b.birthDate?.year ?? 0) + 80) - (b.birthDate?.year ?? 0);
         return lB - lA;
       });
+    case 'doc-online': {
+      const score = (p: Individual) =>
+        hasOnlineDocument(documentsByIndividualId?.[p.id]) ? 1 : 0;
+      return sorted.sort((a, b) => {
+        const d = score(b) - score(a);
+        if (d !== 0) return d;
+        return nameCompare(a, b);
+      });
+    }
+    case 'doc-offline': {
+      const score = (p: Individual) =>
+        hasOfflineDocument(documentsByIndividualId?.[p.id]) ? 1 : 0;
+      return sorted.sort((a, b) => {
+        const d = score(b) - score(a);
+        if (d !== 0) return d;
+        return nameCompare(a, b);
+      });
+    }
     default:
       return sorted;
   }
@@ -184,6 +234,8 @@ interface SidebarProps {
   programVersionLabel: string;
   onProgramCheckUpdates: () => void;
   onProgramApplyUpdate: () => void;
+  /** Pour tri « Doc. online / offline » (fiches enrichies, pièces jointes locales). */
+  documentsByIndividualId?: Record<string, SortDocumentRef[]>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -223,6 +275,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   programVersionLabel,
   onProgramCheckUpdates,
   onProgramApplyUpdate,
+  documentsByIndividualId,
 }) => {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
@@ -290,7 +343,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         }
         const text = new TextDecoder(encoding).decode(buffer);
         const fileName = file.name.replace(/\.ged$/i, '');
-        onDataLoaded(parseGedcom(text), fileName);
+        const gedData = parseGedcom(text);
+        logGedcomImportDiagnostics('import .ged', text, Object.keys(gedData.individuals).length);
+        onDataLoaded(gedData, fileName);
       } catch (err) {
         console.error(err);
         alert(t('sidebar.labels.importReadError'));
@@ -339,7 +394,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       list = list.filter(p => matchesFilters(p, activeFilters, { selectedId, lineageSets }));
     }
 
-    const sorted = applySortMode(list, sortMode || 'birth-asc');
+    const sorted = applySortMode(list, sortMode || 'birth-asc', documentsByIndividualId);
 
     if (!searchTerm) {
         const slice = sorted.slice(0, 200);
@@ -350,8 +405,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         return slice;
     }
     
-    return sorted.filter(p => `${p.givenName} ${p.surname}`.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [data, searchTerm, sortMode, selectedId, activeFilters]);
+    return sorted.filter((p) => individualMatchesSearchQuery(p, searchTerm));
+  }, [data, searchTerm, sortMode, selectedId, activeFilters, documentsByIndividualId]);
 
   // Styles
   const bgClass = isDarkMode ? 'bg-black border-slate-800' : 'bg-slate-50 border-slate-300';

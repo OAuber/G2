@@ -111,7 +111,7 @@ export const parseDate = (dateStr: string): DateInfo => {
  * It reads line by line and builds the object graph.
  */
 export const parseGedcom = (content: string): GedcomData => {
-  const lines = content.split(/\r?\n/);
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/);
   const individuals: Record<string, Individual> = {};
   const families: Record<string, Family> = {};
 
@@ -127,20 +127,22 @@ export const parseGedcom = (content: string): GedcomData => {
     if (!trimmed) continue;
 
     // GEDCOM line format: Level [Optional XREF_ID] Tag [Line_Value]
-    const match = trimmed.match(/^(\d+)\s+(@\w+@)?\s*(\w+)\s*(.*)?$/);
+    // Tag: \S+ (pas seulement \w) — balises perso avec tirets, etc.
+    const match = trimmed.match(/^(\d+)\s+(@[^@]+@)?\s*(\S+)\s*(.*)$/);
 
     if (!match) continue;
 
     const level = parseInt(match[1], 10);
     const xrefId = match[2]; // e.g., @I1@
     const tag = match[3];
+    const tagU = tag.toUpperCase();
     const value = match[4] || '';
 
     if (level === 0) {
       // New Record - Reset Contexts
       currentEvent = null;
       
-      if (xrefId && tag === 'INDI') {
+      if (xrefId && tagU === 'INDI') {
         currentContext = 'INDI';
         currentIndi = {
           id: xrefId,
@@ -154,7 +156,7 @@ export const parseGedcom = (content: string): GedcomData => {
         };
         individuals[xrefId] = currentIndi as Individual;
         currentFam = null;
-      } else if (xrefId && tag === 'FAM') {
+      } else if (xrefId && tagU === 'FAM') {
         currentContext = 'FAM';
         currentFam = {
           id: xrefId,
@@ -172,7 +174,7 @@ export const parseGedcom = (content: string): GedcomData => {
         // Level 1 properties. Reset event context unless we are starting a new one.
         currentEvent = null;
 
-        switch (tag) {
+        switch (tagU) {
           case 'NAME':
             const decodedNameValue = decodeLegacyNameMojibake(value);
             currentIndi.name = decodedNameValue.replace(/\//g, '');
@@ -185,7 +187,7 @@ export const parseGedcom = (content: string): GedcomData => {
             break;
           case 'BIRT':
           case 'DEAT':
-            currentEvent = tag; // Set context for Level 2 tags (DATE)
+            currentEvent = tagU as 'BIRT' | 'DEAT';
             break;
           case 'FAMC': // Child of family
             currentIndi.familyChildId = value;
@@ -201,14 +203,14 @@ export const parseGedcom = (content: string): GedcomData => {
         }
       } else if (level === 2) {
         // Level 2 properties (mostly nested under events)
-        if (tag === 'DATE' && currentEvent) {
+        if (tagU === 'DATE' && currentEvent) {
           const dateInfo = parseDate(value);
           if (currentEvent === 'BIRT') currentIndi.birthDate = dateInfo;
           if (currentEvent === 'DEAT') currentIndi.deathDate = dateInfo;
-        } else if (tag === 'PLAC' && currentEvent) {
+        } else if (tagU === 'PLAC' && currentEvent) {
           if (currentEvent === 'BIRT') currentIndi.birthPlace = value.trim();
           if (currentEvent === 'DEAT') currentIndi.deathPlace = value.trim();
-        } else if (tag === 'NOTE') {
+        } else if (tagU === 'NOTE') {
           currentIndi.notes = currentIndi.notes
             ? `${currentIndi.notes}\n${value}`.trim()
             : value.trim();
@@ -220,7 +222,7 @@ export const parseGedcom = (content: string): GedcomData => {
         // Reset event context at level 1 change
         currentEvent = null; 
         
-        switch (tag) {
+        switch (tagU) {
           case 'HUSB':
             currentFam.husbandId = value;
             break;
@@ -235,7 +237,7 @@ export const parseGedcom = (content: string): GedcomData => {
             break;
         }
       } else if (level === 2) {
-         if (tag === 'DATE' && currentEvent === 'MARR') {
+         if (tagU === 'DATE' && currentEvent === 'MARR') {
             currentFam.marriageDate = parseDate(value);
          }
       }
@@ -284,6 +286,65 @@ export const parseGedcom = (content: string): GedcomData => {
 
   return { individuals, families };
 };
+
+/**
+ * Statistiques sur les en-têtes `0 @xref@ INDI` (comptage brut, xrefs uniques, doublons).
+ * Utile pour diagnostiquer un écart entre le nombre de lignes INDI et le nombre de fiches chargées :
+ * chaque @xref@ ne peut exister qu'une fois — les doublons sont écrasés lors du parse.
+ */
+export function analyzeGedcomIndiHeaders(gedcom: string): {
+  headerLineCount: number;
+  uniqueIndiIds: number;
+  duplicateHeaderLines: number;
+  duplicateIdsSample: string[];
+} {
+  const text = gedcom.replace(/^\uFEFF/, '');
+  const indiHeaderRe = new RegExp('^0\\s+(@[^@]+@)\\s+INDI\\s*$', 'gim');
+  const matches = [...text.matchAll(indiHeaderRe)];
+  const ids = matches.map((m) => m[1]);
+  const freq = new Map<string, number>();
+  for (const id of ids) {
+    freq.set(id, (freq.get(id) || 0) + 1);
+  }
+  const duplicateIdsSample = [...freq.entries()]
+    .filter(([, n]) => n > 1)
+    .map(([id]) => id)
+    .slice(0, 40);
+  return {
+    headerLineCount: ids.length,
+    uniqueIndiIds: freq.size,
+    duplicateHeaderLines: ids.length - freq.size,
+    duplicateIdsSample,
+  };
+}
+
+/** En dev (Vite), journalise l’écart lignes INDI / xrefs uniques / fiches parsées. */
+export function logGedcomImportDiagnostics(
+  sourceLabel: string,
+  gedcom: string,
+  parsedIndividualCount: number,
+): void {
+  if (!import.meta.env.DEV || !gedcom) return;
+  const stats = analyzeGedcomIndiHeaders(gedcom);
+  console.info(`[G2][${sourceLabel}]`, {
+    lignesEntete0Indi: stats.headerLineCount,
+    xrefsIndiUniques: stats.uniqueIndiIds,
+    lignesPerduesParXrefDuplique: stats.duplicateHeaderLines,
+    fichesApresParse: parsedIndividualCount,
+    echantillonXrefsEnDoublon: stats.duplicateIdsSample,
+  });
+  if (stats.duplicateHeaderLines > 0) {
+    console.warn(
+      '[G2] Ce GEDCOM contient plusieurs blocs INDI avec le même @xref@. Une seule fiche est conservée par identifiant (la dernière dans le fichier). C’est souvent la cause d’un total inférieur au nombre de lignes « 0 … INDI ».',
+    );
+  }
+  if (parsedIndividualCount !== stats.uniqueIndiIds) {
+    console.warn('[G2] Écart entre fiches parsées et xrefs INDI uniques.', {
+      fiches: parsedIndividualCount,
+      xrefsUniques: stats.uniqueIndiIds,
+    });
+  }
+}
 
 /**
  * Reconstructs a GEDCOM string from the internal data model.

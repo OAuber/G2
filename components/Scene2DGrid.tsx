@@ -110,6 +110,11 @@ function isImageLikeUrl(url: string): boolean {
   if (!url) return false;
   if (url.startsWith('data:image/')) return true;
   if (url.startsWith('blob:')) return true;
+  const u = url.trim();
+  if (u.startsWith('http://') || u.startsWith('https://')) {
+    if (/upload\.wikimedia\.org/i.test(u)) return true;
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u)) return true;
+  }
   return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
 }
 
@@ -643,14 +648,18 @@ const GridContent: React.FC<GridContentProps> = ({
         continue;
       }
       const docs = documentsByIndividualId?.[id] ?? [];
-      const firstImage = docs.find((d) => !!d.url && isImageLikeUrl(d.url));
+      const firstImage = docs.find(
+        (d) => !!d.url && (d.kind === 'photo' || isImageLikeUrl(d.url)),
+      );
       if (firstImage?.url) map[id] = firstImage.url;
     }
     return map;
   }, [ribbonData, primaryPhotoUrlById, documentsByIndividualId]);
   const selectedImageDocs = useMemo(() => {
     if (!selectedId) return [] as RibbonDocument[];
-    const docs = (documentsByIndividualId?.[selectedId] ?? []).filter((d) => !!d.url && isImageLikeUrl(d.url));
+    const docs = (documentsByIndividualId?.[selectedId] ?? []).filter(
+      (d) => !!d.url && (d.kind === 'photo' || isImageLikeUrl(d.url)),
+    );
     return docs
       .map((doc, originalIndex) => ({ doc, originalIndex, time: doc.date ? Date.parse(doc.date) : Number.NaN }))
       .sort((a, b) => {
@@ -2184,8 +2193,8 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
     if (activeFilters && activeFilters.size > 0) {
       list = list.filter(i => matchesFilters(i, activeFilters, { selectedId, lineageSets }));
     }
-    return applySortMode(list, sortMode);
-  }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId]);
+    return applySortMode(list, sortMode, documentsByIndividualId);
+  }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId, documentsByIndividualId]);
 
   if (!data) return null;
 

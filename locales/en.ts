@@ -172,6 +172,8 @@ const en = {
       deathAsc: 'Death ↑',
       lifespan: 'Lifespan ↓',
       name: 'Name A→Z',
+      docOnline: 'Doc. online first',
+      docOffline: 'Doc. offline first',
       title: 'Sort',
       menu: 'Sort & Filters',
       fallback: 'Birth ↓',

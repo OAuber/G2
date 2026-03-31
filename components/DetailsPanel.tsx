@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { User, Plus, Trash2, Edit, Link2, X } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
+import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { useI18n } from '../i18n';
 
 export interface NewPersonData {
@@ -193,9 +194,7 @@ const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
     if (!q) return options.slice(0, MAX_RESULTS);
-    return options.filter(p =>
-      `${p.givenName} ${p.surname}`.toLowerCase().includes(q),
-    ).slice(0, MAX_RESULTS);
+    return options.filter((p) => individualMatchesSearchQuery(p, query)).slice(0, MAX_RESULTS);
   }, [options, query]);
 
   const handleFocus = useCallback(() => { setOpen(true); setQuery(''); }, []);

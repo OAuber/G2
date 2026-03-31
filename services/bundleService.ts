@@ -21,7 +21,10 @@ interface LifeThreadBundlePayload {
 function isBundlePayload(value: unknown): value is LifeThreadBundlePayload {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
-  return v.lifethreadBundle === true && typeof v.gedcomContent === 'string' && typeof v.metadata === 'object';
+  if (v.lifethreadBundle !== true || typeof v.gedcomContent !== 'string') return false;
+  // metadata peut être absent (certaines écritures JSON) ; null compte comme object en JS
+  if (v.metadata === undefined) return true;
+  return typeof v.metadata === 'object';
 }
 
 export async function createLifeThreadBundle(
@@ -44,7 +47,20 @@ export async function parseLifeThreadBundle(
   try {
     const parsed = JSON.parse(text) as unknown;
     if (isBundlePayload(parsed)) {
-      return { gedcomContent: parsed.gedcomContent, metadata: parsed.metadata || {} };
+      const p = parsed as LifeThreadBundlePayload;
+      const meta = p.metadata;
+      const metadata: LifeThreadBundleMetadata =
+        meta && typeof meta === 'object' ? meta : {};
+      return { gedcomContent: p.gedcomContent, metadata };
+    }
+    if (parsed && typeof parsed === 'object' && 'gedcomContent' in parsed) {
+      const p = parsed as Record<string, unknown>;
+      if (typeof p.gedcomContent === 'string') {
+        const meta = p.metadata;
+        const metadata: LifeThreadBundleMetadata =
+          meta && typeof meta === 'object' ? (meta as LifeThreadBundleMetadata) : {};
+        return { gedcomContent: p.gedcomContent, metadata };
+      }
     }
     return { gedcomContent: '', metadata: normalizeMetadata(parsed) };
   } catch {

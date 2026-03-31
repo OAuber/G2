@@ -1,10 +1,10 @@
 <div align="center">
 
-<h1>
-  🧬 <strong>Ğ<sup><span style="color:#9CA3AF;">2</span></sup></strong> — Free Peer-to-Peer Genealogy
-</h1>
+# G2
 
-### Create, edit, and visualize genealogical trees in 2D and 3D
+### Free peer-to-peer genealogy
+
+Create, edit, and visualize genealogical trees in 2D and 3D.
 
 *Distributed genealogy, owned by genealogists.*
 
@@ -12,8 +12,8 @@
 [![React](https://img.shields.io/badge/React_18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Three.js](https://img.shields.io/badge/Three.js-000000?logo=three.js&logoColor=white)](https://threejs.org/)
 [![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
-[![PWA](https://img.shields.io/badge/PWA-5A0FC8?logo=pwa&logoColor=white)](#)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#licence)
+[![PWA](https://img.shields.io/badge/PWA-5A0FC8?logo=pwa&logoColor=white)](#installable-app-pwa)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## Vision
 
-**Ğ2** (pronounced Gdeux, Getou, or Djeetoo) is a genealogy app designed for serious research and collaborative investigation. It enables genealogists to:
+**G2** is a genealogy application designed for serious research and collaborative investigation. It enables genealogists to:
 
 - create and edit individuals and family links;
 - visualize trees in **2D** and **3D**;
@@ -77,7 +77,7 @@ The project reuses key lessons analyzed in [docs/p2p/DUNITER_PRINCIPLES_ANALYSIS
 - role of explicit rules (validity, quotas, review, anti-spam);
 - robustness of a living social graph rather than a single central truth.
 
-Long-term hypothesis: if the Ğ2 Web of Trust becomes robust and viral enough, it could eventually support the creation of a Ğ2 free currency. This is a strategic trajectory, not a current feature.
+Long-term hypothesis: if the **G2** Web of Trust becomes robust and viral enough, it could eventually support a free currency within the **G2** ecosystem. This is a strategic trajectory, not a current feature.
 
 ---
 
@@ -91,7 +91,7 @@ Long-term hypothesis: if the Ğ2 Web of Trust becomes robust and viral enough, i
 
 ## Project Origins
 
-The G2 concept continues the **Arbre** project initiated by Olivier Auber in the 2000s.
+**G2** continues the **Arbre** project initiated by Olivier Auber in the 2000s.
 
 - Arbre project history: [PetiteHistoire](http://arbre.km2.net/wakka.php?wiki=PetiteHistoire)
 - The historical wiki is currently unavailable, but the conceptual lineage remains central.
@@ -109,7 +109,9 @@ The software is free/open source, and its concept is framed as a free artwork.
 | **Vite** | Build and development server |
 | **Tailwind CSS** | Utility-first styling |
 | **PeerJS** (WebRTC) | Peer-to-peer communication |
-| **Vite Plugin PWA** | Installability and offline mode |
+| **Vite Plugin PWA** + **Workbox** | Web App Manifest, service worker, installability, offline caching of built assets |
+
+Configuration for the PWA (manifest, precache patterns, standalone display) lives in `vite.config.ts`.
 
 ---
 
@@ -130,6 +132,12 @@ App available at `http://localhost:5173`.
 npm run build
 npm run preview
 ```
+
+---
+
+## Installable app (PWA)
+
+Production output is a **Progressive Web App**: you can install **G2** from a supporting browser (desktop or mobile) so it opens in its own window, like a native app. A **service worker** (generated via Vite Plugin PWA and **Workbox**) precaches the built shell (HTML, JS, CSS, icons, and other static assets), so the interface remains usable **offline** for those cached resources after the first load. Live P2P features still depend on network conditions and signaling.
 
 ---
 

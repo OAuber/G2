@@ -12,7 +12,15 @@ export type ViewMode = '3D' | '2D';
 export type CameraMode = 'top' | 'individual' | 'free';
 export type DisplayMode = '2d-individual' | '3d-individual' | '2d-grid' | '3d-top' | '3d-free';
 export type IndividualSource = 'imported' | 'manual' | 'p2p';
-export type SortMode = 'name' | 'birth-asc' | 'birth-desc' | 'death-asc' | 'death-desc' | 'lifespan';
+export type SortMode =
+  | 'name'
+  | 'birth-asc'
+  | 'birth-desc'
+  | 'death-asc'
+  | 'death-desc'
+  | 'lifespan'
+  | 'doc-online'
+  | 'doc-offline';
 export type FilterTag =
   | 'manual'
   | 'male'

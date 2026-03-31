@@ -172,6 +172,8 @@ const fr = {
       deathAsc: 'Décès ↑',
       lifespan: 'Durée de vie ↓',
       name: 'Nom A→Z',
+      docOnline: 'Doc. en ligne d’abord',
+      docOffline: 'Doc. hors ligne d’abord',
       title: 'Tri',
       menu: 'Tri & Filtres',
       fallback: 'Naissance ↓',
