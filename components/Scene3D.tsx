@@ -38,6 +38,18 @@ function topViewOrthoZoom(sceneSize: number): number {
     return Math.max(0.1, minDim / (sceneSize * TOP_VIEW_PADDING));
 }
 
+/** Zoom ortho pour cadrer un ruban seul (vue de dessus), en unités monde ~comme le layout 3D. */
+function topViewOrthoZoomForExtent(extentWorld: number): number {
+    const minDim = Math.min(window.innerWidth, window.innerHeight);
+    return Math.max(0.12, minDim / (extentWorld * TOP_VIEW_PADDING));
+}
+
+/** Durée totale : courte mise en place sur le ruban, puis dézoom accéléré vers l’arbre. */
+const RIBBON_TOP_INTRO_DURATION_SEC = 4.25;
+/** Fraction du temps où le zoom reste sur le ruban (cadrage type vue 2D, horizontal). */
+const RIBBON_TOP_INTRO_HOLD_FRAC = 0.14;
+const easeInCubic = (t: number) => t * t * t;
+
 // Perspective distance that matches the ortho zoom for the top view
 function topViewPerspDistance(sceneSize: number): number {
     const zoom = topViewOrthoZoom(sceneSize);
@@ -103,6 +115,9 @@ const CameraController: React.FC<{
   manualFocusKind: 'child' | 'mother' | null;
   manualFocusNonce: number;
   onFlyComplete: () => void;
+  /** Intro 2D individuel → 3D top : dézoom orthographique ruban → arbre complet. */
+  ribbonTopIntro: { start: number; end: number } | null;
+  onRibbonTopIntroComplete: () => void;
 }> = ({
   cameraMode,
   flyTarget,
@@ -118,6 +133,8 @@ const CameraController: React.FC<{
   manualFocusKind,
   manualFocusNonce,
   onFlyComplete,
+  ribbonTopIntro,
+  onRibbonTopIntroComplete,
 }) => {
   const lastTarget = useRef(new Vector3());
   const lastSelectedIdRef = useRef<string | null | undefined>(selectedId);
@@ -165,6 +182,20 @@ const CameraController: React.FC<{
   const TOP_FOCUS_CONNECTOR_REF_RATIO = 0.45; // reach strong pulse sooner on long connectors
   const TOP_PHASE_DEZOOM_END = 0.22; // phase 1: dezoom
   const TOP_PHASE_REZOOM_START = 0.78; // phase 3: rezoom
+
+  const ribbonIntroProgress = useRef(0);
+  const ribbonIntroPlan = useRef<{ start: number; end: number } | null>(null);
+  const ribbonIntroDone = useRef(false);
+
+  useEffect(() => {
+    if (ribbonTopIntro) {
+      ribbonIntroPlan.current = ribbonTopIntro;
+      ribbonIntroProgress.current = 0;
+      ribbonIntroDone.current = false;
+    } else {
+      ribbonIntroPlan.current = null;
+    }
+  }, [ribbonTopIntro]);
 
   const lookAtForMode = (mode: CameraMode) => {
     if (manualFocusTarget) return manualFocusTarget;
@@ -233,6 +264,38 @@ const CameraController: React.FC<{
         holdLookAt.current = animEndLookAt.current.clone();
         holdUp.current = upForMode(flyTarget).clone();
         onFlyComplete();
+      }
+      return;
+    }
+
+    // --- 2D individuel → 3D top : ortho zoom ruban (proche 2D) puis dézoom accéléré vers l'arbre ---
+    if (
+      ribbonIntroPlan.current
+      && cameraMode === 'top'
+      && (state.camera as any).isOrthographicCamera
+    ) {
+      const plan = ribbonIntroPlan.current;
+      const orthoCam = state.camera as any;
+      ribbonIntroProgress.current = Math.min(
+        1,
+        ribbonIntroProgress.current + delta / RIBBON_TOP_INTRO_DURATION_SEC,
+      );
+      const raw = ribbonIntroProgress.current;
+      let zoomBlend: number;
+      if (raw <= RIBBON_TOP_INTRO_HOLD_FRAC) {
+        zoomBlend = 0;
+      } else {
+        const u = (raw - RIBBON_TOP_INTRO_HOLD_FRAC) / Math.max(1e-6, 1 - RIBBON_TOP_INTRO_HOLD_FRAC);
+        zoomBlend = easeInCubic(Math.min(1, u));
+      }
+      orthoCam.zoom = plan.start + (plan.end - plan.start) * zoomBlend;
+      orthoCam.updateProjectionMatrix();
+      ctrl.target.copy(centerTarget);
+      ctrl.update();
+      if (ribbonIntroProgress.current >= 1 && !ribbonIntroDone.current) {
+        ribbonIntroDone.current = true;
+        ribbonIntroPlan.current = null;
+        onRibbonTopIntroComplete();
       }
       return;
     }
@@ -694,6 +757,9 @@ interface Scene3DProps {
   topViewLabelMaxZSpan?: number;
   labelFontSize?: number;
   onWebGLContextLost?: () => void;
+  /** Bascule depuis la vue 2D individuelle : lance l'intro zoom ruban → arbre en vue top. */
+  topViewEntryFrom2D?: { orthoZoom2d?: number } | null;
+  onTopViewEntryFrom2DComplete?: () => void;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -723,6 +789,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
   topViewLabelMaxZSpan = 500,
   labelFontSize = 3,
   onWebGLContextLost,
+  topViewEntryFrom2D = null,
+  onTopViewEntryFrom2DComplete,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const contextLostNotifiedRef = useRef(false);
@@ -1007,6 +1075,47 @@ const Scene3D: React.FC<Scene3DProps> = ({
     return map;
   }, [allLayoutNodes]);
 
+  const ribbonTopIntro = useMemo(() => {
+    if (!topViewEntryFrom2D || !selectedId || !allLayoutNodes.length) return null;
+    const endZ = topViewOrthoZoom(sceneSize);
+    const node = allLayoutNodes.find((n) => n.id === selectedId);
+    if (!node) return null;
+    const p = new Vector3();
+    const q = new Quaternion();
+    const s = new Vector3();
+    node.matrix.decompose(p, q, s);
+    const diagonal = Math.sqrt(s.y * s.y + s.z * s.z);
+    // Ruban en vue de dessus : s.x ≈ épaisseur, diagonal le long du parcours de vie (horizontal en top).
+    const extent = Math.max(s.x * 4.35, diagonal * 1.15, 44);
+    let startZ = topViewOrthoZoomForExtent(extent);
+    const hint = topViewEntryFrom2D.orthoZoom2d;
+    // Vue branche (boutons ruban) : sceneSize est celui de la branche seule — on évite un start trop extrême vs endZ.
+    const isBranchOnly = autoLayoutMode === 'ancestors' || autoLayoutMode === 'descendants';
+    if (hint != null && hint > 1) {
+      const ref2d = 520;
+      let ratio = Math.min(2.75, Math.max(1.03, hint / ref2d));
+      if (isBranchOnly) {
+        ratio = 1 + (ratio - 1) * 0.5;
+      }
+      startZ *= ratio;
+    }
+    const maxStartOverEnd = isBranchOnly ? 6 : 14;
+    startZ = Math.min(startZ, endZ * maxStartOverEnd);
+    if (startZ <= endZ * 1.12) {
+      startZ = endZ * (isBranchOnly ? 1.4 : 1.65);
+    }
+    return { start: startZ, end: endZ };
+  }, [topViewEntryFrom2D, selectedId, allLayoutNodes, sceneSize, autoLayoutMode]);
+
+  useEffect(() => {
+    if (!topViewEntryFrom2D || !onTopViewEntryFrom2DComplete) return;
+    if (!selectedId || !allLayoutNodes.length) return;
+    const node = allLayoutNodes.find((n) => n.id === selectedId);
+    if (!node) {
+      onTopViewEntryFrom2DComplete();
+    }
+  }, [topViewEntryFrom2D, selectedId, allLayoutNodes, onTopViewEntryFrom2DComplete]);
+
   useEffect(() => {
     // Any explicit selection change restores normal camera target behavior.
     setManualFocusTarget(null);
@@ -1019,9 +1128,22 @@ const Scene3D: React.FC<Scene3DProps> = ({
   centerTargetRef.current = centerTarget;
   sceneSizeRef.current = sceneSize;
 
-  // Ortho camera only for settled TOP mode (not during animation)
+  const ribbonIntroForSetupRef = useRef<{ start: number; end: number } | null>(null);
+  ribbonIntroForSetupRef.current = ribbonTopIntro;
+
+  const topViewEntryFrom2DRef = useRef(topViewEntryFrom2D);
+  topViewEntryFrom2DRef.current = topViewEntryFrom2D;
+
+  const handleRibbonTopIntroComplete = useCallback(() => {
+    onTopViewEntryFrom2DComplete?.();
+  }, [onTopViewEntryFrom2DComplete]);
+
+  // Ortho camera only for settled TOP mode (not during animation caméra 3D classique)
   const isOrtho = cameraMode === 'top' && flyTarget === null;
-  const isAnimating = flyTarget !== null;
+  // Désactiver les contrôles pendant toute l’intro 2D→3D top (pas seulement quand le plan est résolu).
+  const isAnimating =
+    flyTarget !== null ||
+    (cameraMode === 'top' && topViewEntryFrom2D !== null);
 
   // Determine selected individual gender for close-up Z offset.
   const selectedGender: Gender | null = useMemo(() => {
@@ -1039,9 +1161,21 @@ const Scene3D: React.FC<Scene3DProps> = ({
     cam.lookAt(ct);
     cam.near = -far;
     cam.far = far;
-    cam.zoom = topViewOrthoZoom(sz);
+    const intro = ribbonIntroForSetupRef.current;
+    const pending2d = topViewEntryFrom2DRef.current;
+    const endZ = topViewOrthoZoom(sz);
+    let zoom: number;
+    if (intro) {
+      zoom = intro.start;
+    } else if (pending2d) {
+      // Évite une frame « arbre entier » avant que le layout instancié ne fournisse le plan d’intro.
+      zoom = Math.max(endZ * 1.9, topViewOrthoZoomForExtent(48));
+    } else {
+      zoom = endZ;
+    }
+    cam.zoom = zoom;
     cam.updateProjectionMatrix();
-  }, [cameraMode]);
+  }, [cameraMode, ribbonTopIntro, topViewEntryFrom2D]);
 
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;
@@ -1149,6 +1283,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
             manualFocusKind={manualFocusKind}
             manualFocusNonce={manualFocusNonce}
             onFlyComplete={onFlyComplete}
+            ribbonTopIntro={ribbonTopIntro}
+            onRibbonTopIntroComplete={handleRibbonTopIntroComplete}
         />
 
         <ambientLight intensity={isDarkMode ? 0.5 : 0.8} />

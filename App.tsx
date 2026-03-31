@@ -12,7 +12,7 @@ import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } fr
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
 import { ActivityLogEvent } from './services/p2pDomain';
-import { createLifeThreadBundle, parseLifeThreadBundle } from './services/bundleService';
+import { createG2Bundle, parseG2Bundle } from './services/bundleService';
 import {
   buildEncryptedIdentityBackup,
   decryptIdentityBackupPrivateKey,
@@ -276,7 +276,7 @@ function App() {
       : {};
     const gedcomText = generateGedcom(gedcom);
     const normalizedGedcomText = generateGedcom(normalizeGedcom(gedcom));
-    const bundleBlob = await createLifeThreadBundle(gedcomText, {
+    const bundleBlob = await createG2Bundle(gedcomText, {
       version: '1.0',
       databaseName: databaseNameRef.current,
       exportedAt: new Date().toISOString(),
@@ -680,6 +680,9 @@ function App() {
   const [twoDOrthoHandoff, setTwoDOrthoHandoff] = useState<
     { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null
   >(null);
+  /** Dernier zoom ortho connu en vue 2D individuelle (handoff vers intro 3D top). */
+  const last2DOrthoZoomRef = useRef<number | null>(null);
+  const [topViewEntryFrom2D, setTopViewEntryFrom2D] = useState<{ orthoZoom2d?: number } | null>(null);
 
   const viewMode: ViewMode = displayMode.startsWith('3d') ? '3D' : '2D';
   const cameraMode: CameraMode = displayMode === '3d-individual' ? 'individual'
@@ -898,10 +901,16 @@ function App() {
   const inviteMediaRecoveryAttemptRef = useRef(0);
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
   // Libère le verrou anti double-tap dès que le mode ou l'animation change
-  useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget]);
+  useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget, topViewEntryFrom2D]);
 
   // Sécurité : si l'animation de vol 3D ne se termine pas (app backgroundée, contexte perdu…)
   // forcer flyTarget à null après 6s pour éviter que les boutons restent disabled indéfiniment
+  useEffect(() => {
+    if (topViewEntryFrom2D === null) return;
+    const id = window.setTimeout(() => setTopViewEntryFrom2D(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [topViewEntryFrom2D]);
+
   useEffect(() => {
     if (flyTarget === null) return;
     const id = window.setTimeout(() => setFlyTarget(null), 6000);
@@ -1218,10 +1227,10 @@ function App() {
   };
 
   const applyIncomingBundleSnapshot = async (bundleContent: string) => {
-    const file = new File([bundleContent], 'p2p-bundle.lifethread.zip', {
+    const file = new File([bundleContent], 'p2p-bundle.g2.zip', {
       type: 'application/json;charset=utf-8',
     });
-    const { gedcomContent, metadata } = await parseLifeThreadBundle(file);
+    const { gedcomContent, metadata } = await parseG2Bundle(file);
     if (!gedcomContent) return;
     const incomingGedcom = parseGedcom(gedcomContent);
     if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
@@ -3434,10 +3443,21 @@ function App() {
       }
   };
 
+  const handleTopViewEntryFrom2DComplete = useCallback(() => {
+      setTopViewEntryFrom2D(null);
+  }, []);
+
+  const handle2DOrthoZoomSample = useCallback((z: number) => {
+      last2DOrthoZoomRef.current = z;
+  }, []);
+
   const handleSetDisplayMode = (target: DisplayMode) => {
-      if (flyTarget !== null || isSwitchingModeRef.current) return;
+      if (flyTarget !== null || topViewEntryFrom2D !== null || isSwitchingModeRef.current) return;
       // Si le mode cible est déjà actif, ne pas toucher au ref (évite un verrou permanent)
       if (target === displayMode) return;
+      if (target !== '3d-top') {
+          setTopViewEntryFrom2D(null);
+      }
       if (!target.startsWith('2d')) {
         setTwoDOrthoHandoff(null);
       }
@@ -3460,7 +3480,15 @@ function App() {
           setSceneExtras([]);
           setShowBoxes(false);
           setDisplayMode(target);
-          setFlyTarget(targetCam);
+          if (target === '3d-top') {
+              setTopViewEntryFrom2D({
+                  orthoZoom2d: last2DOrthoZoomRef.current ?? undefined,
+              });
+              setFlyTarget(null);
+          } else {
+              setTopViewEntryFrom2D(null);
+              setFlyTarget(targetCam);
+          }
           return;
       }
 
@@ -4117,14 +4145,14 @@ function App() {
     try {
       const gedcomString = generateGedcom(gedcomData);
       const safeName = databaseName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-      const bundleBlob = await createLifeThreadBundle(gedcomString, {
+      const bundleBlob = await createG2Bundle(gedcomString, {
         version: '1.0',
         databaseName,
         exportedAt: new Date().toISOString(),
         documentsByIndividualId,
         selfIdentity,
       });
-      triggerDownloadBlob(bundleBlob, `${safeName}_${new Date().toISOString().slice(0, 10)}.lifethread.zip`);
+      triggerDownloadBlob(bundleBlob, `${safeName}_${new Date().toISOString().slice(0, 10)}.g2.zip`);
       logP2PActivity('tree.bundle.download', 'session', peerId || 'local');
       setBundleToast({ kind: 'success', message: t('app.toasts.archiveExported') });
       if (bundleToastTimeoutRef.current !== null) window.clearTimeout(bundleToastTimeoutRef.current);
@@ -4139,7 +4167,7 @@ function App() {
 
   const handleImportBundle = async (file: File) => {
     try {
-      const { gedcomContent, metadata } = await parseLifeThreadBundle(file);
+      const { gedcomContent, metadata } = await parseG2Bundle(file);
       const parsedData = parseGedcom(gedcomContent);
       logGedcomImportDiagnostics(
         'import bundle',
@@ -4150,7 +4178,7 @@ function App() {
         metadata.documentsByIndividualId as Record<string, unknown>,
         parsedData.individuals,
       );
-      handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.lifethread\.zip$/i, ''));
+      handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.g2\.zip$/i, '').replace(/\.lifethread\.zip$/i, ''));
       setDocumentsByIndividualId(normalizedDocs);
       if (metadata.selfIdentity && typeof metadata.selfIdentity === 'object') {
         const maybeIdentity = metadata.selfIdentity as SelfIdentityPublic;
@@ -5523,6 +5551,8 @@ function App() {
             cameraMode={cameraMode}
             flyTarget={flyTarget}
             onFlyComplete={handleFlyComplete}
+            topViewEntryFrom2D={topViewEntryFrom2D}
+            onTopViewEntryFrom2DComplete={handleTopViewEntryFrom2DComplete}
             disableControls={isHoveringUI || !!activeInfoPage || isHelpOpen}
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
@@ -5547,6 +5577,7 @@ function App() {
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
             onRequest2DModeSwitch={handle2DViewModeSwitch}
+            onOrthoZoomSample={handle2DOrthoZoomSample}
             orthoZoomHandoff={twoDOrthoHandoff}
             onOrthoZoomHandoffConsumed={clearTwoDOrthoHandoff}
             isDarkMode={isDarkMode}
@@ -5568,6 +5599,7 @@ function App() {
             onIndividualClick={handleInspectIndividual}
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
             onRequest2DModeSwitch={handle2DViewModeSwitch}
+            onOrthoZoomSample={handle2DOrthoZoomSample}
             orthoZoomHandoff={twoDOrthoHandoff}
             onOrthoZoomHandoffConsumed={clearTwoDOrthoHandoff}
             isDarkMode={isDarkMode}
@@ -5866,7 +5898,7 @@ function App() {
         onSetAutoLayoutMode={setAutoLayoutMode}
         layoutParams={layoutParams}
         onSetLayoutParams={setLayoutParams}
-        isAnimating={flyTarget !== null}
+        isAnimating={flyTarget !== null || topViewEntryFrom2D !== null}
       />
 
       {bundleToast && (

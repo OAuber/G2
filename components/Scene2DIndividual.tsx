@@ -26,6 +26,8 @@ interface Scene2DIndividualProps {
   onRequest2DModeSwitch?: (mode: '2d-grid' | '2d-individual', opts?: { orthoZoom?: number }) => void;
   orthoZoomHandoff?: { role: 'enteringIndividual' | 'enteringGrid'; zoom: number } | null;
   onOrthoZoomHandoffConsumed?: () => void;
+  /** Échantillon du zoom ortho (vue individuelle) pour caler l’intro 3D top. */
+  onOrthoZoomSample?: (zoom: number) => void;
   onWebGLContextLost?: () => void;
 }
 

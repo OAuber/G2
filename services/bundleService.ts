@@ -1,6 +1,6 @@
 import { SelfIdentityPublic } from '../types';
 
-/** Champs persistés pour chaque média dans l’archive .lifethread (export, import, bundle P2P). */
+/** Champs persistés pour chaque média dans l’archive G2 `.g2.zip` (export, import, bundle P2P). */
 export type BundleIndividualDocument = {
   id: string;
   title: string;
@@ -60,11 +60,11 @@ export function serializeDocumentsByIndividualIdForBundle(
   return out;
 }
 
-export interface LifeThreadBundleMetadata {
+export interface G2BundleMetadata {
   version?: string;
   databaseName?: string;
   exportedAt?: string;
-  /** Tableaux de {@link BundleIndividualDocument} après sérialisation dans {@link createLifeThreadBundle}. */
+  /** Tableaux de {@link BundleIndividualDocument} après sérialisation dans {@link createG2Bundle}. */
   documentsByIndividualId?: Record<string, unknown>;
   includesDocuments?: boolean;
   normalizedGedcomContent?: string;
@@ -73,33 +73,31 @@ export interface LifeThreadBundleMetadata {
   [key: string]: unknown;
 }
 
-interface LifeThreadBundlePayload {
-  lifethreadBundle: true;
+interface G2BundlePayload {
+  g2Bundle: true;
   gedcomContent: string;
-  metadata: LifeThreadBundleMetadata;
+  metadata: G2BundleMetadata;
 }
 
-function isBundlePayload(value: unknown): value is LifeThreadBundlePayload {
+function isG2BundlePayload(value: unknown): value is G2BundlePayload {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
-  if (v.lifethreadBundle !== true || typeof v.gedcomContent !== 'string') return false;
-  // metadata peut être absent (certaines écritures JSON) ; null compte comme object en JS
+  const legacy = v.lifethreadBundle === true;
+  const current = v.g2Bundle === true;
+  if ((!current && !legacy) || typeof v.gedcomContent !== 'string') return false;
   if (v.metadata === undefined) return true;
   return typeof v.metadata === 'object';
 }
 
-export async function createLifeThreadBundle(
-  gedcomContent: string,
-  metadata: LifeThreadBundleMetadata
-): Promise<Blob> {
-  const meta: LifeThreadBundleMetadata = { ...(metadata || {}) };
+async function createG2Bundle(gedcomContent: string, metadata: G2BundleMetadata): Promise<Blob> {
+  const meta: G2BundleMetadata = { ...(metadata || {}) };
   if (meta.documentsByIndividualId != null && typeof meta.documentsByIndividualId === 'object') {
     meta.documentsByIndividualId = serializeDocumentsByIndividualIdForBundle(
       meta.documentsByIndividualId as Record<string, unknown>
     );
   }
-  const payload: LifeThreadBundlePayload = {
-    lifethreadBundle: true,
+  const payload: G2BundlePayload = {
+    g2Bundle: true,
     gedcomContent,
     metadata: meta,
   };
@@ -107,25 +105,24 @@ export async function createLifeThreadBundle(
   return new Blob([content], { type: 'application/json;charset=utf-8' });
 }
 
-export async function parseLifeThreadBundle(
+async function parseG2Bundle(
   file: File
-): Promise<{ gedcomContent: string; metadata: LifeThreadBundleMetadata }> {
+): Promise<{ gedcomContent: string; metadata: G2BundleMetadata }> {
   const text = await file.text();
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (isBundlePayload(parsed)) {
-      const p = parsed as LifeThreadBundlePayload;
+    if (isG2BundlePayload(parsed)) {
+      const p = parsed as G2BundlePayload & { lifethreadBundle?: boolean };
       const meta = p.metadata;
-      const metadata: LifeThreadBundleMetadata =
-        meta && typeof meta === 'object' ? meta : {};
+      const metadata: G2BundleMetadata = meta && typeof meta === 'object' ? meta : {};
       return { gedcomContent: p.gedcomContent, metadata };
     }
     if (parsed && typeof parsed === 'object' && 'gedcomContent' in parsed) {
       const p = parsed as Record<string, unknown>;
       if (typeof p.gedcomContent === 'string') {
         const meta = p.metadata;
-        const metadata: LifeThreadBundleMetadata =
-          meta && typeof meta === 'object' ? (meta as LifeThreadBundleMetadata) : {};
+        const metadata: G2BundleMetadata =
+          meta && typeof meta === 'object' ? (meta as G2BundleMetadata) : {};
         return { gedcomContent: p.gedcomContent, metadata };
       }
     }
@@ -135,13 +132,15 @@ export async function parseLifeThreadBundle(
   }
 }
 
-function normalizeMetadata(value: unknown): LifeThreadBundleMetadata {
+function normalizeMetadata(value: unknown): G2BundleMetadata {
   if (value && typeof value === 'object') {
     const v = value as Record<string, unknown>;
     if (v.metadata && typeof v.metadata === 'object') {
-      return v.metadata as LifeThreadBundleMetadata;
+      return v.metadata as G2BundleMetadata;
     }
-    return v as LifeThreadBundleMetadata;
+    return v as G2BundleMetadata;
   }
   return {};
 }
+
+export { createG2Bundle, parseG2Bundle };
