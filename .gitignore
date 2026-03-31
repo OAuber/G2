@@ -27,3 +27,18 @@ dist-ssr
 # Non testé - exclure du commit
 /docs/
 /TESTS_COMPACTION/
+
+# Python (ne jamais committer un venv)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Bundles / archives LifeThread et exports lourds (restent en local)
+BUNDLE/
+*.lifethread.zip
+*.rar
+
+# Scripts locaux réservés à la machine (hors GitHub) — retirer cette ligne si vous versionnez scripts/
+/scripts/
