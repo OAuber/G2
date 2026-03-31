@@ -14,6 +14,8 @@ interface InstancedTreeProps {
   onTopViewHoverStateChange?: (state: { hoveredNameId: string | null; partnerIds: string[] }) => void;
   onTopViewFadedIdsChange?: (ids: string[]) => void;
   onNodeClick?: (id: string) => void;
+  /** Clic sur le ruban (boîte / chemin) en vue individuelle ou libre → vue 2D individuelle. */
+  onRibbonOpen2D?: (id: string) => void;
   onTraitClick?: (type: string, id: string, relatedId?: string) => void;
   onChildLabelClick?: (childId: string, parentId: string) => void;
   onMotherLabelClick?: (motherId: string, childNodeId: string) => void;
@@ -60,6 +62,15 @@ const CONNECTOR_PATH_OPACITY = 0.95;
 const CONNECTOR_BASE_LINEWIDTH = 1;
 const CONNECTOR_PATH_LINEWIDTH = 3;
 
+function objectHasNameLabelFlag(obj: THREE.Object3D | null): boolean {
+  let o: THREE.Object3D | null = obj;
+  while (o) {
+    if (o.userData?.geneaverseNameLabel) return true;
+    o = o.parent;
+  }
+  return false;
+}
+
 const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({ 
   nodes, 
   data, 
@@ -67,7 +78,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   selectedId,
   onTopViewHoverStateChange,
   onTopViewFadedIdsChange,
-  onNodeClick, 
+  onNodeClick,
+  onRibbonOpen2D,
   onTraitClick,
   onChildLabelClick,
   onMotherLabelClick,
@@ -924,6 +936,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   const handleBoxClick = (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
 
+      // Si l’intersection la plus proche est le libellé nom (souvent devant le ruban), ne pas traiter comme ruban.
+      const inters = e.intersections as THREE.Intersection[];
+      if (inters?.length) {
+          const nearest = [...inters].sort((a, b) => a.distance - b.distance)[0];
+          if (nearest && objectHasNameLabelFlag(nearest.object)) return;
+      }
+
       // Quand la caméra est du côté gauche du ruban, le raycast frappe le ruban
       // avant le tiret de naissance (child dash). Si un slot de tiret est actif
       // sur ce même nœud, on route le clic vers onChildLabelClick plutôt que
@@ -961,7 +980,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
 
       if (isTopViewActive) return;
       if (e.instanceId !== undefined && nodes[e.instanceId]) {
-          onNodeClick?.(nodes[e.instanceId].id);
+          const id = nodes[e.instanceId].id;
+          if (
+              (cameraMode === 'individual' || cameraMode === 'free')
+              && onRibbonOpen2D
+          ) {
+              onRibbonOpen2D(id);
+          } else {
+              onNodeClick?.(id);
+          }
       }
   };
 
@@ -1134,7 +1161,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       return map;
   }, [data]);
   // Label Helper
-  const RenderLabel = ({ node, isHover }: { node: LayoutNode, isHover: boolean }) => {
+  const RenderLabel = ({ node }: { node: LayoutNode }) => {
       if (!data || !data.individuals[node.id]) return null;
 
       const indi = data.individuals[node.id];
@@ -1153,7 +1180,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           p.y + height * progress,
           p.z + depth * progress * zSign
       );
-      const fs = isHover ? labelFontSize * 1.0 : labelFontSize * 0.86;
+      const fs = labelFontSize * 0.86;
       const labelOffset = thickness * 0.8;
 
       // Text style based on theme
@@ -1322,6 +1349,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const hasUnionLines = isTopViewActive && spouseUnionLines.length > 1;
       const nameFacingRef = useRef<THREE.Group>(null);
       const namePosRef = useRef(new THREE.Vector3());
+      const namePullDirRef = useRef(new THREE.Vector3());
       namePosRef.current.copy(namePos);
       useFrame(() => {
           const g = nameFacingRef.current;
@@ -1331,6 +1359,17 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               return;
           }
           const np = namePosRef.current;
+          const pullDir = namePullDirRef.current;
+          pullDir.subVectors(camera.position, np);
+          const dist = pullDir.length();
+          // Tirer le nom vers la caméra pour que le raycast touche le texte avant le ruban (clic nom ≠ ruban).
+          const pull = Math.max(14, thickness * 4);
+          if (dist > 1e-5) {
+              pullDir.multiplyScalar(pull / dist);
+              g.position.copy(np).add(pullDir);
+          } else {
+              g.position.copy(np);
+          }
           const dx = camera.position.x - np.x;
           const dz = camera.position.z - np.z;
           g.rotation.set(0, Math.atan2(dx, dz), 0);
@@ -1509,9 +1548,13 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                 })}
               </>
           ) : (
-              <group position={namePos} ref={nameFacingRef}>
+              <group ref={nameFacingRef} userData={{ geneaverseNameLabel: true }}>
                   <Text
-                      ref={alwaysOnTop}
+                      ref={(r) => {
+                          alwaysOnTop(r);
+                          const o = r as unknown as THREE.Object3D | null;
+                          if (o) o.userData.geneaverseNameLabel = true;
+                      }}
                       position={[0, -labelOffset + topNameJitter, 0]}
                       rotation={[0, 0, 0]}
                       fontSize={fs}
@@ -1520,7 +1563,19 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                       outlineColor={outlineC}
                       anchorX="center"
                       anchorY="middle"
-                      renderOrder={999}
+                      renderOrder={1000}
+                      onClick={(e: ThreeEvent<MouseEvent>) => {
+                          e.stopPropagation();
+                          onNodeClick?.(node.id);
+                      }}
+                      onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+                          e.stopPropagation();
+                          document.body.style.cursor = 'pointer';
+                      }}
+                      onPointerOut={(e: ThreeEvent<PointerEvent>) => {
+                          e.stopPropagation();
+                          document.body.style.cursor = 'auto';
+                      }}
                   >
                       {fullName}
                   </Text>
@@ -1725,7 +1780,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const DIST = isTopView ? 100000 : 260;
       const MAX = isTopView ? 220 : 40;
       // Throttle: recalculate at most every LABEL_RECALC_INTERVAL_MS ms.
-      const LABEL_RECALC_INTERVAL_MS = isTopView ? 80 : 50;
+      const LABEL_RECALC_INTERVAL_MS = isTopView ? 80 : 90;
       const lastRecalcTimeRef = useRef(0);
       // Stable reusable vectors to avoid per-frame allocations.
       const tmpPRef = useRef(new THREE.Vector3());
@@ -1752,7 +1807,8 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           // Skip recalc if camera has not meaningfully moved or zoomed.
           const orthoCam = camera as any;
           const zoom = orthoCam.zoom ?? 1;
-          const camKey = `${camera.position.x.toFixed(2)},${camera.position.y.toFixed(2)},${camera.position.z.toFixed(2)},${zoom.toFixed(4)}`;
+          // Arrondi volontairement grossier pour limiter les recalculs (amortisseur / orbit) qui font clignoter les labels.
+          const camKey = `${camera.position.x.toFixed(1)},${camera.position.y.toFixed(1)},${camera.position.z.toFixed(1)},${zoom.toFixed(3)}`;
           if (camKey === lastCamKeyRef.current && lastKeyRef.current !== '__hidden__' && lastKeyRef.current !== '') return;
           lastCamKeyRef.current = camKey;
           lastRecalcTimeRef.current = now;
@@ -1779,7 +1835,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               if (dist2 > DIST * DIST) continue;
               // Reuse tmpNdc instead of allocating a clone per node.
               tmpNdc.copy(tmpP).project(camera);
-              const inView = tmpNdc.z > -1 && tmpNdc.z < 1 && tmpNdc.x > -1.2 && tmpNdc.x < 1.2 && tmpNdc.y > -1.2 && tmpNdc.y < 1.2;
+              const inView = tmpNdc.z > -1 && tmpNdc.z < 1 && tmpNdc.x > -1.35 && tmpNdc.x < 1.35 && tmpNdc.y > -1.35 && tmpNdc.y < 1.35;
               if (inView) nearby.push({ id: n.id, dist: Math.sqrt(dist2) });
           }
 
@@ -1803,7 +1859,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           const forceSpouses = !hideSpouseStandalone;
           const forced = new Set<string>([
               ...(selectedId ? [selectedId] : []),
-              ...(!isTopViewActive && hoveredNode ? [hoveredNode.id] : []),
               ...(topIsWideOverview ? [] : (forceSpouses ? selectedSpouseIds : [])),
           ]);
           for (const n of filteredNearby) forced.add(n.id);
@@ -1822,7 +1877,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
               {visibleIds.map(id => {
                   const node = nodesMap.get(id);
                   if (!node) return null;
-                  return <RenderLabel key={`lbl-${id}`} node={node} isHover={hoveredNode?.id === id} />;
+                  return <RenderLabel key={`lbl-${id}`} node={node} />;
               })}
           </>
       );

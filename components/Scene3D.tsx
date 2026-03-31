@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, events as createPointerEvents } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Image as DreiImage } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import { Vector3, Quaternion, Matrix4 as M4, MOUSE, TOUCH } from 'three';
+import { Vector3, Quaternion, Matrix4 as M4, MOUSE, TOUCH, Intersection, Object3D } from 'three';
 import { Individual, GedcomData, Gender, DragMode, RenderedPerson, CameraMode, LayoutParams } from '../types';
 import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geometryService';
 import { LayoutNode, GenealogyLayoutEngineB } from '../services/layoutEngineB';
@@ -24,6 +24,21 @@ const PHOTO_MAX_PLANES_3D = 10;
 const PHOTO_MIN_PROJECTED_PX_3D = 18;
 const PHOTO_MIN_PROJECTED_PX_TOP_3D = 8;
 const PHOTO_RECALC_MS_3D = 90;
+
+/** Priorise les clics sur les libellés nom (vue de côté) devant le ruban instancié. */
+function preferNameLabelIntersections(items: Intersection[]): Intersection[] {
+  const isNameLabel = (obj: Object3D | null) => {
+    let o: Object3D | null = obj;
+    while (o) {
+      if (o.userData?.geneaverseNameLabel) return true;
+      o = o.parent;
+    }
+    return false;
+  };
+  const nameHits = items.filter((i) => isNameLabel(i.object));
+  const rest = items.filter((i) => !isNameLabel(i.object));
+  return nameHits.length > 0 ? [...nameHits, ...rest] : items;
+}
 
 function individualViewDistance(): number {
     const aspect = window.innerWidth / window.innerHeight;
@@ -739,6 +754,8 @@ interface Scene3DProps {
   showBoxes?: boolean;
   showAxes?: boolean;
   onIndividualClick: (indi: Individual) => void;
+  /** Clic sur le ruban (pas le nom) en vue individuelle / libre : ouvrir la vue 2D individuelle. */
+  onRibbonOpen2D?: (id: string) => void;
   onBackgroundClick?: () => void;
   onVisibleIdsChange?: (ids: Set<string>) => void;
   dragMode: DragMode;
@@ -771,6 +788,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   showBoxes = true, 
   showAxes = false, 
   onIndividualClick,
+  onRibbonOpen2D,
   onBackgroundClick,
   onVisibleIdsChange,
   dragMode,
@@ -1236,6 +1254,10 @@ const Scene3D: React.FC<Scene3DProps> = ({
       className="bg-transparent"
       dpr={[1, 1.5]}
       gl={{ antialias: false, powerPreference: 'high-performance' }}
+      events={(store) => ({
+        ...createPointerEvents(store),
+        filter: (items) => preferNameLabelIntersections(items),
+      })}
       onCreated={({ gl }) => {
         const canvas = gl.domElement;
         canvas.addEventListener('webglcontextlost', (event) => {
@@ -1337,6 +1359,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
             showBoxes={showBoxes}
             selectedId={selectedId}
             onNodeClick={handleInstancedNodeClick}
+            onRibbonOpen2D={onRibbonOpen2D}
             onTraitClick={handleInstancedTraitClick}
             onChildLabelClick={handleChildLabelClick}
             onMotherLabelClick={handleMotherLabelClick}

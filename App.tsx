@@ -3452,9 +3452,16 @@ function App() {
   }, []);
 
   const handleSetDisplayMode = (target: DisplayMode) => {
-      if (flyTarget !== null || topViewEntryFrom2D !== null || isSwitchingModeRef.current) return;
+      // Passage 3D → 2D : ne pas bloquer sur flyTarget / intro top (sinon « ruban → 2D » est ignoré
+      // alors que setSelectedIndividual / root ont déjà tourné → même effet qu’un clic sur le nom).
+      const from3dTo2d = target.startsWith('2d') && displayMode.startsWith('3d');
+      if (!from3dTo2d && (flyTarget !== null || topViewEntryFrom2D !== null || isSwitchingModeRef.current)) return;
       // Si le mode cible est déjà actif, ne pas toucher au ref (évite un verrou permanent)
       if (target === displayMode) return;
+      if (from3dTo2d) {
+          if (flyTarget !== null) setFlyTarget(null);
+          if (topViewEntryFrom2D !== null) setTopViewEntryFrom2D(null);
+      }
       if (target !== '3d-top') {
           setTopViewEntryFrom2D(null);
       }
@@ -3828,6 +3835,18 @@ function App() {
     } else if (selectedIdsFor2D.has('__NONE__')) {
       setSelectedIdsFor2D(new Set([currentIndi.id]));
     }
+  };
+
+  /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
+  const handle3DRibbonOpen2DIndividual = (id: string) => {
+    if (isCreating) setIsCreating(false);
+    const currentIndi = gedcomData?.individuals[id];
+    if (!currentIndi) return;
+    setSelectedIndividual(currentIndi);
+    setRootIndividual(currentIndi);
+    setAutoLayoutMode('all');
+    setSelectedIdsFor2D((prev) => new Set(prev).add(id));
+    handleSetDisplayMode('2d-individual');
   };
 
   const handleToggle2DSelection = (id: string) => {
@@ -5545,6 +5564,7 @@ function App() {
             showBoxes={showBoxes}
             showAxes={showAxes}
             onIndividualClick={handleInspectIndividual}
+            onRibbonOpen2D={handle3DRibbonOpen2DIndividual}
             onBackgroundClick={handleBackgroundClick}
             onVisibleIdsChange={handleVisibleIdsChange}
             dragMode={dragMode}
