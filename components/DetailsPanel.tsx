@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
@@ -196,6 +196,44 @@ const imageFileToOptimizedDataUrl = async (file: File): Promise<string> => {
   } finally {
     bitmap.close();
   }
+};
+
+type NaturalCropRect = { x: number; y: number; w: number; h: number };
+
+const MIN_CROP_PX = 8;
+
+const centerCropRect = (w: number, h: number, aspect: number): NaturalCropRect => {
+  const imgAspect = w / h;
+  if (Math.abs(imgAspect - aspect) < 1e-4) {
+    return { x: 0, y: 0, w, h };
+  }
+  if (imgAspect > aspect) {
+    const sh = h;
+    const sw = h * aspect;
+    return { x: (w - sw) / 2, y: 0, w: sw, h: sh };
+  }
+  const sw = w;
+  const sh = w / aspect;
+  return { x: 0, y: (h - sh) / 2, w: sw, h: sh };
+};
+
+const clientToNatural = (clientX: number, clientY: number, img: HTMLImageElement) => {
+  const r = img.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) return { nx: 0, ny: 0 };
+  const nx = ((clientX - r.left) / r.width) * img.naturalWidth;
+  const ny = ((clientY - r.top) / r.height) * img.naturalHeight;
+  return { nx, ny };
+};
+
+const clampCropRect = (rect: NaturalCropRect, iw: number, ih: number): NaturalCropRect => {
+  let { x, y, w, h } = rect;
+  w = Math.max(MIN_CROP_PX, w);
+  h = Math.max(MIN_CROP_PX, h);
+  x = Math.max(0, Math.min(x, iw - MIN_CROP_PX));
+  y = Math.max(0, Math.min(y, ih - MIN_CROP_PX));
+  w = Math.min(w, iw - x);
+  h = Math.min(h, ih - y);
+  return { x, y, w, h };
 };
 
 interface SearchSelectProps {
@@ -415,6 +453,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [editingDocTitle, setEditingDocTitle] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
   const [editingDocAttribution, setEditingDocAttribution] = useState('');
+  const [activeCropDocId, setActiveCropDocId] = useState<string | null>(null);
+  const [cropRect, setCropRect] = useState<NaturalCropRect | null>(null);
+  const [cropMaxSide, setCropMaxSide] = useState(1600);
+  const [cropDrag, setCropDrag] = useState<{
+    pointerId: number;
+    mode: 'move' | 'nw' | 'ne' | 'sw' | 'se';
+    startNx: number;
+    startNy: number;
+    startRect: NaturalCropRect;
+  } | null>(null);
+  const cropImgRef = useRef<HTMLImageElement | null>(null);
+  const addFileInputRef = useRef<HTMLInputElement | null>(null);
+  const addCameraInputRef = useRef<HTMLInputElement | null>(null);
   const [identityCandidateId, setIdentityCandidateId] = useState('');
   const [exportPassword, setExportPassword] = useState('');
   const [importPassword, setImportPassword] = useState('');
@@ -674,6 +725,118 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const explainIdentityRequiredForEdit = useCallback(() => {
     window.alert(t('details.claimIdentityRequiredToEdit'));
   }, [t]);
+
+  const activeCropDoc = useMemo(
+    () => (activeCropDocId ? documents.find((d) => d.id === activeCropDocId) : undefined),
+    [activeCropDocId, documents]
+  );
+
+  useEffect(() => {
+    if (!activeCropDocId) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [activeCropDocId]);
+
+  useEffect(() => {
+    if (!cropDrag) return;
+    const img = cropImgRef.current;
+    if (!img) return;
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== cropDrag.pointerId) return;
+      const { nx, ny } = clientToNatural(e.clientX, e.clientY, img);
+      const { mode, startNx, startNy, startRect: sr } = cropDrag;
+      const bottom = sr.y + sr.h;
+      const right = sr.x + sr.w;
+
+      setCropRect((prev) => {
+        if (!prev) return prev;
+        if (mode === 'move') {
+          const dx = nx - startNx;
+          const dy = ny - startNy;
+          let x = sr.x + dx;
+          let y = sr.y + dy;
+          x = Math.max(0, Math.min(x, iw - sr.w));
+          y = Math.max(0, Math.min(y, ih - sr.h));
+          return clampCropRect({ x, y, w: sr.w, h: sr.h }, iw, ih);
+        }
+        if (mode === 'se') {
+          return clampCropRect(
+            { x: sr.x, y: sr.y, w: Math.max(MIN_CROP_PX, nx - sr.x), h: Math.max(MIN_CROP_PX, ny - sr.y) },
+            iw,
+            ih
+          );
+        }
+        if (mode === 'nw') {
+          const newX = Math.max(0, Math.min(nx, right - MIN_CROP_PX));
+          const newY = Math.max(0, Math.min(ny, bottom - MIN_CROP_PX));
+          return clampCropRect({ x: newX, y: newY, w: right - newX, h: bottom - newY }, iw, ih);
+        }
+        if (mode === 'ne') {
+          const newY = Math.max(0, Math.min(ny, bottom - MIN_CROP_PX));
+          const newW = Math.max(MIN_CROP_PX, nx - sr.x);
+          const newH = bottom - newY;
+          return clampCropRect({ x: sr.x, y: newY, w: Math.min(newW, iw - sr.x), h: newH }, iw, ih);
+        }
+        if (mode === 'sw') {
+          const newX = Math.max(0, Math.min(nx, right - MIN_CROP_PX));
+          const newH = Math.max(MIN_CROP_PX, ny - sr.y);
+          return clampCropRect({ x: newX, y: sr.y, w: right - newX, h: newH }, iw, ih);
+        }
+        return prev;
+      });
+    };
+
+    const onUp = (e: PointerEvent) => {
+      if (e.pointerId !== cropDrag.pointerId) return;
+      setCropDrag(null);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [cropDrag]);
+
+  const applyCropResize = useCallback(async () => {
+    const doc = activeCropDoc;
+    const img = cropImgRef.current;
+    if (!individual || !doc || !onUpdateDocument || !cropRect || !img?.complete) return;
+    try {
+      const maxSide = Math.max(320, Math.min(8192, cropMaxSide));
+      const { x, y, w, h } = cropRect;
+      const scale = Math.min(1, maxSide / Math.max(w, h));
+      const outW = Math.max(1, Math.round(w * scale));
+      const outH = Math.max(1, Math.round(h * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('no ctx');
+      ctx.drawImage(img, x, y, w, h, 0, 0, outW, outH);
+      const mime = doc.url.startsWith('data:image/png') ? 'image/png' : 'image/jpeg';
+      const blob: Blob | null = await new Promise((resolve) => {
+        canvas.toBlob(resolve, mime, mime === 'image/jpeg' ? 0.88 : undefined);
+      });
+      if (!blob) throw new Error('toBlob');
+      const url = await blobToDataUrl(blob);
+      onUpdateDocument(individual.id, doc.id, { url });
+      setActiveCropDocId(null);
+      setCropRect(null);
+      setCropDrag(null);
+    } catch {
+      window.alert(t('details.cropResizeError'));
+    }
+  }, [activeCropDoc, cropRect, cropMaxSide, individual, onUpdateDocument, t]);
 
   return (
     <div 
@@ -949,11 +1112,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       isDarkMode ? 'border-slate-600/50' : 'border-slate-400/40'
                     } cursor-pointer`}
                   >
-                    <img
-                      src={galleryPhoto.url}
-                      alt={galleryPhoto.title}
-                      className="w-full h-40 object-cover"
-                    />
+                    <div
+                      className={`w-full h-40 flex items-center justify-center ${
+                        isDarkMode ? 'bg-slate-900/80' : 'bg-slate-100'
+                      }`}
+                    >
+                      <img
+                        src={galleryPhoto.url}
+                        alt={galleryPhoto.title}
+                        className="max-w-full max-h-full w-auto h-auto object-contain"
+                      />
+                    </div>
                   </a>
                   {galleryPhoto.sourceAttribution?.trim() ? (
                     <DocumentSourceAttribution
@@ -998,17 +1167,51 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     onChange={(e) => setDocForm((prev) => ({ ...prev, url: e.target.value }))}
                   />
                 ) : (
-                  <input
-                    type="file"
-                    accept={docForm.kind === 'photo' ? 'image/*' : '*'}
-                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      setDocForm((prev) => ({ ...prev, file, title: prev.title || file.name }));
-                      e.currentTarget.value = '';
-                    }}
-                  />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      ref={addFileInputRef}
+                      type="file"
+                      accept={docForm.kind === 'photo' ? 'image/*' : '*'}
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setDocForm((prev) => ({ ...prev, file, title: prev.title || file.name }));
+                        e.currentTarget.value = '';
+                      }}
+                    />
+                    <input
+                      ref={addCameraInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setDocForm((prev) => ({ ...prev, file, kind: 'photo', title: prev.title || file.name }));
+                        e.currentTarget.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addFileInputRef.current?.click()}
+                      className={`flex-1 min-w-[7rem] rounded px-2 py-1.5 text-xs font-semibold border ${inputBg} ${textClass}`}
+                    >
+                      {t('details.pickFile')}
+                    </button>
+                    {docForm.kind === 'photo' && (
+                      <button
+                        type="button"
+                        title={t('details.takePhoto')}
+                        aria-label={t('details.takePhoto')}
+                        onClick={() => addCameraInputRef.current?.click()}
+                        className={`shrink-0 rounded p-1.5 border ${isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'} ${subTextClass}`}
+                      >
+                        <Camera className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 )}
                 <input
                   type="date"
@@ -1074,77 +1277,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.documentList')}</div>
                 {documents.length === 0 ? (
                   <p className={`text-xs ${subTextClass}`}>{t('details.noDocumentsYet')}</p>
-                ) : documents.map((doc) => (
-                  <div key={doc.id} className={`rounded border p-2 ${inputBg}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className={`text-sm font-semibold truncate ${textClass}`}>{doc.title}</div>
-                        <div className={`text-[11px] ${subTextClass}`}>
-                          {doc.kind} | {doc.source}{doc.date ? ` | ${doc.date}` : ''}
+                ) : documents.map((doc) => {
+                  const isPhotoDoc = doc.kind === 'photo' || doc.url.startsWith('data:image/');
+                  return (
+                  <div key={doc.id} className={`rounded border p-1.5 ${inputBg}`}>
+                    <div className="flex items-start justify-between gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-xs font-semibold leading-tight truncate ${textClass}`}>{doc.title}</div>
+                        <div className={`text-[10px] leading-tight mt-0.5 ${subTextClass}`}>
+                          {doc.kind} · {doc.source}
+                          {doc.date ? ` · ${doc.date}` : ''}
                         </div>
-                        {editingDocId === doc.id && (
-                          <div className="mt-2 space-y-2">
-                            <input
-                              type="text"
-                              placeholder={t('details.documentName')}
-                              className={`w-full rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
-                              value={editingDocTitle}
-                              onChange={(e) => setEditingDocTitle(e.target.value)}
-                            />
-                            <label className={`block text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
-                              {t('details.sourceAttribution')}
-                            </label>
-                            <input
-                              type="text"
-                              placeholder={t('details.sourceAttributionPlaceholder')}
-                              className={`w-full rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
-                              value={editingDocAttribution}
-                              onChange={(e) => setEditingDocAttribution(e.target.value)}
-                            />
-                            <div className="flex items-center gap-2">
-                            <input
-                              type="date"
-                              className={`rounded px-2 py-1 text-xs border outline-none ${inputBg}`}
-                              value={editingDocDate}
-                              onChange={(e) => setEditingDocDate(e.target.value)}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!individual) return;
-                                onUpdateDocument?.(individual.id, doc.id, {
-                                  title: editingDocTitle.trim() || doc.title,
-                                  date: editingDocDate || undefined,
-                                  sourceAttribution: editingDocAttribution.trim(),
-                                });
-                                const pi = photoDocuments.findIndex((d) => d.id === doc.id);
-                                if (pi >= 0) setPhotoGalleryIndex(pi);
-                                setEditingDocId(null);
-                                setEditingDocTitle('');
-                                setEditingDocDate('');
-                                setEditingDocAttribution('');
-                              }}
-                              className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
-                            >
-                              {t('details.save')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingDocId(null);
-                                setEditingDocTitle('');
-                                setEditingDocDate('');
-                                setEditingDocAttribution('');
-                              }}
-                              className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
-                            >
-                              {t('details.cancel')}
-                            </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
-                      <div className="flex gap-1">
+                      <div className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]">
                         <button
                           type="button"
                           onClick={() => {
@@ -1160,15 +1305,35 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                             setEditingDocDate(doc.date || '');
                             setEditingDocAttribution(doc.sourceAttribution || '');
                           }}
-                          className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${inputBg}`}
                         >
                           {editingDocId === doc.id ? t('details.close') : t('details.edit')}
                         </button>
-                        {(doc.kind === 'photo' || doc.url.startsWith('data:image/')) && (
+                        {isPhotoDoc && onUpdateDocument && (
+                          <button
+                            type="button"
+                            title={t('details.cropResize')}
+                            aria-label={t('details.cropResize')}
+                            onClick={() => {
+                              setCropDrag(null);
+                              setActiveCropDocId(doc.id);
+                              setCropRect(null);
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                              isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'
+                            } ${subTextClass}`}
+                          >
+                            <span className="inline-flex items-center gap-0.5">
+                              <Crop className="w-3 h-3" />
+                              <span className="hidden sm:inline">{t('details.cropResize')}</span>
+                            </span>
+                          </button>
+                        )}
+                        {isPhotoDoc && (
                           <button
                             type="button"
                             onClick={() => individual && onSetPrimaryPhoto?.(individual.id, doc.id)}
-                            className={`px-2 py-1 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
                           >
                             {doc.isPrimaryPhoto ? t('details.primary') : t('details.setPrimary')}
                           </button>
@@ -1176,14 +1341,80 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => individual && onRemoveDocument?.(individual.id, doc.id)}
-                          className="px-2 py-1 rounded text-[10px] font-bold bg-rose-600 text-white"
+                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-600 text-white"
                         >
                           {t('details.delete')}
                         </button>
                       </div>
                     </div>
+                    {editingDocId === doc.id && (
+                      <div
+                        className={`mt-1.5 pt-1.5 space-y-1.5 border-t ${
+                          isDarkMode ? 'border-slate-700' : 'border-slate-200'
+                        }`}
+                      >
+                        <input
+                          type="text"
+                          placeholder={t('details.documentName')}
+                          className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
+                          value={editingDocTitle}
+                          onChange={(e) => setEditingDocTitle(e.target.value)}
+                        />
+                        <label className={`block text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+                          {t('details.sourceAttribution')}
+                        </label>
+                        <input
+                          type="text"
+                          placeholder={t('details.sourceAttributionPlaceholder')}
+                          className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
+                          value={editingDocAttribution}
+                          onChange={(e) => setEditingDocAttribution(e.target.value)}
+                        />
+                        <div className="flex flex-wrap items-center gap-1">
+                          <input
+                            type="date"
+                            className={`rounded px-1.5 py-1 text-[11px] border outline-none flex-1 min-w-[7rem] ${inputBg}`}
+                            value={editingDocDate}
+                            onChange={(e) => setEditingDocDate(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!individual) return;
+                              onUpdateDocument?.(individual.id, doc.id, {
+                                title: editingDocTitle.trim() || doc.title,
+                                date: editingDocDate || undefined,
+                                sourceAttribution: editingDocAttribution.trim(),
+                              });
+                              const pi = photoDocuments.findIndex((d) => d.id === doc.id);
+                              if (pi >= 0) setPhotoGalleryIndex(pi);
+                              setEditingDocId(null);
+                              setEditingDocTitle('');
+                              setEditingDocDate('');
+                              setEditingDocAttribution('');
+                            }}
+                            className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
+                          >
+                            {t('details.save')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingDocId(null);
+                              setEditingDocTitle('');
+                              setEditingDocDate('');
+                              setEditingDocAttribution('');
+                            }}
+                            className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
+                          >
+                            {t('details.cancel')}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )
@@ -1718,6 +1949,212 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </div>
         )}
       </div>
+
+      {activeCropDocId && activeCropDoc?.url && (
+        <div
+          className="fixed inset-0 z-[280] flex flex-col bg-black/90 text-white"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('details.cropResize')}
+        >
+          <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-white/15">
+            <span className="text-sm font-semibold truncate pr-2">{t('details.cropResize')}</span>
+            <button
+              type="button"
+              className="p-1.5 rounded hover:bg-white/10"
+              aria-label={t('details.cancel')}
+              onClick={() => {
+                setActiveCropDocId(null);
+                setCropRect(null);
+                setCropDrag(null);
+              }}
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 flex items-center justify-center overflow-auto p-2">
+            <div className="relative inline-block max-w-full">
+              <img
+                ref={cropImgRef}
+                src={activeCropDoc.url}
+                alt=""
+                className="max-h-[min(70vh,720px)] max-w-[min(100vw-16px,920px)] w-auto h-auto select-none touch-none block mx-auto"
+                crossOrigin={activeCropDoc.url.startsWith('http') ? 'anonymous' : undefined}
+                draggable={false}
+                onLoad={(e) => {
+                  const el = e.currentTarget;
+                  setCropRect({ x: 0, y: 0, w: el.naturalWidth, h: el.naturalHeight });
+                }}
+              />
+              {cropRect && cropImgRef.current && (
+                <div className="absolute inset-0 pointer-events-none">
+                  {(() => {
+                    const nw = cropImgRef.current!.naturalWidth;
+                    const nh = cropImgRef.current!.naturalHeight;
+                    const px = (cropRect.x / nw) * 100;
+                    const py = (cropRect.y / nh) * 100;
+                    const pw = (cropRect.w / nw) * 100;
+                    const ph = (cropRect.h / nh) * 100;
+                    return (
+                      <>
+                        <div
+                          className="absolute bg-black/55"
+                          style={{ left: 0, top: 0, width: `${px}%`, height: '100%' }}
+                        />
+                        <div
+                          className="absolute bg-black/55"
+                          style={{ left: `${px}%`, top: 0, width: `${pw}%`, height: `${py}%` }}
+                        />
+                        <div
+                          className="absolute bg-black/55"
+                          style={{ left: `${px + pw}%`, top: 0, width: `${100 - px - pw}%`, height: '100%' }}
+                        />
+                        <div
+                          className="absolute bg-black/55"
+                          style={{ left: `${px}%`, top: `${py + ph}%`, width: `${pw}%`, height: `${100 - py - ph}%` }}
+                        />
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+              {cropRect && cropImgRef.current && (
+                <div
+                  className="absolute border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5)] pointer-events-auto cursor-move"
+                  style={{
+                    left: `${(cropRect.x / cropImgRef.current.naturalWidth) * 100}%`,
+                    top: `${(cropRect.y / cropImgRef.current.naturalHeight) * 100}%`,
+                    width: `${(cropRect.w / cropImgRef.current.naturalWidth) * 100}%`,
+                    height: `${(cropRect.h / cropImgRef.current.naturalHeight) * 100}%`,
+                  }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const img = cropImgRef.current;
+                    if (!img || !cropRect) return;
+                    const { nx, ny } = clientToNatural(e.clientX, e.clientY, img);
+                    setCropDrag({
+                      pointerId: e.pointerId,
+                      mode: 'move',
+                      startNx: nx,
+                      startNy: ny,
+                      startRect: { ...cropRect },
+                    });
+                  }}
+                >
+                  {(['nw', 'ne', 'sw', 'se'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      tabIndex={-1}
+                      className={`absolute w-3.5 h-3.5 bg-white border border-slate-800 rounded-sm shadow ${
+                        mode === 'nw'
+                          ? '-left-1.5 -top-1.5 cursor-nwse-resize'
+                          : mode === 'ne'
+                            ? '-right-1.5 -top-1.5 cursor-nesw-resize'
+                            : mode === 'sw'
+                              ? '-left-1.5 -bottom-1.5 cursor-nesw-resize'
+                              : '-right-1.5 -bottom-1.5 cursor-nwse-resize'
+                      }`}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        const img = cropImgRef.current;
+                        if (!img || !cropRect) return;
+                        const { nx, ny } = clientToNatural(e.clientX, e.clientY, img);
+                        setCropDrag({
+                          pointerId: e.pointerId,
+                          mode,
+                          startNx: nx,
+                          startNy: ny,
+                          startRect: { ...cropRect },
+                        });
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div
+            className="shrink-0 flex flex-col gap-2 p-3 border-t border-white/15 bg-black/40"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+          >
+            <div className="flex flex-wrap items-center gap-1.5 justify-center sm:justify-start">
+              <button
+                type="button"
+                className="px-2 py-1 rounded text-[11px] font-semibold bg-white/15 hover:bg-white/25"
+                onClick={() => {
+                  const img = cropImgRef.current;
+                  if (!img) return;
+                  setCropRect({ x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight });
+                }}
+              >
+                {t('details.cropFull')}
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 rounded text-[11px] font-semibold bg-white/15 hover:bg-white/25"
+                onClick={() => {
+                  const img = cropImgRef.current;
+                  if (!img) return;
+                  setCropRect(
+                    clampCropRect(centerCropRect(img.naturalWidth, img.naturalHeight, 1), img.naturalWidth, img.naturalHeight)
+                  );
+                }}
+              >
+                {t('details.cropSquare')}
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 rounded text-[11px] font-semibold bg-white/15 hover:bg-white/25"
+                onClick={() => {
+                  const img = cropImgRef.current;
+                  if (!img) return;
+                  setCropRect(
+                    clampCropRect(centerCropRect(img.naturalWidth, img.naturalHeight, 4 / 3), img.naturalWidth, img.naturalHeight)
+                  );
+                }}
+              >
+                {t('details.crop43')}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-[11px] text-white/90">
+                {t('details.maxDimensionPx')}
+                <input
+                  type="number"
+                  min={320}
+                  max={8192}
+                  step={50}
+                  value={cropMaxSide}
+                  onChange={(e) => setCropMaxSide(Number(e.target.value) || 1600)}
+                  className="w-24 rounded px-1.5 py-1 text-slate-900 text-xs border border-white/20"
+                />
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded text-xs font-bold bg-white/15 hover:bg-white/25"
+                  onClick={() => {
+                    setActiveCropDocId(null);
+                    setCropRect(null);
+                    setCropDrag(null);
+                  }}
+                >
+                  {t('details.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded text-xs font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+                  disabled={!cropRect}
+                  onClick={() => void applyCropResize()}
+                >
+                  {t('details.applyCropResize')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
