@@ -64,6 +64,7 @@ interface TopPanelProps {
     status: 'active' | 'accepted' | 'revoked' | 'expired';
     personalizedDefault: boolean;
     inviteLink?: string;
+    inviteIntent?: 'standard' | 'own_device';
   }>;
   pendingInviteToken?: string | null;
   pendingProposalsCount: number;
@@ -72,6 +73,13 @@ interface TopPanelProps {
   buildLabel?: string;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
   onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
+  /** Auto-invitation : même individu identifié → second appareil (ex. mobile). */
+  onCreateOwnDeviceInvite?: (role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
+  selfIndividualId?: string | null;
+  trustedOwnDevicePeerId?: string | null;
+  ownDevicePendingCount?: number;
+  onOwnDeviceAcceptAll?: () => void;
+  onOwnDeviceRejectAllAndRevoke?: () => void;
   onRevokeInvite: (inviteId: string) => void;
   onAcceptInvite: (inviteId: string) => void;
   onReviewProposal: (proposalId: string) => void;
@@ -108,6 +116,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
   buildLabel,
   onChangeVisibilitySettings,
   onCreateInvite,
+  onCreateOwnDeviceInvite,
+  selfIndividualId,
+  trustedOwnDevicePeerId,
+  ownDevicePendingCount = 0,
+  onOwnDeviceAcceptAll,
+  onOwnDeviceRejectAllAndRevoke,
   onRevokeInvite,
   onAcceptInvite,
   onReviewProposal,
@@ -118,6 +132,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
+  const [ownDeviceRole, setOwnDeviceRole] = useState<'viewer' | 'contributor' | 'editor'>('contributor');
+  const [ownDeviceTtlPreset, setOwnDeviceTtlPreset] = useState<'none' | '365' | '730' | '1825' | 'custom'>('none');
+  const [ownDeviceExpiresCustom, setOwnDeviceExpiresCustom] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showActivityDetails, setShowActivityDetails] = useState(false);
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
@@ -195,6 +212,20 @@ const TopPanel: React.FC<TopPanelProps> = ({
   };
   const isInviteMode = p2pMode === 'client' || !!pendingInviteToken;
   const showShareAction = p2pMode === 'host';
+
+  const computeOwnDeviceExpiresAt = (): string | undefined => {
+    if (ownDeviceTtlPreset === 'none') return undefined;
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    if (ownDeviceTtlPreset === '365') return new Date(now + 365 * day).toISOString();
+    if (ownDeviceTtlPreset === '730') return new Date(now + 730 * day).toISOString();
+    if (ownDeviceTtlPreset === '1825') return new Date(now + 1825 * day).toISOString();
+    if (ownDeviceTtlPreset === 'custom' && ownDeviceExpiresCustom) {
+      const d = new Date(ownDeviceExpiresCustom);
+      return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+    return undefined;
+  };
   // Allow actions when remote state is unknown; handlers perform final checks.
   const canStartShare = showShareAction && localHasData && remoteHasData !== true;
   const canStartCompare = localHasData && remoteHasData !== false;
@@ -509,7 +540,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
               {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
             </p>
             {!isInviteMode && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-4">
+            <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-1">
               <select
                 value={newInviteIndividualId}
                 onChange={(e) => setNewInviteIndividualId(e.target.value)}
@@ -534,6 +566,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 value={newInviteExpiresAt}
                 onChange={(e) => setNewInviteExpiresAt(e.target.value)}
                 className={`text-sm rounded border px-2 py-1 ${inputBg}`}
+                title={t('topPanel.inviteExpiryOptionalHint')}
               />
               <button
                 onClick={() => {
@@ -548,6 +581,88 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 {t('topPanel.createInvite')}
               </button>
             </div>
+            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.inviteExpiryOptionalHint')}</p>
+            </>
+            )}
+            {!isInviteMode && onCreateOwnDeviceInvite && selfIndividualId && (
+              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-indigo-900/80 bg-indigo-950/30' : 'border-indigo-200 bg-indigo-50/80'}`}>
+                <div className={`text-sm font-bold mb-1 ${isDarkMode ? 'text-indigo-300' : 'text-indigo-800'}`}>{t('topPanel.ownDeviceInviteTitle')}</div>
+                <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.ownDeviceInviteHint')}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2 items-end">
+                  <label className={`flex flex-col gap-0.5 text-[11px] ${subTextClass}`}>
+                    <span>{t('topPanel.ownDeviceRole')}</span>
+                    <select
+                      value={ownDeviceRole}
+                      onChange={(e) => setOwnDeviceRole(e.target.value as 'viewer' | 'contributor' | 'editor')}
+                      className={`text-sm rounded border px-2 py-1 ${inputBg}`}
+                    >
+                      <option value="viewer">{t('topPanel.roleViewer')}</option>
+                      <option value="contributor">{t('topPanel.roleContributor')}</option>
+                      <option value="editor">{t('topPanel.roleEditor')}</option>
+                    </select>
+                  </label>
+                  <label className={`flex flex-col gap-0.5 text-[11px] md:col-span-2 ${subTextClass}`}>
+                    <span>{t('topPanel.ownDeviceTtl')}</span>
+                    <select
+                      value={ownDeviceTtlPreset}
+                      onChange={(e) => setOwnDeviceTtlPreset(e.target.value as 'none' | '365' | '730' | '1825' | 'custom')}
+                      className={`text-sm rounded border px-2 py-1 ${inputBg}`}
+                    >
+                      <option value="none">{t('topPanel.ownDeviceTtlNone')}</option>
+                      <option value="365">{t('topPanel.ownDeviceTtl1y')}</option>
+                      <option value="730">{t('topPanel.ownDeviceTtl2y')}</option>
+                      <option value="1825">{t('topPanel.ownDeviceTtl5y')}</option>
+                      <option value="custom">{t('topPanel.ownDeviceTtlCustom')}</option>
+                    </select>
+                  </label>
+                  {ownDeviceTtlPreset === 'custom' && (
+                    <label className={`flex flex-col gap-0.5 text-[11px] ${subTextClass}`}>
+                      <span>{t('topPanel.expires')}</span>
+                      <input
+                        type="date"
+                        value={ownDeviceExpiresCustom}
+                        onChange={(e) => setOwnDeviceExpiresCustom(e.target.value)}
+                        className={`text-sm rounded border px-2 py-1 ${inputBg}`}
+                      />
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onCreateOwnDeviceInvite(ownDeviceRole, computeOwnDeviceExpiresAt());
+                    }}
+                    className={`text-sm rounded px-3 py-2 font-semibold lg:col-span-1 ${isDarkMode ? 'bg-indigo-700 hover:bg-indigo-600' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+                  >
+                    {t('topPanel.createOwnDeviceInvite')}
+                  </button>
+                </div>
+              </div>
+            )}
+            {!isInviteMode && trustedOwnDevicePeerId && (onOwnDeviceAcceptAll || onOwnDeviceRejectAllAndRevoke) && (
+              <div className={`mb-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 ${isDarkMode ? 'border-amber-900/60 bg-amber-950/20' : 'border-amber-200 bg-amber-50'}`}>
+                <span className={`text-xs font-semibold ${textClass}`}>
+                  {t('topPanel.ownDeviceSessionBadge').replace('{{count}}', String(ownDevicePendingCount))}
+                </span>
+                {onOwnDeviceAcceptAll && (
+                  <button
+                    type="button"
+                    onClick={() => onOwnDeviceAcceptAll()}
+                    disabled={ownDevicePendingCount === 0}
+                    className={`px-2 py-1 rounded text-xs font-semibold disabled:opacity-40 ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                  >
+                    {t('topPanel.ownDeviceAcceptAll')}
+                  </button>
+                )}
+                {onOwnDeviceRejectAllAndRevoke && (
+                  <button
+                    type="button"
+                    onClick={() => onOwnDeviceRejectAllAndRevoke()}
+                    className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-900 hover:bg-rose-800' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
+                  >
+                    {t('topPanel.ownDeviceRejectAndRevoke')}
+                  </button>
+                )}
+              </div>
             )}
             <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
               {invites.length === 0 ? (
@@ -558,7 +673,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     <div>
                       <div className="font-semibold">{invite.individualName} ({formatInviteRole(invite.role)})</div>
                       <div className={subTextClass}>
-                        {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')} | {t('topPanel.status')}: {invite.status}
+                        {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')}
+                        {invite.inviteIntent === 'own_device' ? ` | ${t('topPanel.inviteOwnDeviceBadge')}` : ''}
+                        {' '}| {t('topPanel.status')}: {invite.status}
                         {invite.expiresAt ? ` | ${t('topPanel.expires')}: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
                       </div>
                       {invite.inviteLink && (

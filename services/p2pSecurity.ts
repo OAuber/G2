@@ -11,6 +11,8 @@ export interface InviteTokenClaims {
   issuedAt: string;
   expiresAt?: string;
   nonce: string;
+  /** Lien durable pour le même utilisateur (ex. second appareil / mobile en arrière-plan). */
+  intent?: 'standard' | 'own_device';
 }
 
 export async function signInviteClaims(claims: InviteTokenClaims, secret: string): Promise<string> {

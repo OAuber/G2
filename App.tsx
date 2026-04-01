@@ -144,6 +144,7 @@ function App() {
     token?: string;
     inviteLink?: string;
     accessProfile: P2PVisibilitySettings;
+    inviteIntent?: 'standard' | 'own_device';
   };
 
   type P2PProposalItem = {
@@ -793,6 +794,9 @@ function App() {
   const [pendingInviteTargetIndividualId, setPendingInviteTargetIndividualId] = useState<string | null>(null);
   const [pendingInviteInviterName, setPendingInviteInviterName] = useState<string | null>(null);
   const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(null);
+  const [pendingInviteIntent, setPendingInviteIntent] = useState<'standard' | 'own_device' | null>(null);
+  const [trustedOwnDevicePeerId, setTrustedOwnDevicePeerId] = useState<string | null>(null);
+  const [trustedOwnDeviceInviteId, setTrustedOwnDeviceInviteId] = useState<string | null>(null);
   const [inviteOnboardingStage, setInviteOnboardingStage] = useState<'idle' | 'connecting' | 'connected' | 'accepted' | 'syncing' | 'completed' | 'ready' | 'error'>('idle');
   const [inviteMediaProgress, setInviteMediaProgress] = useState<{
     receivedBatches: number;
@@ -1870,6 +1874,12 @@ function App() {
     () => p2pProposals.filter((proposal) => proposal.status === 'pending').length,
     [p2pProposals]
   );
+  const ownDevicePendingCount = useMemo(() => {
+    if (!trustedOwnDevicePeerId) return 0;
+    return p2pProposals.filter(
+      (p) => p.status === 'pending' && p.authorPeerId === trustedOwnDevicePeerId
+    ).length;
+  }, [p2pProposals, trustedOwnDevicePeerId]);
   const activeReviewProposal = useMemo(
     () => p2pProposals.find((proposal) => proposal.proposalId === activeReviewProposalId) || null,
     [p2pProposals, activeReviewProposalId]
@@ -2261,6 +2271,7 @@ function App() {
       inviteAutoConnectAttemptedRef.current = false;
     }
     setPendingInviteRole(claims.role);
+    setPendingInviteIntent(claims.intent === 'own_device' ? 'own_device' : 'standard');
     setPendingInviteInviterName(claims.inviterName || null);
     setInviteOnboardingStage('idle');
     if (claims.targetIndividualId) {
@@ -2279,7 +2290,8 @@ function App() {
           createdAt: claims.issuedAt,
           expiresAt: claims.expiresAt,
           token: inviteToken,
-          inviteLink: `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(claims.inviterName || 'invitant')}&invite_to=${encodeURIComponent(claims.targetIndividualName || 'invite')}&invite_role=${encodeURIComponent(claims.role)}#g2invite=${encodeURIComponent(inviteToken)}`,
+          inviteIntent: claims.intent === 'own_device' ? 'own_device' : 'standard',
+          inviteLink: `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(claims.inviterName || 'invitant')}&invite_to=${encodeURIComponent(claims.targetIndividualName || 'invite')}&invite_role=${encodeURIComponent(claims.role)}${claims.intent === 'own_device' ? '&invite_intent=own_device' : ''}#g2invite=${encodeURIComponent(inviteToken)}`,
           accessProfile: buildAccessProfileFromRole(claims.role),
         },
         ...prev,
@@ -2289,6 +2301,7 @@ function App() {
     params.delete('invite_from');
     params.delete('invite_to');
     params.delete('invite_role');
+    params.delete('invite_intent');
     const nextQuery = params.toString();
     hashParams.delete('g2invite');
     const nextHash = hashParams.toString();
@@ -2376,6 +2389,8 @@ function App() {
                 p2pSessionUseCaseRef.current = null;
                 setActiveSessionPeerPolicy(null);
                 activeSessionPeerPolicyRef.current = null;
+                setTrustedOwnDevicePeerId(null);
+                setTrustedOwnDeviceInviteId(null);
               }
               logP2PActivity(`session.${status}`, 'session', id || 'local');
               if (
@@ -2990,6 +3005,10 @@ function App() {
                             invite.inviteId === payload.inviteId ? { ...invite, status: 'accepted' } : invite
                           )
                         );
+                        if (targetInvite.inviteIntent === 'own_device' && payload.claimantPeerId) {
+                          setTrustedOwnDevicePeerId(payload.claimantPeerId);
+                          setTrustedOwnDeviceInviteId(payload.inviteId);
+                        }
                         p2pService.sendMessage('ACCESS_PROFILE_SET', {
                           profile: sessionPolicy,
                           fromPeerId: peerId || 'host',
@@ -4374,7 +4393,8 @@ function App() {
   const handleCreateInvite = async (
     individualId: string,
     role: P2PRole,
-    expiresAt?: string
+    expiresAt?: string,
+    options?: { intent?: 'standard' | 'own_device' }
   ) => {
     if (!isIdentified) {
       alert(t('app.alerts.claimIdentityBeforeInvites'));
@@ -4386,6 +4406,7 @@ function App() {
     }
     const candidate = livingCandidates.find((c) => c.id === individualId);
     if (!candidate) return;
+    const intent = options?.intent === 'own_device' ? 'own_device' : 'standard';
     const inviteId = `inv-${individualId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const issuedAt = new Date().toISOString();
     const accessProfile = buildAccessProfileFromRole(role);
@@ -4407,6 +4428,7 @@ function App() {
       issuedAt,
       expiresAt,
       nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      intent,
     };
     let token: string;
     try {
@@ -4416,7 +4438,7 @@ function App() {
       showTransientToast('error', 'Impossible de signer l’invitation.', 2200);
       return;
     }
-    const inviteLink = `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(inviterName || 'invitant')}&invite_to=${encodeURIComponent(candidate.label)}&invite_role=${encodeURIComponent(role)}#g2invite=${encodeURIComponent(token)}`;
+    const inviteLink = `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(inviterName || 'invitant')}&invite_to=${encodeURIComponent(candidate.label)}&invite_role=${encodeURIComponent(role)}${intent === 'own_device' ? '&invite_intent=own_device' : ''}#g2invite=${encodeURIComponent(token)}`;
     const invite: P2PInviteItem = {
       inviteId,
       individualId,
@@ -4429,6 +4451,7 @@ function App() {
       token,
       inviteLink,
       accessProfile,
+      inviteIntent: intent,
     };
     setP2PInvites((prev) => [invite, ...prev]);
     logP2PActivity('invite.created', 'invite', invite.inviteId);
@@ -4440,10 +4463,34 @@ function App() {
         fromPeerId: peerId || 'host',
       });
     }
-    showTransientToast('success', 'Invitation personnalisée créée.', 1800);
+    showTransientToast(
+      'success',
+      intent === 'own_device' ? t('app.toasts.ownDeviceInviteCreated') : t('app.toasts.inviteCreated'),
+      2200,
+    );
+  };
+
+  const handleCreateOwnDeviceInvite = (role: P2PRole, expiresAt?: string) => {
+    if (!selfIdentity?.individualId) {
+      showTransientToast('error', t('app.alerts.claimIdentityBeforeInvites'), 2200);
+      return;
+    }
+    const candidate = livingCandidates.find((c) => c.id === selfIdentity.individualId);
+    if (!candidate) {
+      showTransientToast('error', t('app.toasts.ownDeviceInviteNeedsLivingSelf'), 3200);
+      return;
+    }
+    void handleCreateInvite(selfIdentity.individualId, role, expiresAt, { intent: 'own_device' });
   };
 
   const handleRevokeInvite = (inviteId: string) => {
+    setTrustedOwnDeviceInviteId((prevTrusted) => {
+      if (prevTrusted === inviteId) {
+        setTrustedOwnDevicePeerId(null);
+        return null;
+      }
+      return prevTrusted;
+    });
     setP2PInvites((prev) =>
       prev.map((invite) =>
         invite.inviteId === inviteId ? { ...invite, status: 'revoked' as const } : invite
@@ -4560,6 +4607,127 @@ function App() {
       const nextRoot = data.individuals[rootIndividual.id];
       if (nextRoot) setRootIndividual(nextRoot);
     }
+  };
+
+  const applyProposalAcceptMerge = (mergedData: GedcomData, proposal: P2PProposalItem): GedcomData => {
+    const next = JSON.parse(JSON.stringify(mergedData)) as GedcomData;
+    if (proposal.operation === 'create_individual' && proposal.proposedIndividual) {
+      next.individuals[proposal.proposedIndividual.id] = proposal.proposedIndividual;
+      if (proposal.proposedFamilies) {
+        next.families = { ...next.families, ...proposal.proposedFamilies };
+      }
+      if (proposal.relatedIndividuals) {
+        next.individuals = { ...next.individuals, ...proposal.relatedIndividuals };
+      }
+    } else if (proposal.operation === 'delete_individual') {
+      delete next.individuals[proposal.individualId];
+      Object.values(next.families).forEach((fam) => {
+        if (fam.husbandId === proposal.individualId) fam.husbandId = undefined;
+        if (fam.wifeId === proposal.individualId) fam.wifeId = undefined;
+        fam.childrenIds = fam.childrenIds.filter((id) => id !== proposal.individualId);
+      });
+      Object.values(next.individuals).forEach((indi) => {
+        if (indi.familyChildId && next.families[indi.familyChildId]) {
+          const fam = next.families[indi.familyChildId];
+          if (!fam.husbandId && !fam.wifeId && fam.childrenIds.length === 0) {
+            delete next.families[indi.familyChildId];
+            indi.familyChildId = undefined;
+          }
+        }
+        if (indi.familySpouseIds) {
+          indi.familySpouseIds = indi.familySpouseIds.filter((famId) => {
+            const fam = next.families[famId];
+            return !!fam;
+          });
+        }
+      });
+    } else if (proposal.individualId in next.individuals) {
+      next.individuals[proposal.individualId] = {
+        ...next.individuals[proposal.individualId],
+        ...proposal.changeSet,
+      };
+    }
+    return next;
+  };
+
+  const handleAcceptAllPendingForPeer = (authorPeerId: string) => {
+    const pending = p2pProposals.filter((p) => p.status === 'pending' && p.authorPeerId === authorPeerId);
+    if (pending.length === 0) return;
+    let mergedData = JSON.parse(
+      JSON.stringify(originalGedcomData || { individuals: {}, families: {} })
+    ) as GedcomData;
+    for (const proposal of pending) {
+      if (proposal.proposalKind === 'documents') continue;
+      mergedData = applyProposalAcceptMerge(mergedData, proposal);
+    }
+    setOriginalGedcomData(mergedData);
+    refreshFocusedIndividualsFromData(mergedData);
+    setTimeout(() => setNormalizedGedcomData(normalizeGedcom(mergedData)), 10);
+    const decidedAt = new Date().toISOString();
+    setP2PProposals((prev) =>
+      prev.map((p) =>
+        pending.some((pp) => pp.proposalId === p.proposalId)
+          ? { ...p, status: 'accepted' as const, decidedAt }
+          : p
+      )
+    );
+    pending.forEach((p) => {
+      logP2PActivity('proposal.accepted', 'proposal', p.proposalId, peerId || 'host');
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+        p2pService.sendMessage('PROPOSAL_DECIDE', {
+          proposalId: p.proposalId,
+          status: 'accepted',
+          decidedAt,
+          hostPeerId: peerId || 'host',
+        });
+      }
+    });
+    showTransientToast('success', t('app.toasts.allProposalsAccepted'), 2400);
+  };
+
+  const handleRejectAllPendingForPeer = (authorPeerId: string, options?: { silent?: boolean }) => {
+    const pending = p2pProposals.filter((p) => p.status === 'pending' && p.authorPeerId === authorPeerId);
+    if (pending.length === 0) return;
+    pending.forEach((p) => registerRejectedInitialMatch(p));
+    const decidedAt = new Date().toISOString();
+    setP2PProposals((prev) =>
+      prev.map((p) =>
+        pending.some((pp) => pp.proposalId === p.proposalId)
+          ? { ...p, status: 'rejected' as const, decidedAt }
+          : p
+      )
+    );
+    pending.forEach((p) => {
+      logP2PActivity('proposal.rejected', 'proposal', p.proposalId, peerId || 'host');
+      if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+        p2pService.sendMessage('PROPOSAL_DECIDE', {
+          proposalId: p.proposalId,
+          status: 'rejected',
+          decidedAt,
+          hostPeerId: peerId || 'host',
+        });
+      }
+    });
+    if (!options?.silent) {
+      showTransientToast('error', t('app.toasts.allProposalsRejected'), 2200);
+    }
+  };
+
+  const handleOwnDeviceAcceptAllPending = () => {
+    if (!trustedOwnDevicePeerId) return;
+    handleAcceptAllPendingForPeer(trustedOwnDevicePeerId);
+  };
+
+  const handleOwnDeviceRejectAllAndRevoke = () => {
+    const peer = trustedOwnDevicePeerId;
+    const inviteId = trustedOwnDeviceInviteId;
+    if (peer) handleRejectAllPendingForPeer(peer, { silent: true });
+    if (inviteId) handleRevokeInvite(inviteId);
+    else {
+      setTrustedOwnDevicePeerId(null);
+      setTrustedOwnDeviceInviteId(null);
+    }
+    showTransientToast('success', t('app.toasts.ownDeviceSessionEnded'), 2600);
   };
 
   const handleDecideProposal = (proposalId: string, decision: 'accepted' | 'rejected') => {
@@ -5700,6 +5868,11 @@ function App() {
               <p className={`text-sm leading-relaxed max-w-2xl ${isDarkMode ? 'text-slate-200' : 'text-slate-700'}`}>
                 {inviteLandingDescription}
               </p>
+              {pendingInviteIntent === 'own_device' && (
+                <p className={`mt-2 text-xs max-w-2xl ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {t('topPanel.inviteLandingOwnDeviceHint')}
+                </p>
+              )}
               <div className="mt-6 flex justify-center">
                 {(inviteOnboardingStage === 'idle' || inviteOnboardingStage === 'connecting' || inviteOnboardingStage === 'connected' || inviteOnboardingStage === 'error') &&
                   !inviteHasAccepted &&
@@ -5956,6 +6129,12 @@ function App() {
         buildLabel={buildLabel}
         onChangeVisibilitySettings={setP2PVisibilitySettings}
         onCreateInvite={handleCreateInvite}
+        onCreateOwnDeviceInvite={handleCreateOwnDeviceInvite}
+        selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+        trustedOwnDevicePeerId={trustedOwnDevicePeerId}
+        ownDevicePendingCount={ownDevicePendingCount}
+        onOwnDeviceAcceptAll={handleOwnDeviceAcceptAllPending}
+        onOwnDeviceRejectAllAndRevoke={handleOwnDeviceRejectAllAndRevoke}
         onRevokeInvite={handleRevokeInvite}
         onAcceptInvite={handleAcceptInvite}
         onReviewProposal={handleReviewProposal}
