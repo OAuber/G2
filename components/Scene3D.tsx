@@ -20,7 +20,10 @@ const INDIVIDUAL_WIDTH = 10;
 const FOV_DEG = 50;
 const FOV_RAD = FOV_DEG * Math.PI / 180;
 const TOP_VIEW_PADDING = 1.0; // scene extent multiplier for top view (lower = more zoomed in)
-const PHOTO_MAX_PLANES_3D = 10;
+/** Base ; la limite monte avec le nombre de rubans pour les grands arbres (ascendants + descendants). */
+const PHOTO_MAX_PLANES_BASE_3D = 10;
+const PHOTO_MAX_PLANES_EXTRA_ONE_EVERY = 4;
+const PHOTO_MAX_PLANES_CAP_3D = 28;
 const PHOTO_MIN_PROJECTED_PX_3D = 18;
 /** Vue top ortho : score de tri = max(px projetés, taille monde × zoom × k) pour limiter les swaps d’ordre au pan/zoom. */
 const PHOTO_TOP_SORT_WORLD_ZOOM_K = 0.12;
@@ -586,10 +589,12 @@ const CameraController: React.FC<{
 const RibbonPhotoOverlays3D: React.FC<{
   nodes: LayoutNode[];
   cameraMode: CameraMode;
+  /** Priorité absolue pour la photo du sélectionné (vue top + close-up : évite l’exclusion quand le top-N est saturé). */
+  selectedId?: string | null;
   fadedNodeIds?: string[];
   primaryPhotoUrlById?: Record<string, string>;
   documentsByIndividualId?: Record<string, Array<{ url: string; kind?: 'photo' | 'document'; isPrimaryPhoto?: boolean }>>;
-}> = ({ nodes, cameraMode, fadedNodeIds, primaryPhotoUrlById, documentsByIndividualId }) => {
+}> = ({ nodes, cameraMode, selectedId, fadedNodeIds, primaryPhotoUrlById, documentsByIndividualId }) => {
   const [planes, setPlanes] = useState<Array<{
     key: string;
     url: string;
@@ -640,6 +645,11 @@ const RibbonPhotoOverlays3D: React.FC<{
       }
       return;
     }
+
+    const maxPlanes = Math.min(
+      PHOTO_MAX_PLANES_CAP_3D,
+      PHOTO_MAX_PLANES_BASE_3D + Math.floor(nodes.length / PHOTO_MAX_PLANES_EXTRA_ONE_EVERY),
+    );
 
     const cam = state.camera;
     const width = window.innerWidth;
@@ -697,10 +707,11 @@ const RibbonPhotoOverlays3D: React.FC<{
         (cam as unknown as { isOrthographicCamera?: boolean; zoom?: number }).isOrthographicCamera === true
           ? ((cam as unknown as { zoom: number }).zoom ?? 1)
           : 1;
+      // Arrondir le score en vue perspective pour limiter les permutations du top-N quand la caméra bouge légèrement.
       const sortScore =
         cameraMode === 'top'
           ? Math.max(projectedPx, worldSpan * orthoZoom * PHOTO_TOP_SORT_WORLD_ZOOM_K)
-          : projectedPx;
+          : Math.round(projectedPx);
 
       const depthBias = cameraMode === 'top' ? 0.045 : 0.08;
       const pos = p.clone().addScaledVector(camDir, depthBias);
@@ -719,7 +730,15 @@ const RibbonPhotoOverlays3D: React.FC<{
       if (Math.abs(d) > 1e-4) return d;
       return a.key.localeCompare(b.key);
     });
-    const next = candidates.slice(0, PHOTO_MAX_PLANES_3D).map(({ sortScore: _s, ...rest }) => rest);
+    const capped = selectedId
+      ? (() => {
+          const sel = candidates.find((c) => c.key === selectedId);
+          if (!sel) return candidates.slice(0, maxPlanes);
+          const rest = candidates.filter((c) => c.key !== selectedId);
+          return [sel, ...rest.slice(0, maxPlanes - 1)];
+        })()
+      : candidates.slice(0, maxPlanes);
+    const next = capped.map(({ sortScore: _s, ...rest }) => rest);
     const sig = next.map((it) => `${it.key}:${it.url}`).join('|');
     if (sig !== sigRef.current) {
       sigRef.current = sig;
@@ -1366,6 +1385,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         <RibbonPhotoOverlays3D
             nodes={allLayoutNodes}
             cameraMode={cameraMode}
+            selectedId={selectedId}
             fadedNodeIds={topFadedNodeIds}
             primaryPhotoUrlById={primaryPhotoUrlById}
             documentsByIndividualId={documentsByIndividualId}
