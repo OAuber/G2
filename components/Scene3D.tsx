@@ -22,8 +22,10 @@ const FOV_RAD = FOV_DEG * Math.PI / 180;
 const TOP_VIEW_PADDING = 1.0; // scene extent multiplier for top view (lower = more zoomed in)
 const PHOTO_MAX_PLANES_3D = 10;
 const PHOTO_MIN_PROJECTED_PX_3D = 18;
-const PHOTO_MIN_PROJECTED_PX_TOP_3D = 8;
+/** Vue top ortho : score de tri = max(px projetés, taille monde × zoom × k) pour limiter les swaps d’ordre au pan/zoom. */
+const PHOTO_TOP_SORT_WORLD_ZOOM_K = 0.12;
 const PHOTO_RECALC_MS_3D = 90;
+const PHOTO_RECALC_MS_TOP_3D = 110;
 
 /** Priorise les clics sur les libellés nom (vue de côté) devant le ruban instancié. */
 function preferNameLabelIntersections(items: Intersection[]): Intersection[] {
@@ -628,7 +630,8 @@ const RibbonPhotoOverlays3D: React.FC<{
 
   useFrame((state) => {
     const nowMs = state.clock.elapsedTime * 1000;
-    if (nowMs - recalcAtRef.current < PHOTO_RECALC_MS_3D) return;
+    const recalcMs = cameraMode === 'top' ? PHOTO_RECALC_MS_TOP_3D : PHOTO_RECALC_MS_3D;
+    if (nowMs - recalcAtRef.current < recalcMs) return;
     recalcAtRef.current = nowMs;
     if (nodes.length === 0) {
       if (sigRef.current !== '') {
@@ -644,7 +647,7 @@ const RibbonPhotoOverlays3D: React.FC<{
     const candidates: Array<{
       key: string;
       url: string;
-      projectedPx: number;
+      sortScore: number;
       position: [number, number, number];
       quaternion: [number, number, number, number];
       scale: [number, number, number];
@@ -686,22 +689,37 @@ const RibbonPhotoOverlays3D: React.FC<{
       const wPx = Math.hypot((right.x - left.x) * 0.5 * width, (right.y - left.y) * 0.5 * height);
       const hPx = Math.hypot((top.x - bottom.x) * 0.5 * width, (top.y - bottom.y) * 0.5 * height);
       const projectedPx = Math.max(wPx, hPx);
-      const minPx = cameraMode === 'top' ? PHOTO_MIN_PROJECTED_PX_TOP_3D : PHOTO_MIN_PROJECTED_PX_3D;
-      if (projectedPx < minPx) continue;
+      // Vue top : pas de seuil min en px (ortho + angle → sous-estimation fréquente, photos qui clignotent au zoom/pan).
+      if (cameraMode !== 'top' && projectedPx < PHOTO_MIN_PROJECTED_PX_3D) continue;
 
-      const pos = p.clone().addScaledVector(camDir, 0.08);
+      const worldSpan = Math.max(thickness, diagonal);
+      const orthoZoom =
+        (cam as unknown as { isOrthographicCamera?: boolean; zoom?: number }).isOrthographicCamera === true
+          ? ((cam as unknown as { zoom: number }).zoom ?? 1)
+          : 1;
+      const sortScore =
+        cameraMode === 'top'
+          ? Math.max(projectedPx, worldSpan * orthoZoom * PHOTO_TOP_SORT_WORLD_ZOOM_K)
+          : projectedPx;
+
+      const depthBias = cameraMode === 'top' ? 0.045 : 0.08;
+      const pos = p.clone().addScaledVector(camDir, depthBias);
       candidates.push({
         key: node.id,
         url,
-        projectedPx,
+        sortScore,
         position: [pos.x, pos.y, pos.z],
         quaternion: [pathQ.x, pathQ.y, pathQ.z, pathQ.w],
         scale: [thickness * 0.98, diagonal * 0.98, 1],
       });
     }
 
-    candidates.sort((a, b) => b.projectedPx - a.projectedPx);
-    const next = candidates.slice(0, PHOTO_MAX_PLANES_3D).map(({ projectedPx: _p, ...rest }) => rest);
+    candidates.sort((a, b) => {
+      const d = b.sortScore - a.sortScore;
+      if (Math.abs(d) > 1e-4) return d;
+      return a.key.localeCompare(b.key);
+    });
+    const next = candidates.slice(0, PHOTO_MAX_PLANES_3D).map(({ sortScore: _s, ...rest }) => rest);
     const sig = next.map((it) => `${it.key}:${it.url}`).join('|');
     if (sig !== sigRef.current) {
       sigRef.current = sig;

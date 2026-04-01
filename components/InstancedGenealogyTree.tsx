@@ -158,6 +158,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       // Same as path ribbons: avoid depth veil that hides troika labels in free/close-up views.
       depthWrite: false,
       side: THREE.DoubleSide,
+      // Léger décalage profondeur vs le ruban pour limiter le scintillement transparence (tri approximatif).
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
     mat.onBeforeCompile = (shader) => {
       shader.vertexShader = `
@@ -187,7 +191,10 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           transparent: true,
           opacity: DEFAULT_RIBBON_OPACITY,
           depthWrite: false,
-          side: THREE.DoubleSide
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 2,
       });
 
       mat.onBeforeCompile = (shader) => {
@@ -1889,6 +1896,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
             ref={boxMeshRef}
             args={[boxGeometry, boxMaterial, nodes.length]}
             frustumCulled={false}
+            renderOrder={0}
             onClick={handleBoxClick}
             onPointerOver={handleBoxHover}
             onPointerOut={handleBoxOut}
@@ -1897,6 +1905,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
             ref={pathMeshRef}
             args={[pathGeometry, pathMaterial, nodes.length]}
             frustumCulled={false}
+            renderOrder={1}
             onClick={handleBoxClick}
             onPointerOver={handleBoxHover}
             onPointerOut={handleBoxOut}
