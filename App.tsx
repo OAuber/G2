@@ -61,6 +61,17 @@ function shouldReplaceOnlinePhotoTitle(title: string): boolean {
   return false;
 }
 
+/** Démo « Rois et reines d’Europe » : Louis XIV dans le bundle enrichi (IDs GEDCOM usuels). */
+const ROYALS_DEMO_LOUIS_IDS = ['I1341', '@I1341@'] as const;
+
+function findIndividualForRoyalsDemo(data: GedcomData): Individual | null {
+  for (const id of ROYALS_DEMO_LOUIS_IDS) {
+    const indi = data.individuals[id];
+    if (indi) return indi;
+  }
+  return null;
+}
+
 type AutoSaveSnapshot = {
   savedAt: string;
   databaseName: string;
@@ -660,6 +671,7 @@ function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [topPanelOpen, setTopPanelOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [documentsTabSignal, setDocumentsTabSignal] = useState(0);
 
   const [isCreating, setIsCreating] = useState(false);
   
@@ -3653,6 +3665,8 @@ function App() {
       skipClientNormalizationFallback?: boolean;
       incomingNormalizedGedcom?: GedcomData | null;
       incomingNormalizationAlgoVersion?: string;
+      /** Démo Rois d’Europe : arbre complet, Louis XIV, 3D libre, panneaux + onglet Documents. */
+      royalsDemoPreset?: boolean;
     }
   ) => {
     setOriginalGedcomData(data);
@@ -3748,13 +3762,31 @@ function App() {
       pendingInviteTargetIndividualId && data.individuals[pendingInviteTargetIndividualId]
         ? data.individuals[pendingInviteTargetIndividualId]
         : null;
-    const initialFocus = inviteTarget || bestCandidate;
+    const royalsFocus = options?.royalsDemoPreset ? findIndividualForRoyalsDemo(data) : null;
+    if (options?.royalsDemoPreset && !royalsFocus) {
+      console.warn('[App] royalsDemoPreset: Louis XIV (I1341) introuvable dans les données — focus par défaut.');
+    }
+    const initialFocus = royalsFocus || inviteTarget || bestCandidate;
 
     if (initialFocus) {
       setRootIndividual(initialFocus);
       setSelectedIndividual(initialFocus);
-      setDisplayMode('2d-individual');
-      setRightPanelOpen(true);
+      if (options?.royalsDemoPreset && royalsFocus) {
+        // Comme le passage 2D → 3D libre (handleSetDisplayMode) : animation de vol vers
+        // computeModePosition('free', …) + OrbitControls identiques (rotation off pendant le vol, puis min/max polar).
+        setTopViewEntryFrom2D(null);
+        setTwoDOrthoHandoff(null);
+        setDisplayMode('3d-free');
+        setFlyTarget('free');
+        setShowBoxes(false);
+        setLeftPanelOpen(true);
+        setBottomPanelOpen(true);
+        setRightPanelOpen(true);
+        setDocumentsTabSignal((n) => n + 1);
+      } else {
+        setDisplayMode('2d-individual');
+        setRightPanelOpen(true);
+      }
 
       // Keep "show all" behavior to avoid apparent partial loads.
       setSelectedIdsFor2D(new Set());
@@ -4184,7 +4216,10 @@ function App() {
     }
   };
 
-  const handleImportBundle = async (file: File) => {
+  const handleImportBundle = async (
+    file: File,
+    importOptions?: { royalsDemo?: boolean },
+  ) => {
     try {
       const { gedcomContent, metadata } = await parseG2Bundle(file);
       const parsedData = parseGedcom(gedcomContent);
@@ -4197,7 +4232,11 @@ function App() {
         metadata.documentsByIndividualId as Record<string, unknown>,
         parsedData.individuals,
       );
-      handleDataLoaded(parsedData, metadata.databaseName || file.name.replace(/\.g2\.zip$/i, '').replace(/\.lifethread\.zip$/i, ''));
+      handleDataLoaded(
+        parsedData,
+        metadata.databaseName || file.name.replace(/\.g2\.zip$/i, '').replace(/\.lifethread\.zip$/i, ''),
+        { royalsDemoPreset: importOptions?.royalsDemo === true },
+      );
       setDocumentsByIndividualId(normalizedDocs);
       if (metadata.selfIdentity && typeof metadata.selfIdentity === 'object') {
         const maybeIdentity = metadata.selfIdentity as SelfIdentityPublic;
@@ -5847,6 +5886,7 @@ function App() {
         onReviewBulkDecision={handleReviewBulkDecision}
         onReviewGlobalDecision={handleReviewGlobalDecision}
         reviewFocusSignal={reviewFocusSignal}
+        documentsTabSignal={documentsTabSignal}
         selfIdentity={selfIdentity}
         isIdentifyingSelf={isIdentifyingSelf}
         identityTabSignal={identityTabSignal}

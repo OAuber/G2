@@ -3,7 +3,6 @@ import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { logGedcomImportDiagnostics, parseGedcom } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
-import { getDemoGedcom } from '../services/demoData';
 import { useI18n } from '../i18n';
 
 /* ------------------------------------------------------------------ */
@@ -190,7 +189,7 @@ export function applySortMode(
 /* ------------------------------------------------------------------ */
 interface SidebarProps {
   onDataLoaded: (data: GedcomData, name?: string) => void;
-  onImportBundle: (file: File) => Promise<void> | void;
+  onImportBundle: (file: File, options?: { royalsDemo?: boolean }) => Promise<void> | void;
   onDownloadGedcom: () => void;
   onDownloadBundle: () => void;
   onSelectIndividual: (indi: Individual) => void;
@@ -344,18 +343,21 @@ const Sidebar: React.FC<SidebarProps> = ({
     }, 100);
   };
 
-  const handleLoadDemo = () => {
-      onLoading(true);
-      setTimeout(() => {
-          try {
-            const demoData = getDemoGedcom();
-            onDataLoaded(parseGedcom(demoData), "LifeThread Demo");
-          } catch (e) {
-            console.error("Demo load failed", e);
-          } finally {
-            onLoading(false);
-          }
-      }, 500);
+  const handleLoadDemo = async () => {
+    onLoading(true);
+    try {
+      const url = `${import.meta.env.BASE_URL}royals_wikipedia_enriched.g2.zip`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`demo fetch ${res.status}`);
+      const blob = await res.blob();
+      const file = new File([blob], "Rois et reines d'Europe.g2.zip", { type: 'application/octet-stream' });
+      await onImportBundle(file, { royalsDemo: true });
+    } catch (e) {
+      console.error('Demo load failed', e);
+      alert(t('sidebar.labels.demoLoadError'));
+    } finally {
+      onLoading(false);
+    }
   };
 
   const handleBundleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -554,7 +556,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </span>
                 <input
                   type="file"
-                  accept=".lifethread.zip,.zip,application/zip"
+                  accept=".g2.zip,.lifethread.zip,.zip,application/zip"
                   onChange={handleBundleUpload}
                   className="hidden"
                   disabled={isLoading}
@@ -793,8 +795,12 @@ const Sidebar: React.FC<SidebarProps> = ({
               <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
               <div className="mt-2 flex flex-col gap-1">
                 <span className="opacity-70 text-xs">{t('sidebar.labels.noGedcom')}</span>
+                <div className={`text-xs ${textClass}`}>
+                  <div className="font-semibold leading-snug">{t('sidebar.labels.demoTitle')}</div>
+                  <div className={`${subTextClass} mt-0.5 leading-snug`}>{t('sidebar.labels.demoSource')}</div>
+                </div>
                 <button
-                  onClick={handleLoadDemo}
+                  onClick={() => void handleLoadDemo()}
                   className="text-left text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
                   disabled={isLoading}
                 >
@@ -814,8 +820,13 @@ const Sidebar: React.FC<SidebarProps> = ({
             <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
             <div className="mt-2 flex flex-col gap-1">
                  <span className="opacity-70 text-xs">{t('sidebar.labels.noGedcom')}</span>
-                 <button 
-                    onClick={handleLoadDemo} 
+                 <div className={`text-xs ${textClass}`}>
+                   <div className="font-semibold leading-snug">{t('sidebar.labels.demoTitle')}</div>
+                   <div className={`${subTextClass} mt-0.5 leading-snug`}>{t('sidebar.labels.demoSource')}</div>
+                 </div>
+                 <button
+                    type="button"
+                    onClick={() => void handleLoadDemo()}
                     className="text-left text-blue-500 hover:text-blue-400 hover:underline font-bold text-xs"
                     disabled={isLoading}
                  >

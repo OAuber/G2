@@ -135,6 +135,8 @@ interface DetailsPanelProps {
   onReviewBulkDecision?: (proposalId: string, fields: Array<keyof Individual>, decision: 'accept' | 'reject') => void;
   onReviewGlobalDecision?: (proposalId: string, decision: 'fuse' | 'reject') => void;
   reviewFocusSignal?: number;
+  /** Incrémenter pour forcer l’onglet Documents (ex. démo Rois d’Europe au chargement). */
+  documentsTabSignal?: number;
   selfIdentity: SelfIdentityPublic | null;
   isIdentifyingSelf: boolean;
   identityTabSignal?: number;
@@ -367,6 +369,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onReviewBulkDecision,
   onReviewGlobalDecision,
   reviewFocusSignal = 0,
+  documentsTabSignal = 0,
   selfIdentity,
   isIdentifyingSelf,
   identityTabSignal = 0,
@@ -613,6 +616,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       setActiveTab('review');
     }
   }, [reviewProposal?.proposalId, reviewFocusSignal]);
+
+  useEffect(() => {
+    if (documentsTabSignal > 0) {
+      setActiveTab('documents');
+    }
+  }, [documentsTabSignal]);
 
   useEffect(() => {
     if (activeTab !== 'review') return;
