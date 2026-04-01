@@ -223,6 +223,8 @@ interface SidebarProps {
   onProgramApplyUpdate: () => void;
   /** Pour filtres « Doc. en ligne / hors ligne ». */
   documentsByIndividualId?: Record<string, SortDocumentRef[]>;
+  /** Démo Rois : à l’ouverture du panneau, afficher l’onglet Liste. */
+  preferListTabWhenOpening?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -263,6 +265,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onProgramCheckUpdates,
   onProgramApplyUpdate,
   documentsByIndividualId,
+  preferListTabWhenOpening = false,
 }) => {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
@@ -270,6 +273,14 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [activePane, setActivePane] = useState<'program' | 'data' | 'list'>('data');
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prevSidebarOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (preferListTabWhenOpening && isOpen && !prevSidebarOpenRef.current) {
+      setActivePane('list');
+    }
+    prevSidebarOpenRef.current = isOpen;
+  }, [isOpen, preferListTabWhenOpening]);
 
   useEffect(() => {
     if (selectedId && isOpen) {

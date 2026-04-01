@@ -316,6 +316,9 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
 /* ------------------------------------------------------------------ */
 /*  Custom 2D controls: pan + zoom, zero rotation                      */
 /* ------------------------------------------------------------------ */
+/** Au-delà de ce déplacement (px), le geste est traité comme un pan — en dessous, le tap peut devenir un clic R3F sur le ruban / les labels. */
+const TOUCH_PAN_THRESHOLD_PX = 12;
+
 const ScrollZoomControls: React.FC<{
   enableHorizontalPan?: boolean;
   onWheelZoomIntent?: (params: { deltaY: number; currentZoom: number }) => boolean;
@@ -325,6 +328,8 @@ const ScrollZoomControls: React.FC<{
   const lastX = useRef(0);
   const lastY = useRef(0);
   const lastTouchDist = useRef<number | null>(null);
+  const touchAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const touchPanCommittedRef = useRef(false);
 
   useEffect(() => {
     const canvas = gl.domElement;
@@ -361,21 +366,26 @@ const ScrollZoomControls: React.FC<{
       Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
 
     const onTouchStart = (e: TouchEvent) => {
-      e.preventDefault();
       if (e.touches.length === 2) {
+        e.preventDefault();
+        touchAnchorRef.current = null;
+        touchPanCommittedRef.current = false;
         lastTouchDist.current = getTouchDist(e.touches[0], e.touches[1]);
         dragging.current = false;
       } else if (e.touches.length === 1) {
-        dragging.current = true;
+        // Pas de preventDefault : permet au tap d’être vu comme pointer/click par le canvas (labels, ruban).
+        touchPanCommittedRef.current = false;
+        touchAnchorRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         lastX.current = e.touches[0].clientX;
         lastY.current = e.touches[0].clientY;
+        dragging.current = false;
       }
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault();
       const ortho = camera as THREE.OrthographicCamera;
       if (e.touches.length === 2 && lastTouchDist.current !== null) {
+        e.preventDefault();
         const newDist = getTouchDist(e.touches[0], e.touches[1]);
         const scale = lastTouchDist.current / newDist; // >1 = zoom arrière, <1 = zoom avant
         const syntheticDeltaY = (scale - 1) * 500;
@@ -388,15 +398,27 @@ const ScrollZoomControls: React.FC<{
           ortho.zoom = nextZoom;
           ortho.updateProjectionMatrix();
         }
-      } else if (e.touches.length === 1 && dragging.current) {
-        const dx = e.touches[0].clientX - lastX.current;
-        const dy = e.touches[0].clientY - lastY.current;
+      } else if (e.touches.length === 1 && touchAnchorRef.current) {
+        const ax = touchAnchorRef.current.x;
+        const ay = touchAnchorRef.current.y;
+        const tx = e.touches[0].clientX;
+        const ty = e.touches[0].clientY;
+        if (!touchPanCommittedRef.current) {
+          if (Math.hypot(tx - ax, ty - ay) < TOUCH_PAN_THRESHOLD_PX) {
+            return;
+          }
+          touchPanCommittedRef.current = true;
+          dragging.current = true;
+        }
+        e.preventDefault();
+        const dx = tx - lastX.current;
+        const dy = ty - lastY.current;
         if (enableHorizontalPan) {
           camera.position.x -= dx / ortho.zoom;
         }
         camera.position.y += dy / ortho.zoom;
-        lastX.current = e.touches[0].clientX;
-        lastY.current = e.touches[0].clientY;
+        lastX.current = tx;
+        lastY.current = ty;
       }
     };
 
@@ -404,11 +426,15 @@ const ScrollZoomControls: React.FC<{
       if (e.touches.length < 2) lastTouchDist.current = null;
       if (e.touches.length === 0) {
         dragging.current = false;
+        touchAnchorRef.current = null;
+        touchPanCommittedRef.current = false;
       } else if (e.touches.length === 1) {
         // Re-ancrage pour éviter un saut lors du passage 2→1 doigt
-        dragging.current = true;
+        touchAnchorRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        touchPanCommittedRef.current = false;
         lastX.current = e.touches[0].clientX;
         lastY.current = e.touches[0].clientY;
+        dragging.current = false;
       }
     };
 
@@ -1709,6 +1735,11 @@ const GridContent: React.FC<GridContentProps> = ({
       onIndividualClick(indiTarget);
     };
 
+    const handleLabelSelectIndividual = (e: SceneMouseEvent) => {
+      e.stopPropagation();
+      onIndividualClick(indi);
+    };
+
     const renderConnector = (key: string, x1: number, y1: number, x2: number, y2: number) => {
       const dx = x2 - x1;
       const dy = y2 - y1;
@@ -1777,6 +1808,13 @@ const GridContent: React.FC<GridContentProps> = ({
           outlineColor="#000000"
           anchorX="center"
           anchorY="top"
+          onClick={handleLabelSelectIndividual}
+          onPointerOver={() => {
+            document.body.style.cursor = 'pointer';
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = 'default';
+          }}
         >
           {nameText}
         </Text>
@@ -1791,6 +1829,13 @@ const GridContent: React.FC<GridContentProps> = ({
               anchorX="left"
               anchorY="middle"
               lineHeight={0.95}
+              onClick={handleLabelSelectIndividual}
+              onPointerOver={() => {
+                document.body.style.cursor = 'pointer';
+              }}
+              onPointerOut={() => {
+                document.body.style.cursor = 'default';
+              }}
             >
               {d.text}
             </Text>

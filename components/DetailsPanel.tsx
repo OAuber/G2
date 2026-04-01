@@ -137,6 +137,8 @@ interface DetailsPanelProps {
   reviewFocusSignal?: number;
   /** Incrémenter pour forcer l’onglet Documents (ex. démo Rois d’Europe au chargement). */
   documentsTabSignal?: number;
+  /** Démo Rois : à l’ouverture du panneau, afficher l’onglet Documents (ex. mobile). */
+  preferDocumentsTabWhenOpening?: boolean;
   selfIdentity: SelfIdentityPublic | null;
   isIdentifyingSelf: boolean;
   identityTabSignal?: number;
@@ -370,6 +372,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onReviewGlobalDecision,
   reviewFocusSignal = 0,
   documentsTabSignal = 0,
+  preferDocumentsTabWhenOpening = false,
   selfIdentity,
   isIdentifyingSelf,
   identityTabSignal = 0,
@@ -416,6 +419,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [exportPassword, setExportPassword] = useState('');
   const [importPassword, setImportPassword] = useState('');
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
+  const prevRightPanelOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (preferDocumentsTabWhenOpening && isOpen && !prevRightPanelOpenRef.current) {
+      setActiveTab('documents');
+    }
+    prevRightPanelOpenRef.current = isOpen;
+  }, [isOpen, preferDocumentsTabWhenOpening]);
 
   useEffect(() => {
     if (isCreating) {

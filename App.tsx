@@ -672,6 +672,11 @@ function App() {
   const [topPanelOpen, setTopPanelOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [documentsTabSignal, setDocumentsTabSignal] = useState(0);
+  /** Démo Rois : à l’ouverture manuelle des panneaux, onglet Liste (gauche) et Documents (droite). */
+  const [royalsDemoUiPrefs, setRoyalsDemoUiPrefs] = useState<{
+    preferSidebarListOnOpen: boolean;
+    preferDocumentsOnRightOpen: boolean;
+  } | null>(null);
 
   const [isCreating, setIsCreating] = useState(false);
   
@@ -3669,6 +3674,9 @@ function App() {
       royalsDemoPreset?: boolean;
     }
   ) => {
+    if (!options?.royalsDemoPreset) {
+      setRoyalsDemoUiPrefs(null);
+    }
     setOriginalGedcomData(data);
     normalizedSnapshotAppliedRef.current = false;
     if (pendingNormalizationFallbackTimerRef.current !== null) {
@@ -3779,10 +3787,21 @@ function App() {
         setDisplayMode('3d-free');
         setFlyTarget('free');
         setShowBoxes(false);
-        setLeftPanelOpen(true);
+        const isMobileUi =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(max-width: 768px)').matches;
+        setRoyalsDemoUiPrefs({
+          preferSidebarListOnOpen: true,
+          preferDocumentsOnRightOpen: true,
+        });
         setBottomPanelOpen(true);
-        setRightPanelOpen(true);
-        setDocumentsTabSignal((n) => n + 1);
+        if (isMobileUi) {
+          // Mobile : seul le panneau bas ; gauche/droite : onglets Liste / Documents à l’ouverture manuelle.
+        } else {
+          setLeftPanelOpen(true);
+          setRightPanelOpen(true);
+          setDocumentsTabSignal((n) => n + 1);
+        }
       } else {
         setDisplayMode('2d-individual');
         setRightPanelOpen(true);
@@ -5586,6 +5605,7 @@ function App() {
         onProgramCheckUpdates={handleProgramCheckUpdates}
         onProgramApplyUpdate={handleProgramApplyUpdate}
         documentsByIndividualId={renderedDocumentsByIndividualId}
+        preferListTabWhenOpening={royalsDemoUiPrefs?.preferSidebarListOnOpen === true}
       />
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
@@ -5887,6 +5907,7 @@ function App() {
         onReviewGlobalDecision={handleReviewGlobalDecision}
         reviewFocusSignal={reviewFocusSignal}
         documentsTabSignal={documentsTabSignal}
+        preferDocumentsTabWhenOpening={royalsDemoUiPrefs?.preferDocumentsOnRightOpen === true}
         selfIdentity={selfIdentity}
         isIdentifyingSelf={isIdentifyingSelf}
         identityTabSignal={identityTabSignal}
