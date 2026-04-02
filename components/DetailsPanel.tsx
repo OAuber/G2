@@ -1972,13 +1972,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 min-h-0 flex items-center justify-center overflow-auto p-2">
-            <div className="relative inline-block max-w-full">
+          <div className="flex-1 min-h-0 w-full min-w-0 flex items-center justify-center overflow-auto overscroll-contain p-2 touch-pan-x touch-pan-y">
+            <div className="relative w-full max-w-full min-w-0 flex justify-center">
+              <div className="relative block w-full max-w-full min-w-0">
               <img
                 ref={cropImgRef}
                 src={activeCropDoc.url}
                 alt=""
-                className="max-h-[min(70vh,720px)] max-w-[min(100vw-16px,920px)] w-auto h-auto select-none touch-none block mx-auto"
+                className="block w-full max-w-full min-w-0 h-auto max-h-[min(70vh,85dvh)] object-contain object-center select-none"
                 crossOrigin={activeCropDoc.url.startsWith('http') ? 'anonymous' : undefined}
                 draggable={false}
                 onLoad={(e) => {
@@ -2020,42 +2021,55 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               )}
               {cropRect && cropImgRef.current && (
                 <div
-                  className="absolute border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5)] pointer-events-auto cursor-move"
+                  className="absolute border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5)] pointer-events-none z-[1]"
                   style={{
                     left: `${(cropRect.x / cropImgRef.current.naturalWidth) * 100}%`,
                     top: `${(cropRect.y / cropImgRef.current.naturalHeight) * 100}%`,
                     width: `${(cropRect.w / cropImgRef.current.naturalWidth) * 100}%`,
                     height: `${(cropRect.h / cropImgRef.current.naturalHeight) * 100}%`,
                   }}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    const img = cropImgRef.current;
-                    if (!img || !cropRect) return;
-                    const { nx, ny } = clientToNatural(e.clientX, e.clientY, img);
-                    setCropDrag({
-                      pointerId: e.pointerId,
-                      mode: 'move',
-                      startNx: nx,
-                      startNy: ny,
-                      startRect: { ...cropRect },
-                    });
-                  }}
                 >
+                  {/* Zone centrale uniquement : déplacer — évite la concurrence avec les poignées */}
+                  <div
+                    className="absolute z-10 cursor-grab active:cursor-grabbing touch-none pointer-events-auto"
+                    style={{
+                      top: 'max(6px, 14%)',
+                      left: 'max(6px, 14%)',
+                      right: 'max(6px, 14%)',
+                      bottom: 'max(6px, 14%)',
+                    }}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const img = cropImgRef.current;
+                      if (!img || !cropRect) return;
+                      const { nx, ny } = clientToNatural(e.clientX, e.clientY, img);
+                      setCropDrag({
+                        pointerId: e.pointerId,
+                        mode: 'move',
+                        startNx: nx,
+                        startNy: ny,
+                        startRect: { ...cropRect },
+                      });
+                    }}
+                  />
                   {(['nw', 'ne', 'sw', 'se'] as const).map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       tabIndex={-1}
-                      className={`absolute w-3.5 h-3.5 bg-white border border-slate-800 rounded-sm shadow ${
+                      className={`absolute z-20 flex items-center justify-center min-w-[44px] min-h-[44px] p-2 -m-2 pointer-events-auto touch-manipulation ${
                         mode === 'nw'
-                          ? '-left-1.5 -top-1.5 cursor-nwse-resize'
+                          ? 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize'
                           : mode === 'ne'
-                            ? '-right-1.5 -top-1.5 cursor-nesw-resize'
+                            ? 'right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize'
                             : mode === 'sw'
-                              ? '-left-1.5 -bottom-1.5 cursor-nesw-resize'
-                              : '-right-1.5 -bottom-1.5 cursor-nwse-resize'
+                              ? 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize'
+                              : 'right-0 bottom-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize'
                       }`}
+                      aria-hidden
                       onPointerDown={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         const img = cropImgRef.current;
                         if (!img || !cropRect) return;
@@ -2068,10 +2082,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                           startRect: { ...cropRect },
                         });
                       }}
-                    />
+                    >
+                      <span className="block w-3.5 h-3.5 bg-white border border-slate-800 rounded-sm shadow shrink-0" />
+                    </button>
                   ))}
                 </div>
               )}
+              </div>
             </div>
           </div>
           <div
