@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
@@ -450,6 +451,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   });
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [isSubmittingDocument, setIsSubmittingDocument] = useState(false);
+  const [addDocumentSectionOpen, setAddDocumentSectionOpen] = useState(false);
   const [editingDocTitle, setEditingDocTitle] = useState('');
   const [editingDocDate, setEditingDocDate] = useState('');
   const [editingDocAttribution, setEditingDocAttribution] = useState('');
@@ -1134,7 +1136,26 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               )}
 
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
-                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.addDocument')}</div>
+                <button
+                  type="button"
+                  aria-expanded={addDocumentSectionOpen}
+                  onClick={() => setAddDocumentSectionOpen((v) => !v)}
+                  className={`w-full flex items-center justify-between gap-2 rounded-md py-1 px-0.5 -mx-0.5 text-left ${
+                    isDarkMode ? 'hover:bg-white/5' : 'hover:bg-black/5'
+                  }`}
+                >
+                  <span className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                    {t('details.addDocument')}
+                  </span>
+                  <ChevronRight
+                    className={`w-4 h-4 shrink-0 opacity-70 transition-transform duration-200 ${
+                      addDocumentSectionOpen ? 'rotate-90' : ''
+                    }`}
+                    aria-hidden
+                  />
+                </button>
+                {addDocumentSectionOpen && (
+                <>
                 <input
                   placeholder={t('details.title')}
                   className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
@@ -1271,6 +1292,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 >
                   {isSubmittingDocument ? `${t('help.processing')}...` : t('details.addDocumentAction')}
                 </button>
+                </>
+                )}
               </div>
 
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
@@ -1950,13 +1973,22 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         )}
       </div>
 
-      {activeCropDocId && activeCropDoc?.url && (
-        <div
-          className="fixed inset-0 z-[280] flex flex-col bg-black/90 text-white"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('details.cropResize')}
-        >
+      {typeof document !== 'undefined' &&
+        activeCropDocId &&
+        activeCropDoc?.url &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[280] flex flex-col bg-black/90 text-white overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('details.cropResize')}
+            style={{
+              height: '100dvh',
+              maxHeight: '100dvh',
+              width: '100%',
+              paddingTop: 'env(safe-area-inset-top, 0px)',
+            }}
+          >
           <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-white/15">
             <span className="text-sm font-semibold truncate pr-2">{t('details.cropResize')}</span>
             <button
@@ -1972,14 +2004,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 min-h-0 w-full min-w-0 flex items-center justify-center overflow-auto overscroll-contain p-2 touch-pan-x touch-pan-y">
+          <div className="flex-1 min-h-0 w-full min-w-0 flex justify-center items-start overflow-y-auto overflow-x-hidden overscroll-contain p-2 touch-pan-x touch-pan-y">
             <div className="relative w-full max-w-full min-w-0 flex justify-center">
               <div className="relative block w-full max-w-full min-w-0">
               <img
                 ref={cropImgRef}
                 src={activeCropDoc.url}
                 alt=""
-                className="block w-full max-w-full min-w-0 h-auto max-h-[min(70vh,85dvh)] object-contain object-center select-none"
+                className="block w-full max-w-full min-w-0 h-auto object-contain object-center select-none"
                 crossOrigin={activeCropDoc.url.startsWith('http') ? 'anonymous' : undefined}
                 draggable={false}
                 onLoad={(e) => {
@@ -2170,8 +2202,9 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </div>
   );
 };
