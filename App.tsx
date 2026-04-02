@@ -7,10 +7,11 @@ import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
+import { GedcomData, Individual, Family, Gender, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
 import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
+import { applySpouseAndChildrenOnUpdate, findMergeableFamilyForNewIndividual } from './services/spouseFamilySync';
 import { ActivityLogEvent } from './services/p2pDomain';
 import { createG2Bundle, parseG2Bundle } from './services/bundleService';
 import {
@@ -4174,6 +4175,10 @@ function App() {
         currentFam.childrenIds = currentFam.childrenIds.filter(id => id !== updatedIndi.id);
         indi.familyChildId = undefined;
       }
+
+      applySpouseAndChildrenOnUpdate(newData, updatedIndi.id, formData, updatedIndi.gender, (d) =>
+        getNextId('F', d)
+      );
     }
 
     setOriginalGedcomData(newData);
@@ -5674,38 +5679,59 @@ function App() {
        });
     }
 
-    // 3. Link Spouse & Children
+    // 3. Link Spouse & Children (fusion avec une FAM mono-parentale même enfants si possible)
     if (formData.spouseId || formData.childrenIds.length > 0) {
-       let famsId: string | null = null;
-       // ... (Simplified for brevity, same logic as before) ...
-       // Create new family if needed
-       famsId = getNextId('F', newData);
-       newData.families[famsId] = { 
-         id: famsId, 
-         childrenIds: [],
-         marriageDate: formData.marriageDate ? parseDate(formData.marriageDate) : undefined
-       };
-       
-       const famRecord = newData.families[famsId];
-       if (newIndi.gender === 'F') famRecord.wifeId = newId;
-       else famRecord.husbandId = newId;
+       const mergeFam = findMergeableFamilyForNewIndividual(newData, newIndi, formData);
+       if (mergeFam) {
+         const famRecord = newData.families[mergeFam.id];
+         if (newIndi.gender === Gender.Female) {
+           famRecord.wifeId = newId;
+         } else {
+           famRecord.husbandId = newId;
+         }
+         if (formData.spouseId) {
+           const spouse = newData.individuals[formData.spouseId];
+           if (spouse.gender === Gender.Female) famRecord.wifeId = spouse.id;
+           else famRecord.husbandId = spouse.id;
+           if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
+           if (!spouse.familySpouseIds.includes(famRecord.id)) spouse.familySpouseIds.push(famRecord.id);
+         }
+         if (formData.marriageDate) {
+           famRecord.marriageDate = parseDate(formData.marriageDate);
+         }
+         formData.childrenIds.forEach((childId) => {
+           if (!famRecord.childrenIds.includes(childId)) famRecord.childrenIds.push(childId);
+           const child = newData.individuals[childId];
+           child.familyChildId = famRecord.id;
+         });
+         newData.individuals[newId].familySpouseIds = [famRecord.id];
+       } else {
+         const famsId = getNextId('F', newData);
+         newData.families[famsId] = {
+           id: famsId,
+           childrenIds: [],
+           marriageDate: formData.marriageDate ? parseDate(formData.marriageDate) : undefined,
+         };
 
-       if (formData.spouseId) {
-          const spouse = newData.individuals[formData.spouseId];
-          if (spouse.gender === 'F') famRecord.wifeId = spouse.id;
-          else famRecord.husbandId = spouse.id;
-          if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
-          spouse.familySpouseIds.push(famsId);
+         const famRecord = newData.families[famsId];
+         if (newIndi.gender === Gender.Female) famRecord.wifeId = newId;
+         else famRecord.husbandId = newId;
+
+         if (formData.spouseId) {
+           const spouse = newData.individuals[formData.spouseId];
+           if (spouse.gender === Gender.Female) famRecord.wifeId = spouse.id;
+           else famRecord.husbandId = spouse.id;
+           if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
+           spouse.familySpouseIds.push(famsId);
+         }
+
+         formData.childrenIds.forEach((childId) => {
+           famRecord.childrenIds.push(childId);
+           const child = newData.individuals[childId];
+           child.familyChildId = famsId;
+         });
+         newData.individuals[newId].familySpouseIds = [famsId];
        }
-       
-       console.log('[App] ✓ Spouse family created with marriage date:', formData.marriageDate || 'none');
-
-       formData.childrenIds.forEach(childId => {
-          famRecord.childrenIds.push(childId);
-          const child = newData.individuals[childId];
-          child.familyChildId = famsId;
-       });
-       newData.individuals[newId].familySpouseIds = [famsId];
     }
 
     setOriginalGedcomData(newData);
