@@ -183,6 +183,16 @@ function App() {
     /** Texte libre ou URL (crédit / provenance, ex. « Wikipedia » ou lien). */
     sourceAttribution?: string;
     isPrimaryPhoto?: boolean;
+    /** Lien logique partagé entre les copies « photo de groupe ». */
+    groupPhotoLinkId?: string;
+    /** Individu où la photo a été créée (seule fiche avec édition / suppression complètes). */
+    groupPhotoOriginIndividualId?: string;
+    /** Copie sur un autre individu : pas d’édition ni suppression du média ici. */
+    groupPhotoIsMirror?: boolean;
+    /** Personnes présentes sur la photo (méta, incluant l’origine). */
+    groupPhotoParticipantIds?: string[];
+    /** Masquer cette entrée sur le ruban 2D (traits) et dans le diaporama. */
+    hiddenFromRibbonSlideshow?: boolean;
   };
 
   const isImageLikeUrl = (url: string): boolean => {
@@ -231,6 +241,20 @@ function App() {
           const rawAttr = (doc as Record<string, unknown>).sourceAttribution;
           const sourceAttribution =
             typeof rawAttr === 'string' && rawAttr.trim() !== '' ? rawAttr.trim() : undefined;
+          const r = doc as Record<string, unknown>;
+          const groupPhotoLinkId = typeof r.groupPhotoLinkId === 'string' ? r.groupPhotoLinkId : undefined;
+          const groupPhotoOriginIndividualId =
+            typeof r.groupPhotoOriginIndividualId === 'string' ? r.groupPhotoOriginIndividualId : undefined;
+          const groupPhotoIsMirror = r.groupPhotoIsMirror === true;
+          const groupPhotoParticipantIds = Array.isArray(r.groupPhotoParticipantIds)
+            ? (r.groupPhotoParticipantIds as unknown[]).filter((x): x is string => typeof x === 'string')
+            : undefined;
+          const hiddenFromRibbonSlideshow =
+            r.hiddenFromRibbonSlideshow === true
+              ? true
+              : r.hiddenFromRibbonSlideshow === false
+                ? false
+                : undefined;
           return {
             id: typeof doc.id === 'string' ? doc.id : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             title,
@@ -240,6 +264,15 @@ function App() {
             date: typeof doc.date === 'string' ? doc.date : undefined,
             sourceAttribution,
             isPrimaryPhoto,
+            ...(groupPhotoLinkId ? { groupPhotoLinkId } : {}),
+            ...(groupPhotoOriginIndividualId ? { groupPhotoOriginIndividualId } : {}),
+            ...(groupPhotoIsMirror ? { groupPhotoIsMirror: true } : {}),
+            ...(groupPhotoParticipantIds && groupPhotoParticipantIds.length > 0
+              ? { groupPhotoParticipantIds }
+              : {}),
+            ...(hiddenFromRibbonSlideshow === true || hiddenFromRibbonSlideshow === false
+              ? { hiddenFromRibbonSlideshow }
+              : {}),
           } as IndividualDocument;
         })
         .filter((d): d is IndividualDocument => !!d);
@@ -921,6 +954,8 @@ function App() {
   const inviteMediaRecoveryTimerRef = useRef<number | null>(null);
   const inviteMediaRecoveryAttemptRef = useRef(0);
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
+  const handleInitP2PRef = useRef<() => void>(() => {});
+  const topPanelP2pAutoInitForOpenRef = useRef(false);
   // Libère le verrou anti double-tap dès que le mode ou l'animation change
   useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget, topViewEntryFrom2D]);
 
@@ -1192,6 +1227,9 @@ function App() {
             patch.kind === 'photo' || patch.kind === 'document'
               ? patch.kind
               : ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
+          const hiddenRaw = (patch as Record<string, unknown>).hiddenFromRibbonSlideshow;
+          const hiddenFromRibbonSlideshow =
+            hiddenRaw === true ? true : hiddenRaw === false ? false : doc.hiddenFromRibbonSlideshow;
           return {
             ...doc,
             ...patch,
@@ -1203,6 +1241,8 @@ function App() {
                 : typeof patch.sourceAttribution === 'string'
                   ? patch.sourceAttribution.trim() || undefined
                   : doc.sourceAttribution,
+            hiddenFromRibbonSlideshow:
+              hiddenFromRibbonSlideshow === true ? true : hiddenFromRibbonSlideshow === false ? false : undefined,
           };
         });
       } else if (payload.operation === 'remove' && payload.docId) {
@@ -1994,9 +2034,12 @@ function App() {
   );
   const primaryPhotoUrlById = useMemo(() => {
     const map: Record<string, string> = {};
+    const visiblePhoto = (d: IndividualDocument) =>
+      (d.kind === 'photo' || isImageLikeUrl(d.url)) && d.hiddenFromRibbonSlideshow !== true;
     for (const [individualId, docs] of Object.entries(documentsByIndividualId)) {
-      const primaryPhoto = docs.find((d) => d.kind === 'photo' && d.isPrimaryPhoto)
-        ?? docs.find((d) => d.kind === 'photo');
+      const primaryPhoto =
+        docs.find((d) => d.kind === 'photo' && d.isPrimaryPhoto && visiblePhoto(d)) ??
+        docs.find((d) => d.kind === 'photo' && visiblePhoto(d));
       if (primaryPhoto?.url) {
         map[individualId] = primaryPhoto.url;
       }
@@ -2371,7 +2414,6 @@ function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
-      p2pService.destroy();
     };
   }, [isHelpOpen]);
 
@@ -3457,6 +3499,20 @@ function App() {
       }
       initP2PWithMode('host');
   };
+
+  handleInitP2PRef.current = handleInitP2P;
+
+  useEffect(() => {
+    if (!topPanelOpen) {
+      topPanelP2pAutoInitForOpenRef.current = false;
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    if (p2pStatus !== 'disconnected') return;
+    if (topPanelP2pAutoInitForOpenRef.current) return;
+    topPanelP2pAutoInitForOpenRef.current = true;
+    handleInitP2PRef.current();
+  }, [topPanelOpen, p2pStatus]);
 
   const handleConnectP2P = (hostId: string) => {
       const targetHostId = hostId.trim();
@@ -4891,6 +4947,56 @@ function App() {
     setActiveReviewProposalId(null);
   };
 
+  const collectDocsWithLinkId = (
+    store: Record<string, IndividualDocument[]>,
+    linkId: string
+  ): Array<{ individualId: string; docId: string }> => {
+    const out: Array<{ individualId: string; docId: string }> = [];
+    for (const [iid, arr] of Object.entries(store)) {
+      for (const d of arr) {
+        if (d.groupPhotoLinkId === linkId) out.push({ individualId: iid, docId: d.id });
+      }
+    }
+    return out;
+  };
+
+  const stripMirrorsForLink = (
+    prev: Record<string, IndividualDocument[]>,
+    linkId: string
+  ): Record<string, IndividualDocument[]> => {
+    const next: Record<string, IndividualDocument[]> = { ...prev };
+    for (const iid of Object.keys(next)) {
+      next[iid] = (next[iid] || []).filter(
+        (d) => !(d.groupPhotoLinkId === linkId && d.groupPhotoIsMirror)
+      );
+    }
+    return next;
+  };
+
+  const removeAllDocsWithLinkId = (
+    prev: Record<string, IndividualDocument[]>,
+    linkId: string
+  ): Record<string, IndividualDocument[]> => {
+    const next: Record<string, IndividualDocument[]> = { ...prev };
+    for (const [iid, arr] of Object.entries(prev)) {
+      const filtered = arr.filter((d) => d.groupPhotoLinkId !== linkId);
+      if (filtered.length === arr.length) continue;
+      let row = filtered;
+      if (!row.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+        const firstPhoto = row.find((d) => d.kind === 'photo');
+        if (firstPhoto) {
+          row = row.map((d) =>
+            d.kind === 'photo' || isImageLikeUrl(d.url)
+              ? { ...d, kind: 'photo' as const, isPrimaryPhoto: d.id === firstPhoto.id }
+              : d
+          );
+        }
+      }
+      next[iid] = row;
+    }
+    return next;
+  };
+
   const handleAddDocument = (
     individualId: string,
     doc: {
@@ -4900,16 +5006,82 @@ function App() {
       kind: 'photo' | 'document';
       date?: string;
       sourceAttribution?: string;
+      /** Si défini (≥ 2 ids) et photo : crée une photo de groupe avec copies liées. */
+      groupPhotoParticipantIds?: string[];
     }
   ) => {
     const inferredKind: 'photo' | 'document' =
       doc.kind === 'photo' || isImageLikeUrl(doc.url) ? 'photo' : 'document';
+    const participantsRaw = doc.groupPhotoParticipantIds;
+    const participantIds =
+      participantsRaw && participantsRaw.length > 0
+        ? [...new Set(participantsRaw.filter(Boolean))]
+        : [];
+    const isGroupPhoto =
+      inferredKind === 'photo' &&
+      participantIds.length >= 2 &&
+      participantIds.includes(individualId);
+
+    if (isGroupPhoto) {
+      const linkId = `gplink-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const baseId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const originDoc: IndividualDocument = {
+        id: baseId,
+        title: doc.title,
+        url: doc.url,
+        source: doc.source,
+        kind: inferredKind,
+        date: doc.date,
+        sourceAttribution: doc.sourceAttribution?.trim() || undefined,
+        isPrimaryPhoto: false,
+        groupPhotoLinkId: linkId,
+        groupPhotoOriginIndividualId: individualId,
+        groupPhotoIsMirror: false,
+        groupPhotoParticipantIds: participantIds,
+      };
+
+      setDocumentsByIndividualId((prev) => {
+        if ((prev[individualId] || []).some((d) => d.id === originDoc.id)) return prev;
+        const toPeer: Array<{ individualId: string; doc: IndividualDocument }> = [];
+        let next = { ...prev };
+        for (const pid of participantIds) {
+          const isOrigin = pid === individualId;
+          const current = next[pid] || [];
+          const newDoc: IndividualDocument = isOrigin
+            ? originDoc
+            : {
+                ...originDoc,
+                id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                isPrimaryPhoto: false,
+                groupPhotoIsMirror: true,
+              };
+          const shouldBecomePrimary =
+            newDoc.kind === 'photo' &&
+            !newDoc.groupPhotoIsMirror &&
+            !current.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
+          const withPrimary = shouldBecomePrimary ? { ...newDoc, isPrimaryPhoto: true } : newDoc;
+          toPeer.push({ individualId: pid, doc: withPrimary });
+          next = { ...next, [pid]: [...current, withPrimary] };
+        }
+        queueMicrotask(() => {
+          toPeer.forEach(({ individualId: iid, doc: d }) => {
+            sendDocumentPatchToPeer({ operation: 'add', individualId: iid, doc: d });
+          });
+        });
+        return next;
+      });
+      return;
+    }
+
     const newDoc: IndividualDocument = {
       id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      ...doc,
+      title: doc.title,
+      url: doc.url,
+      source: doc.source,
       kind: inferredKind,
-      isPrimaryPhoto: false,
+      date: doc.date,
       sourceAttribution: doc.sourceAttribution?.trim() || undefined,
+      isPrimaryPhoto: false,
     };
     let addedDoc: IndividualDocument | null = null;
     setDocumentsByIndividualId((prev) => {
@@ -4929,23 +5101,51 @@ function App() {
   };
 
   const handleRemoveDocument = (individualId: string, docId: string) => {
-    setDocumentsByIndividualId((prev) => {
-      const current = prev[individualId] || [];
+    const prev = documentsRef.current;
+    const list = prev[individualId] || [];
+    const target = list.find((d) => d.id === docId);
+    if (target?.groupPhotoIsMirror) return;
+    const linkId = target?.groupPhotoLinkId;
+    const removals: Array<{ individualId: string; docId: string }> =
+      linkId && !target?.groupPhotoIsMirror
+        ? collectDocsWithLinkId(prev, linkId)
+        : [{ individualId, docId }];
+    setDocumentsByIndividualId((prevState) => {
+      if (linkId && !target?.groupPhotoIsMirror) {
+        return removeAllDocsWithLinkId(prevState, linkId);
+      }
+      const current = prevState[individualId] || [];
       const next = current.filter((doc) => doc.id !== docId);
-      return { ...prev, [individualId]: next };
+      let row = next;
+      if (!row.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+        const firstPhoto = row.find((d) => d.kind === 'photo');
+        if (firstPhoto) {
+          row = row.map((d) =>
+            d.kind === 'photo' || isImageLikeUrl(d.url)
+              ? { ...d, kind: 'photo' as const, isPrimaryPhoto: d.id === firstPhoto.id }
+              : d
+          );
+        }
+      }
+      return { ...prevState, [individualId]: row };
     });
-    sendDocumentPatchToPeer({
-      operation: 'remove',
-      individualId,
-      docId,
+    removals.forEach(({ individualId: iid, docId: did }) => {
+      sendDocumentPatchToPeer({
+        operation: 'remove',
+        individualId: iid,
+        docId: did,
+      });
     });
   };
 
   const handleSetPrimaryPhoto = (individualId: string, docId: string) => {
-    setDocumentsByIndividualId((prev) => {
-      const current = prev[individualId] || [];
+    const prev = documentsRef.current;
+    const t = prev[individualId]?.find((d) => d.id === docId);
+    if (t?.groupPhotoIsMirror) return;
+    setDocumentsByIndividualId((prevState) => {
+      const current = prevState[individualId] || [];
       return {
-        ...prev,
+        ...prevState,
         [individualId]: current.map((doc) =>
           (doc.kind === 'photo' || isImageLikeUrl(doc.url))
             ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === docId }
@@ -4960,6 +5160,171 @@ function App() {
     });
   };
 
+  const handleConvertDocumentPhotoCategory = (
+    individualId: string,
+    docId: string,
+    args: { category: 'standard' | 'group'; participantIds?: string[] }
+  ) => {
+    const store = documentsRef.current;
+    const list = store[individualId] || [];
+    const doc = list.find((d) => d.id === docId);
+    if (!doc || doc.groupPhotoIsMirror) return;
+    const isPhoto = doc.kind === 'photo' || isImageLikeUrl(doc.url);
+    if (!isPhoto) return;
+
+    if (args.category === 'standard') {
+      if (!doc.groupPhotoLinkId) return;
+      const linkId = doc.groupPhotoLinkId;
+      const mirrorRemovals = collectDocsWithLinkId(store, linkId).filter(
+        ({ individualId: iid, docId: did }) => store[iid]?.find((d) => d.id === did)?.groupPhotoIsMirror
+      );
+      setDocumentsByIndividualId((prev) => {
+        const stripped = stripMirrorsForLink(prev, linkId);
+        const row = stripped[individualId] || [];
+        return {
+          ...stripped,
+          [individualId]: row.map((d) =>
+            d.id === docId
+              ? {
+                  ...d,
+                  groupPhotoLinkId: undefined,
+                  groupPhotoOriginIndividualId: undefined,
+                  groupPhotoIsMirror: undefined,
+                  groupPhotoParticipantIds: undefined,
+                }
+              : d
+          ),
+        };
+      });
+      mirrorRemovals.forEach(({ individualId: iid, docId: did }) => {
+        sendDocumentPatchToPeer({ operation: 'remove', individualId: iid, docId: did });
+      });
+      sendDocumentPatchToPeer({
+        operation: 'update',
+        individualId,
+        docId,
+        patch: {
+          groupPhotoLinkId: undefined,
+          groupPhotoOriginIndividualId: undefined,
+          groupPhotoIsMirror: undefined,
+          groupPhotoParticipantIds: undefined,
+        },
+      });
+      return;
+    }
+
+    const participantIds = [...new Set(args.participantIds || [])];
+    if (participantIds.length < 2 || !participantIds.includes(individualId)) {
+      showTransientToast('error', t('details.groupPhotoNeedTwoPeople'));
+      return;
+    }
+
+    if (doc.groupPhotoLinkId && !doc.groupPhotoIsMirror) {
+      const linkId = doc.groupPhotoLinkId;
+      const uniqParticipants = [...new Set(participantIds)];
+      const prevKey = [...new Set(doc.groupPhotoParticipantIds || [])].sort().join('\0');
+      const nextKey = [...uniqParticipants].sort().join('\0');
+      if (prevKey === nextKey) return;
+      const mirrorRemovals = collectDocsWithLinkId(store, linkId).filter(
+        ({ individualId: iid, docId: did }) =>
+          store[iid]?.find((d) => d.id === did)?.groupPhotoIsMirror
+      );
+
+      setDocumentsByIndividualId((prev) => {
+        const stripped = stripMirrorsForLink(prev, linkId);
+        const originRow = stripped[individualId] || [];
+        const origin = originRow.find((d) => d.id === docId);
+        if (!origin) return prev;
+        const updatedOrigin: IndividualDocument = {
+          ...origin,
+          groupPhotoParticipantIds: uniqParticipants,
+        };
+        let next: Record<string, IndividualDocument[]> = {
+          ...stripped,
+          [individualId]: originRow.map((d) => (d.id === docId ? updatedOrigin : d)),
+        };
+        for (const pid of uniqParticipants) {
+          if (pid === individualId) continue;
+          const row = next[pid] || [];
+          const mirror: IndividualDocument = {
+            ...updatedOrigin,
+            id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            isPrimaryPhoto: false,
+            groupPhotoIsMirror: true,
+            groupPhotoParticipantIds: uniqParticipants,
+          };
+          next = { ...next, [pid]: [...row, mirror] };
+        }
+        return next;
+      });
+
+      mirrorRemovals.forEach(({ individualId: iid, docId: did }) => {
+        sendDocumentPatchToPeer({ operation: 'remove', individualId: iid, docId: did });
+      });
+      queueMicrotask(() => {
+        sendDocumentPatchToPeer({
+          operation: 'update',
+          individualId,
+          docId,
+          patch: { groupPhotoParticipantIds: uniqParticipants },
+        });
+        const after = documentsRef.current;
+        for (const pid of uniqParticipants) {
+          if (pid === individualId) continue;
+          const m = after[pid]?.find((d) => d.groupPhotoLinkId === linkId && d.groupPhotoIsMirror);
+          if (m) sendDocumentPatchToPeer({ operation: 'add', individualId: pid, doc: m });
+        }
+      });
+      return;
+    }
+
+    const linkId = `gplink-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    setDocumentsByIndividualId((prev) => {
+      const current = prev[individualId] || [];
+      const originDoc: IndividualDocument = {
+        ...doc,
+        groupPhotoLinkId: linkId,
+        groupPhotoOriginIndividualId: individualId,
+        groupPhotoIsMirror: false,
+        groupPhotoParticipantIds: participantIds,
+      };
+      const toPeer: Array<{ individualId: string; doc: IndividualDocument }> = [];
+      let next: Record<string, IndividualDocument[]> = {
+        ...prev,
+        [individualId]: current.map((d) => (d.id === docId ? originDoc : d)),
+      };
+      for (const pid of participantIds) {
+        if (pid === individualId) continue;
+        const row = next[pid] || [];
+        const mirror: IndividualDocument = {
+          ...originDoc,
+          id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          isPrimaryPhoto: false,
+          groupPhotoIsMirror: true,
+        };
+        toPeer.push({ individualId: pid, doc: mirror });
+        next = { ...next, [pid]: [...row, mirror] };
+      }
+      queueMicrotask(() => {
+        sendDocumentPatchToPeer({
+          operation: 'update',
+          individualId,
+          docId,
+          patch: {
+            groupPhotoLinkId: linkId,
+            groupPhotoOriginIndividualId: individualId,
+            groupPhotoIsMirror: false,
+            groupPhotoParticipantIds: participantIds,
+          },
+        });
+        toPeer.forEach(({ individualId: iid, doc: d }) => {
+          sendDocumentPatchToPeer({ operation: 'add', individualId: iid, doc: d });
+        });
+      });
+      return next;
+    });
+  };
+
   const handleUpdateDocument = (
     individualId: string,
     docId: string,
@@ -4970,47 +5335,127 @@ function App() {
       kind?: 'photo' | 'document';
       date?: string;
       sourceAttribution?: string;
+      hiddenFromRibbonSlideshow?: boolean;
     }
   ) => {
-    let patchToSend: Partial<IndividualDocument> | null = null;
+    const mergeDoc = (
+      doc: IndividualDocument,
+      p: typeof patch,
+      opts?: { preserveHidden?: boolean }
+    ): IndividualDocument => {
+      const { hiddenFromRibbonSlideshow: _ph, ...restPatch } = p;
+      const nextUrl = restPatch.url ?? doc.url;
+      const nextKind: 'photo' | 'document' =
+        restPatch.kind ?? ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
+      let hiddenVal = doc.hiddenFromRibbonSlideshow;
+      if (opts?.preserveHidden === true) hiddenVal = doc.hiddenFromRibbonSlideshow;
+      else if (p.hiddenFromRibbonSlideshow !== undefined) hiddenVal = p.hiddenFromRibbonSlideshow;
+      return {
+        ...doc,
+        ...restPatch,
+        kind: nextKind,
+        date: restPatch.date === '' ? undefined : (restPatch.date ?? doc.date),
+        sourceAttribution:
+          restPatch.sourceAttribution !== undefined
+            ? (restPatch.sourceAttribution.trim() === '' ? undefined : restPatch.sourceAttribution.trim())
+            : doc.sourceAttribution,
+        hiddenFromRibbonSlideshow: hiddenVal === true ? true : hiddenVal === false ? false : undefined,
+      };
+    };
+
+    const toPeer: Array<{ individualId: string; docId: string; patch: Partial<IndividualDocument> }> = [];
+
     setDocumentsByIndividualId((prev) => {
       const current = prev[individualId] || [];
-      const next = {
+      const target = current.find((d) => d.id === docId);
+      if (!target) return prev;
+
+      if (target.groupPhotoIsMirror) {
+        const hasForbidden = Object.entries(patch).some(
+          ([key, val]) => val !== undefined && key !== 'hiddenFromRibbonSlideshow'
+        );
+        if (hasForbidden) return prev;
+      }
+
+      const linkId = target.groupPhotoLinkId;
+      const isGroupOrigin = !!linkId && !target.groupPhotoIsMirror;
+
+      if (isGroupOrigin && linkId) {
+        const next: Record<string, IndividualDocument[]> = { ...prev };
+        for (const iid of Object.keys(next)) {
+          next[iid] = (next[iid] || []).map((d) => {
+            if (d.groupPhotoLinkId !== linkId) return d;
+            if (d.id === docId) {
+              const u = mergeDoc(d, patch);
+              toPeer.push({
+                individualId: iid,
+                docId: d.id,
+                patch: {
+                  title: u.title,
+                  url: u.url,
+                  source: u.source,
+                  kind: u.kind,
+                  date: u.date,
+                  sourceAttribution: u.sourceAttribution,
+                  isPrimaryPhoto: u.isPrimaryPhoto,
+                  hiddenFromRibbonSlideshow: u.hiddenFromRibbonSlideshow,
+                },
+              });
+              return u;
+            }
+            const mirrorOnly: typeof patch = { ...patch };
+            delete mirrorOnly.hiddenFromRibbonSlideshow;
+            const u = mergeDoc(d, mirrorOnly, { preserveHidden: true });
+            toPeer.push({
+              individualId: iid,
+              docId: d.id,
+              patch: {
+                title: u.title,
+                url: u.url,
+                source: u.source,
+                kind: u.kind,
+                date: u.date,
+                sourceAttribution: u.sourceAttribution,
+                isPrimaryPhoto: u.isPrimaryPhoto,
+              },
+            });
+            return u;
+          });
+        }
+        return next;
+      }
+
+      return {
         ...prev,
         [individualId]: current.map((doc) => {
           if (doc.id !== docId) return doc;
-          const nextUrl = patch.url ?? doc.url;
-          const nextKind: 'photo' | 'document' =
-            patch.kind ?? ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
-          const updated = {
-            ...doc,
-            ...patch,
-            kind: nextKind,
-            date: patch.date === '' ? undefined : (patch.date ?? doc.date),
-            sourceAttribution:
-              patch.sourceAttribution !== undefined
-                ? (patch.sourceAttribution.trim() === '' ? undefined : patch.sourceAttribution.trim())
-                : doc.sourceAttribution,
-          };
-          patchToSend = {
-            title: updated.title,
-            url: updated.url,
-            source: updated.source,
-            kind: updated.kind,
-            date: updated.date,
-            sourceAttribution: updated.sourceAttribution,
-            isPrimaryPhoto: updated.isPrimaryPhoto,
-          };
+          const updated = mergeDoc(doc, patch);
+          toPeer.push({
+            individualId,
+            docId,
+            patch: {
+              title: updated.title,
+              url: updated.url,
+              source: updated.source,
+              kind: updated.kind,
+              date: updated.date,
+              sourceAttribution: updated.sourceAttribution,
+              isPrimaryPhoto: updated.isPrimaryPhoto,
+              hiddenFromRibbonSlideshow: updated.hiddenFromRibbonSlideshow,
+            },
+          });
           return updated;
         }),
       };
-      return next;
     });
-    sendDocumentPatchToPeer({
-      operation: 'update',
-      individualId,
-      docId,
-      patch: patchToSend || patch,
+
+    toPeer.forEach(({ individualId: iid, docId: did, patch: p }) => {
+      sendDocumentPatchToPeer({
+        operation: 'update',
+        individualId: iid,
+        docId: did,
+        patch: p,
+      });
     });
   };
 
@@ -6075,6 +6520,7 @@ function App() {
         onAddDocument={handleAddDocument}
         onUpdateDocument={handleUpdateDocument}
         onRemoveDocument={handleRemoveDocument}
+        onConvertDocumentPhotoCategory={handleConvertDocumentPhotoCategory}
         onSetPrimaryPhoto={handleSetPrimaryPhoto}
         onReviewBulkDecision={handleReviewBulkDecision}
         onReviewGlobalDecision={handleReviewGlobalDecision}

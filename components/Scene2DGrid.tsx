@@ -101,6 +101,8 @@ interface RibbonDocument {
   kind: 'photo' | 'document';
   date?: string;
   isPrimaryPhoto?: boolean;
+  hiddenFromRibbonSlideshow?: boolean;
+  groupPhotoLinkId?: string;
 }
 
 function extractYearFromDate(input?: string): number | null {
@@ -122,6 +124,19 @@ function isImageLikeUrl(url: string): boolean {
   }
   return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
 }
+
+/** data:/blob: — plafond de textures grille plus élevé ; http(s) et autres restent au plafond réseau. */
+function isOfflinePhotoUrl(url: string): boolean {
+  const u = url.trim();
+  return u.startsWith('data:') || u.startsWith('blob:');
+}
+
+const GRID_PHOTO_PLANES_MAX_ONLINE = 10;
+const GRID_PHOTO_PLANES_MAX_OFFLINE = 100;
+
+/** Pixel transparent pour le calque image quand la diapositive est un document non image. */
+const SLIDESHOW_TRANSPARENT_PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -353,6 +368,12 @@ const ScrollZoomControls: React.FC<{
       applyZoomDelta(ortho, e.deltaY);
     };
     const onWindowWheel = (e: WheelEvent) => {
+      const raw = e.target as Node | null;
+      const scrollHost =
+        raw?.nodeType === Node.TEXT_NODE ? raw.parentElement : (raw as Element | null);
+      if (scrollHost?.closest?.('[data-no-canvas-wheel-zoom]')) {
+        return;
+      }
       const targetNode = e.target as Node | null;
       if (targetNode && canvas.contains(targetNode)) return;
       const ortho = camera as THREE.OrthographicCamera;
@@ -598,6 +619,10 @@ const GridContent: React.FC<GridContentProps> = ({
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   const [isSlideshowMode, setIsSlideshowMode] = useState(false);
   const [slideshowIndex, setSlideshowIndex] = useState(0);
+  const [slideshowCatIndividual, setSlideshowCatIndividual] = useState(true);
+  const [slideshowCatGroup, setSlideshowCatGroup] = useState(true);
+  const [slideshowCatDocuments, setSlideshowCatDocuments] = useState(true);
+  const [slideshowCaption, setSlideshowCaption] = useState<string | null>(null);
   const projectVecARef = useRef(new THREE.Vector3());
   const projectVecBRef = useRef(new THREE.Vector3());
   const revealOpacityDataRef = useRef<Float32Array | null>(null);
@@ -696,18 +721,58 @@ const GridContent: React.FC<GridContentProps> = ({
       }
       const docs = documentsByIndividualId?.[id] ?? [];
       const firstImage = docs.find(
-        (d) => !!d.url && (d.kind === 'photo' || isImageLikeUrl(d.url)),
+        (d) =>
+          !!d.url &&
+          (d.kind === 'photo' || isImageLikeUrl(d.url)) &&
+          (d as RibbonDocument).hiddenFromRibbonSlideshow !== true,
       );
       if (firstImage?.url) map[id] = firstImage.url;
     }
     return map;
   }, [ribbonData, primaryPhotoUrlById, documentsByIndividualId]);
-  const selectedImageDocs = useMemo(() => {
+
+  const slideshowCounts = useMemo(() => {
+    if (!selectedId) return { ind: 0, grp: 0, doc: 0 };
+    const docs = documentsByIndividualId?.[selectedId] ?? [];
+    let ind = 0;
+    let grp = 0;
+    let doc = 0;
+    for (const d of docs) {
+      if (!d.url || (d as RibbonDocument).hiddenFromRibbonSlideshow) continue;
+      const img = isImageLikeUrl(d.url);
+      if (img && (d as RibbonDocument).groupPhotoLinkId) grp += 1;
+      else if (img) ind += 1;
+      else doc += 1;
+    }
+    return { ind, grp, doc };
+  }, [selectedId, documentsByIndividualId]);
+
+  useEffect(() => {
+    const { ind, grp, doc: dc } = slideshowCounts;
+    if (ind + grp + dc === 0) {
+      setSlideshowCatIndividual(false);
+      setSlideshowCatGroup(false);
+      setSlideshowCatDocuments(false);
+      return;
+    }
+    setSlideshowCatIndividual(ind > 0);
+    setSlideshowCatGroup(grp > 0);
+    setSlideshowCatDocuments(dc > 0);
+  }, [slideshowCounts]);
+
+  const selectedSlideshowDocs = useMemo(() => {
     if (!selectedId) return [] as RibbonDocument[];
     const docs = (documentsByIndividualId?.[selectedId] ?? []).filter(
-      (d) => !!d.url && (d.kind === 'photo' || isImageLikeUrl(d.url)),
+      (d) => !!d.url && (d as RibbonDocument).hiddenFromRibbonSlideshow !== true,
     );
-    return docs
+    const filtered = docs.filter((d) => {
+      const img = isImageLikeUrl(d.url);
+      const isGroup = !!(d as RibbonDocument).groupPhotoLinkId;
+      if (img && isGroup) return slideshowCatGroup;
+      if (img && !isGroup) return slideshowCatIndividual;
+      return !img && slideshowCatDocuments;
+    });
+    return filtered
       .map((doc, originalIndex) => ({ doc, originalIndex, time: doc.date ? Date.parse(doc.date) : Number.NaN }))
       .sort((a, b) => {
         const aTime = Number.isFinite(a.time);
@@ -718,7 +783,38 @@ const GridContent: React.FC<GridContentProps> = ({
         return a.originalIndex - b.originalIndex;
       })
       .map((entry) => entry.doc);
-  }, [documentsByIndividualId, selectedId]);
+  }, [
+    documentsByIndividualId,
+    selectedId,
+    slideshowCatIndividual,
+    slideshowCatGroup,
+    slideshowCatDocuments,
+  ]);
+
+  const applySlideshowSlide = useCallback(
+    (index: number) => {
+      const docs = selectedSlideshowDocs;
+      if (docs.length === 0) return;
+      const doc = docs[index % docs.length];
+      if (isImageLikeUrl(doc.url)) {
+        setWindowPhotoOverrideUrl(doc.url);
+        setSlideshowCaption(null);
+      } else {
+        const fallback = selectedId ? primaryPhotoUrlById?.[selectedId] ?? null : null;
+        setWindowPhotoOverrideUrl(fallback || SLIDESHOW_TRANSPARENT_PIXEL);
+        setSlideshowCaption(doc.title || doc.url);
+      }
+    },
+    [selectedSlideshowDocs, primaryPhotoUrlById, selectedId],
+  );
+
+  useEffect(() => {
+    if (selectedSlideshowDocs.length === 0) {
+      setSlideshowIndex(0);
+      return;
+    }
+    setSlideshowIndex((i) => Math.min(i, selectedSlideshowDocs.length - 1));
+  }, [selectedSlideshowDocs]);
 
   useEffect(() => {
     // On zoom-out from slideshow mode: always stop and return to primary photo.
@@ -726,21 +822,22 @@ const GridContent: React.FC<GridContentProps> = ({
       if (isSlideshowPlaying) setIsSlideshowPlaying(false);
       if (slideshowIndex !== 0) setSlideshowIndex(0);
       if (windowPhotoOverrideUrl !== null) setWindowPhotoOverrideUrl(null);
+      setSlideshowCaption(null);
       setIsSlideshowMode(false);
     }
   }, [isAtZoomLimit, isSlideshowMode, isSlideshowPlaying, slideshowIndex, windowPhotoOverrideUrl]);
 
   useEffect(() => {
-    if (!isSlideshowMode || !isSlideshowPlaying || !isAtZoomLimit || selectedImageDocs.length === 0) return;
+    if (!isSlideshowMode || !isSlideshowPlaying || !isAtZoomLimit || selectedSlideshowDocs.length === 0) return;
     const handle = window.setInterval(() => {
       setSlideshowIndex((prev) => {
-        const next = (prev + 1) % selectedImageDocs.length;
-        setWindowPhotoOverrideUrl(selectedImageDocs[next].url);
+        const next = (prev + 1) % selectedSlideshowDocs.length;
+        applySlideshowSlide(next);
         return next;
       });
     }, 2200);
     return () => window.clearInterval(handle);
-  }, [isSlideshowMode, isSlideshowPlaying, isAtZoomLimit, selectedImageDocs]);
+  }, [isSlideshowMode, isSlideshowPlaying, isAtZoomLimit, selectedSlideshowDocs, applySlideshowSlide]);
 
   useEffect(() => {
     // In build, pointer-out may not fire when markers are hidden at zoom-max.
@@ -970,6 +1067,7 @@ const GridContent: React.FC<GridContentProps> = ({
       setIsSlideshowMode(false);
       if (slideshowIndex !== 0) setSlideshowIndex(0);
       if (windowPhotoOverrideUrl !== null) setWindowPhotoOverrideUrl(null);
+      setSlideshowCaption(null);
     }
     const visW = (ortho.right - ortho.left) / ortho.zoom;
     const visH = (ortho.top - ortho.bottom) / ortho.zoom;
@@ -1357,6 +1455,8 @@ const GridContent: React.FC<GridContentProps> = ({
         const halfW = RIBBON_W / 2;
         const visiblePhotoIndices: number[] = [];
         const nextPlanes: Array<{ key: string; url: string; cx: number; cy: number; h: number }> = [];
+        let gridPhotoPlanesOffline = 0;
+        let gridPhotoPlanesOnline = 0;
         for (let idx = 0; idx < ribbonData.length; idx += 1) {
           const rd = ribbonData[idx];
           const url = photoUrlByIndividualId[rd.individual.id];
@@ -1374,7 +1474,11 @@ const GridContent: React.FC<GridContentProps> = ({
             (cy - halfH <= viewTop);
           if (!intersectsView) continue;
           visiblePhotoIndices.push(idx);
-          if (nextPlanes.length < 10) {
+          const offline = isOfflinePhotoUrl(url);
+          const underCap = offline
+            ? gridPhotoPlanesOffline < GRID_PHOTO_PLANES_MAX_OFFLINE
+            : gridPhotoPlanesOnline < GRID_PHOTO_PLANES_MAX_ONLINE;
+          if (underCap) {
             nextPlanes.push({
               key: rd.individual.id,
               url,
@@ -1382,6 +1486,8 @@ const GridContent: React.FC<GridContentProps> = ({
               cy,
               h,
             });
+            if (offline) gridPhotoPlanesOffline += 1;
+            else gridPhotoPlanesOnline += 1;
           }
         }
         ortho.updateMatrixWorld();
@@ -1725,6 +1831,7 @@ const GridContent: React.FC<GridContentProps> = ({
     const docMarkerH = 0.2 * YEAR;
     const docMarkerX = cx - (RIBBON_W / 2) + (docMarkerW / 2) + (0.15 * YEAR);
     const photoDocColor = '#d6b98c';
+    const groupPhotoDocColor = '#4a8dbd';
     const textDocColor = '#8b5a2b';
 
     const handleRelationTextClick = (id?: string) => (e: SceneMouseEvent) => {
@@ -1756,7 +1863,9 @@ const GridContent: React.FC<GridContentProps> = ({
       );
     };
 
-    const docs = (documentsByIndividualId?.[indi.id] ?? []).filter((d) => !!d.url);
+    const docs = (documentsByIndividualId?.[indi.id] ?? []).filter(
+      (d) => !!d.url && (d as RibbonDocument).hiddenFromRibbonSlideshow !== true,
+    );
     const docsWithYear = docs
       .map((doc, originalIndex) => ({ doc, originalIndex, year: extractYearFromDate(doc.date) }))
       .sort((a, b) => {
@@ -1779,11 +1888,17 @@ const GridContent: React.FC<GridContentProps> = ({
         const p = undatedCursor / (undatedCount + 1);
         y = cy - rH / 2 + p * rH;
       }
+      const isImgMarker = doc.kind === 'photo' || isImageLikeUrl(doc.url);
+      const markerColor = !isImgMarker
+        ? textDocColor
+        : (doc as RibbonDocument).groupPhotoLinkId
+          ? groupPhotoDocColor
+          : photoDocColor;
       return {
         key: `doc-marker-${doc.id}-${sortedIndex}`,
         doc,
         y,
-        color: doc.kind === 'photo' ? photoDocColor : textDocColor,
+        color: markerColor,
       };
     });
     const minDocGap = 0.28 * YEAR;
@@ -1983,7 +2098,8 @@ const GridContent: React.FC<GridContentProps> = ({
               )}
             </group>
           ))}
-        {hideDocAndChildMarkers && selectedImageDocs.length > 0 && (
+        {hideDocAndChildMarkers &&
+          slideshowCounts.ind + slideshowCounts.grp + slideshowCounts.doc > 0 && (
           <Html fullscreen transform={false}>
             <div
               style={{
@@ -1992,20 +2108,23 @@ const GridContent: React.FC<GridContentProps> = ({
                 top: '50%',
                 transform: 'translateY(-50%)',
                 display: 'flex',
-                flexDirection: 'row',
-                gap: 7,
+                flexDirection: 'column',
+                gap: 8,
                 pointerEvents: 'auto',
                 zIndex: 9999,
               }}
             >
+              <div style={{ display: 'flex', flexDirection: 'row', gap: 7 }}>
               <button
                 type="button"
+                disabled={selectedSlideshowDocs.length === 0}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (selectedSlideshowDocs.length === 0) return;
                   setIsSlideshowMode(true);
                   setIsSlideshowPlaying(true);
                   setSlideshowIndex(0);
-                  setWindowPhotoOverrideUrl(selectedImageDocs[0].url);
+                  applySlideshowSlide(0);
                 }}
                 style={{
                   width: 58,
@@ -2015,7 +2134,8 @@ const GridContent: React.FC<GridContentProps> = ({
                   background: isDarkMode ? 'rgba(32, 20, 8, 0.52)' : 'rgba(236, 210, 169, 0.62)',
                   color: isDarkMode ? '#e2e8f0' : '#0f172a',
                   padding: 0,
-                  cursor: 'pointer',
+                  cursor: selectedSlideshowDocs.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: selectedSlideshowDocs.length === 0 ? 0.45 : 1,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -2028,13 +2148,15 @@ const GridContent: React.FC<GridContentProps> = ({
               </button>
               <button
                 type="button"
+                disabled={selectedSlideshowDocs.length === 0}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (selectedSlideshowDocs.length === 0) return;
                   setIsSlideshowMode(true);
                   setIsSlideshowPlaying(false);
-                  const next = (slideshowIndex + 1) % selectedImageDocs.length;
+                  const next = (slideshowIndex + 1) % selectedSlideshowDocs.length;
                   setSlideshowIndex(next);
-                  setWindowPhotoOverrideUrl(selectedImageDocs[next].url);
+                  applySlideshowSlide(next);
                 }}
                 style={{
                   width: 58,
@@ -2044,7 +2166,8 @@ const GridContent: React.FC<GridContentProps> = ({
                   background: isDarkMode ? 'rgba(32, 20, 8, 0.52)' : 'rgba(236, 210, 169, 0.62)',
                   color: isDarkMode ? '#e2e8f0' : '#0f172a',
                   padding: 0,
-                  cursor: 'pointer',
+                  cursor: selectedSlideshowDocs.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: selectedSlideshowDocs.length === 0 ? 0.45 : 1,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -2083,6 +2206,85 @@ const GridContent: React.FC<GridContentProps> = ({
                   <rect x="14" y="6" width="3" height="12" rx="1" fill="currentColor" />
                 </svg>
               </button>
+            </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  fontSize: 11,
+                  lineHeight: 1.2,
+                  color: isDarkMode ? '#e2e8f0' : '#1e293b',
+                  maxWidth: 200,
+                }}
+              >
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: slideshowCounts.ind > 0 ? 'pointer' : 'default',
+                    opacity: slideshowCounts.ind > 0 ? 1 : 0.4,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={slideshowCounts.ind === 0}
+                    checked={slideshowCatIndividual && slideshowCounts.ind > 0}
+                    onChange={(e) => setSlideshowCatIndividual(e.target.checked)}
+                  />
+                  <span>{t('scene2d.slideshowCatIndividual')}</span>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: slideshowCounts.grp > 0 ? 'pointer' : 'default',
+                    opacity: slideshowCounts.grp > 0 ? 1 : 0.4,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={slideshowCounts.grp === 0}
+                    checked={slideshowCatGroup && slideshowCounts.grp > 0}
+                    onChange={(e) => setSlideshowCatGroup(e.target.checked)}
+                  />
+                  <span>{t('scene2d.slideshowCatGroup')}</span>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: slideshowCounts.doc > 0 ? 'pointer' : 'default',
+                    opacity: slideshowCounts.doc > 0 ? 1 : 0.4,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={slideshowCounts.doc === 0}
+                    checked={slideshowCatDocuments && slideshowCounts.doc > 0}
+                    onChange={(e) => setSlideshowCatDocuments(e.target.checked)}
+                  />
+                  <span>{t('scene2d.slideshowCatDocuments')}</span>
+                </label>
+              </div>
+              {slideshowCaption && isSlideshowMode && (
+                <div
+                  style={{
+                    fontSize: 11,
+                    maxWidth: 220,
+                    padding: '6px 8px',
+                    borderRadius: 8,
+                    background: isDarkMode ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.92)',
+                    border: isDarkMode ? '1px solid #334155' : '1px solid #cbd5e1',
+                    color: isDarkMode ? '#e2e8f0' : '#0f172a',
+                  }}
+                >
+                  {slideshowCaption}
+                </div>
+              )}
             </div>
           </Html>
         )}

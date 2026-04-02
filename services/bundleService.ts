@@ -11,6 +11,11 @@ export type BundleIndividualDocument = {
   /** Crédit / provenance (texte ou URL), même modèle que dans l’app. */
   sourceAttribution?: string;
   isPrimaryPhoto?: boolean;
+  groupPhotoLinkId?: string;
+  groupPhotoOriginIndividualId?: string;
+  groupPhotoIsMirror?: boolean;
+  groupPhotoParticipantIds?: string[];
+  hiddenFromRibbonSlideshow?: boolean;
 };
 
 /**
@@ -44,6 +49,15 @@ export function serializeDocumentsByIndividualIdForBundle(
       const sourceAttribution =
         typeof sa === 'string' && sa.trim() !== '' ? sa.trim() : undefined;
       const isPrimaryPhoto = d.isPrimaryPhoto === true;
+      const groupPhotoLinkId = typeof d.groupPhotoLinkId === 'string' ? d.groupPhotoLinkId : undefined;
+      const groupPhotoOriginIndividualId =
+        typeof d.groupPhotoOriginIndividualId === 'string' ? d.groupPhotoOriginIndividualId : undefined;
+      const groupPhotoIsMirror = d.groupPhotoIsMirror === true;
+      const groupPhotoParticipantIds = Array.isArray(d.groupPhotoParticipantIds)
+        ? (d.groupPhotoParticipantIds as unknown[]).filter((x): x is string => typeof x === 'string')
+        : undefined;
+      const hiddenFromRibbonSlideshow =
+        typeof d.hiddenFromRibbonSlideshow === 'boolean' ? d.hiddenFromRibbonSlideshow : undefined;
       docs.push({
         id,
         title,
@@ -53,6 +67,15 @@ export function serializeDocumentsByIndividualIdForBundle(
         ...(date ? { date } : {}),
         ...(sourceAttribution ? { sourceAttribution } : {}),
         ...(isPrimaryPhoto ? { isPrimaryPhoto: true } : {}),
+        ...(groupPhotoLinkId ? { groupPhotoLinkId } : {}),
+        ...(groupPhotoOriginIndividualId ? { groupPhotoOriginIndividualId } : {}),
+        ...(groupPhotoIsMirror ? { groupPhotoIsMirror: true } : {}),
+        ...(groupPhotoParticipantIds && groupPhotoParticipantIds.length > 0
+          ? { groupPhotoParticipantIds }
+          : {}),
+        ...(hiddenFromRibbonSlideshow === true || hiddenFromRibbonSlideshow === false
+          ? { hiddenFromRibbonSlideshow }
+          : {}),
       });
     }
     out[individualId] = docs;

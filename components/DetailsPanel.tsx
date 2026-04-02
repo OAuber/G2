@@ -113,6 +113,11 @@ interface DetailsPanelProps {
     date?: string;
     sourceAttribution?: string;
     isPrimaryPhoto?: boolean;
+    groupPhotoLinkId?: string;
+    groupPhotoOriginIndividualId?: string;
+    groupPhotoIsMirror?: boolean;
+    groupPhotoParticipantIds?: string[];
+    hiddenFromRibbonSlideshow?: boolean;
   }>;
   onOpenReviewProposal?: (proposalId: string) => void;
   onAddDocument?: (individualId: string, doc: {
@@ -122,6 +127,7 @@ interface DetailsPanelProps {
     kind: 'photo' | 'document';
     date?: string;
     sourceAttribution?: string;
+    groupPhotoParticipantIds?: string[];
   }) => void;
   onUpdateDocument?: (individualId: string, docId: string, patch: {
     title?: string;
@@ -130,8 +136,15 @@ interface DetailsPanelProps {
     kind?: 'photo' | 'document';
     date?: string;
     sourceAttribution?: string;
+    hiddenFromRibbonSlideshow?: boolean;
   }) => void;
   onRemoveDocument?: (individualId: string, docId: string) => void;
+  /** Conversion photo individuelle ↔ groupe (origine uniquement). */
+  onConvertDocumentPhotoCategory?: (
+    individualId: string,
+    docId: string,
+    args: { category: 'standard' | 'group'; participantIds?: string[] }
+  ) => void;
   onSetPrimaryPhoto?: (individualId: string, docId: string) => void;
   onReviewBulkDecision?: (proposalId: string, fields: Array<keyof Individual>, decision: 'accept' | 'reject') => void;
   onReviewGlobalDecision?: (proposalId: string, decision: 'fuse' | 'reject') => void;
@@ -321,13 +334,15 @@ interface SearchMultiSelectProps {
   inputBg: string;
   textClass: string;
   subTextClass: string;
+  searchPlaceholder?: string;
 }
 
 const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
-  values, onChange, options, inputBg, textClass, subTextClass,
+  values, onChange, options, inputBg, textClass, subTextClass, searchPlaceholder,
 }) => {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
+  const placeholder = searchPlaceholder ?? t('details.childrenSearch');
 
   const filtered = useMemo(() => {
     const selected = options.filter(p => values.includes(p.id));
@@ -350,7 +365,7 @@ const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
     <div>
       <input
         className={`w-full rounded px-2 py-1 text-sm border outline-none mb-1 ${inputBg}`}
-        placeholder={t('details.childrenSearch')}
+        placeholder={placeholder}
         value={query}
         onChange={e => setQuery(e.target.value)}
       />
@@ -406,6 +421,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onAddDocument,
   onUpdateDocument,
   onRemoveDocument,
+  onConvertDocumentPhotoCategory,
   onSetPrimaryPhoto,
   onReviewBulkDecision,
   onReviewGlobalDecision,
@@ -440,6 +456,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     date: string;
     sourceAttribution: string;
     file: File | null;
+    photoCategory: 'standard' | 'group';
+    groupPhotoOtherIndividualIds: string[];
   }>({
     title: '',
     url: '',
@@ -448,8 +466,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     date: '',
     sourceAttribution: '',
     file: null,
+    photoCategory: 'standard',
+    groupPhotoOtherIndividualIds: [],
   });
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [editingPhotoCategory, setEditingPhotoCategory] = useState<'standard' | 'group'>('standard');
+  const [editingGroupParticipantIds, setEditingGroupParticipantIds] = useState<string[]>([]);
   const [isSubmittingDocument, setIsSubmittingDocument] = useState(false);
   const [addDocumentSectionOpen, setAddDocumentSectionOpen] = useState(false);
   const [editingDocTitle, setEditingDocTitle] = useState('');
@@ -717,7 +739,262 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     }
   }, [individual?.id, documents, photoDocuments]);
   const galleryPhoto = photoDocuments[photoGalleryIndex];
+  const documentsPartition = useMemo(() => {
+    const group: typeof documents = [];
+    const std: typeof documents = [];
+    for (const d of documents) {
+      if (d.groupPhotoLinkId) group.push(d);
+      else std.push(d);
+    }
+    return { standardDocs: std, groupDocs: group };
+  }, [documents]);
   const selectedIndividualId = individual?.id || null;
+
+  const renderDocumentRow = (doc: (typeof documents)[number]) => {
+    const isPhotoDoc = doc.kind === 'photo' || doc.url.startsWith('data:image/');
+    const isMirror = doc.groupPhotoIsMirror === true;
+    const originLabel =
+      data && doc.groupPhotoOriginIndividualId
+        ? getName(doc.groupPhotoOriginIndividualId)
+        : doc.groupPhotoOriginIndividualId || '';
+    const participantLine =
+      doc.groupPhotoParticipantIds && doc.groupPhotoParticipantIds.length > 0
+        ? doc.groupPhotoParticipantIds.map((id) => getName(id)).join(', ')
+        : '';
+    return (
+      <div key={doc.id} className={`rounded border p-1.5 ${inputBg}`}>
+        <div className="flex items-start justify-between gap-1.5">
+          <div className="min-w-0 flex-1">
+            <div className={`text-xs font-semibold leading-tight truncate ${textClass}`}>{doc.title}</div>
+            <div className={`text-[10px] leading-tight mt-0.5 ${subTextClass}`}>
+              {doc.kind} · {doc.source}
+              {doc.date ? ` · ${doc.date}` : ''}
+              {doc.groupPhotoLinkId ? ` · ${t('details.groupPhotoBadge')}` : ''}
+            </div>
+            {participantLine ? (
+              <div className={`text-[10px] mt-0.5 ${subTextClass}`}>
+                {t('details.groupPhotoParticipants')}: {participantLine}
+              </div>
+            ) : null}
+            {isMirror ? (
+              <div className={`text-[10px] mt-0.5 ${subTextClass} italic`}>
+                {t('details.groupPhotoManagedFrom')} {originLabel}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]">
+            {!isMirror && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (editingDocId === doc.id) {
+                    setEditingDocId(null);
+                    setEditingDocTitle('');
+                    setEditingDocDate('');
+                    setEditingDocAttribution('');
+                    setEditingPhotoCategory('standard');
+                    setEditingGroupParticipantIds([]);
+                    return;
+                  }
+                  setEditingDocId(doc.id);
+                  setEditingDocTitle(doc.title || '');
+                  setEditingDocDate(doc.date || '');
+                  setEditingDocAttribution(doc.sourceAttribution || '');
+                  setEditingPhotoCategory(doc.groupPhotoLinkId ? 'group' : 'standard');
+                  setEditingGroupParticipantIds(
+                    (doc.groupPhotoParticipantIds || []).filter((id) => id !== individual?.id)
+                  );
+                }}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${inputBg}`}
+              >
+                {editingDocId === doc.id ? t('details.close') : t('details.edit')}
+              </button>
+            )}
+            {isPhotoDoc && onUpdateDocument && !isMirror && (
+              <button
+                type="button"
+                title={t('details.cropResize')}
+                aria-label={t('details.cropResize')}
+                onClick={() => {
+                  setCropDrag(null);
+                  setActiveCropDocId(doc.id);
+                  setCropRect(null);
+                }}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                  isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'
+                } ${subTextClass}`}
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  <Crop className="w-3 h-3" />
+                  <span className="hidden sm:inline">{t('details.cropResize')}</span>
+                </span>
+              </button>
+            )}
+            {isPhotoDoc && !isMirror && (
+              <button
+                type="button"
+                onClick={() => individual && onSetPrimaryPhoto?.(individual.id, doc.id)}
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
+              >
+                {doc.isPrimaryPhoto ? t('details.primary') : t('details.setPrimary')}
+              </button>
+            )}
+            {isPhotoDoc && (
+              <button
+                type="button"
+                onClick={() =>
+                  individual &&
+                  onUpdateDocument?.(individual.id, doc.id, {
+                    hiddenFromRibbonSlideshow: !doc.hiddenFromRibbonSlideshow,
+                  })
+                }
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  doc.hiddenFromRibbonSlideshow ? 'bg-amber-600 text-white' : inputBg
+                }`}
+                title={t('details.hideFromRibbonSlideshowHint')}
+              >
+                {doc.hiddenFromRibbonSlideshow ? t('details.showOnRibbon') : t('details.hideFromRibbon')}
+              </button>
+            )}
+            {!isMirror && (
+              <button
+                type="button"
+                onClick={() => individual && onRemoveDocument?.(individual.id, doc.id)}
+                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-600 text-white"
+              >
+                {t('details.delete')}
+              </button>
+            )}
+          </div>
+        </div>
+        {!isMirror && editingDocId === doc.id && (
+          <div
+            className={`mt-1.5 pt-1.5 space-y-1.5 border-t ${
+              isDarkMode ? 'border-slate-700' : 'border-slate-200'
+            }`}
+          >
+            <input
+              type="text"
+              placeholder={t('details.documentName')}
+              className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
+              value={editingDocTitle}
+              onChange={(e) => setEditingDocTitle(e.target.value)}
+            />
+            <label className={`block text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+              {t('details.sourceAttribution')}
+            </label>
+            <input
+              type="text"
+              placeholder={t('details.sourceAttributionPlaceholder')}
+              className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
+              value={editingDocAttribution}
+              onChange={(e) => setEditingDocAttribution(e.target.value)}
+            />
+            {isPhotoDoc && individual && (
+              <div className="space-y-1 pt-1">
+                <label className={`block text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+                  {t('details.photoCategoryLabel')}
+                </label>
+                <select
+                  className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
+                  value={editingPhotoCategory}
+                  onChange={(e) => {
+                    const v = e.target.value as 'standard' | 'group';
+                    setEditingPhotoCategory(v);
+                    if (v === 'standard') setEditingGroupParticipantIds([]);
+                  }}
+                >
+                  <option value="standard">{t('details.photoCategoryStandard')}</option>
+                  <option value="group">{t('details.photoCategoryGroup')}</option>
+                </select>
+                {editingPhotoCategory === 'group' && (
+                  <>
+                    <label className={`block text-[10px] font-bold mt-1 ${subTextClass}`}>
+                      {t('details.groupPhotoOtherPeople')}
+                    </label>
+                    <SearchMultiSelect
+                      values={editingGroupParticipantIds}
+                      onChange={setEditingGroupParticipantIds}
+                      options={allIndividuals.filter((p) => p.id !== individual.id)}
+                      inputBg={inputBg}
+                      textClass={textClass}
+                      subTextClass={subTextClass}
+                      searchPlaceholder={t('details.groupPhotoSearch')}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-1">
+              <input
+                type="date"
+                className={`rounded px-1.5 py-1 text-[11px] border outline-none flex-1 min-w-[7rem] ${inputBg}`}
+                value={editingDocDate}
+                onChange={(e) => setEditingDocDate(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!individual) return;
+                  const isPd = doc.kind === 'photo' || doc.url.startsWith('data:image/');
+                  const wasGroup = !!doc.groupPhotoLinkId;
+                  const wantGroup = editingPhotoCategory === 'group';
+                  const fullParticipants = wantGroup
+                    ? [...new Set([individual.id, ...editingGroupParticipantIds])]
+                    : [];
+                  const oldP = (doc.groupPhotoParticipantIds || []).slice().sort().join('\0');
+                  const newP = fullParticipants.slice().sort().join('\0');
+                  const groupParticipantsChanged = wasGroup && wantGroup && oldP !== newP;
+                  const categorySwitch = isPd && (wasGroup !== wantGroup || groupParticipantsChanged);
+                  if (categorySwitch && onConvertDocumentPhotoCategory) {
+                    if (wantGroup && fullParticipants.length < 2) {
+                      window.alert(t('details.groupPhotoNeedTwoPeople'));
+                      return;
+                    }
+                    onConvertDocumentPhotoCategory(individual.id, doc.id, {
+                      category: editingPhotoCategory,
+                      participantIds: wantGroup ? fullParticipants : undefined,
+                    });
+                  }
+                  onUpdateDocument?.(individual.id, doc.id, {
+                    title: editingDocTitle.trim() || doc.title,
+                    date: editingDocDate || undefined,
+                    sourceAttribution: editingDocAttribution.trim(),
+                  });
+                  const pi = photoDocuments.findIndex((d) => d.id === doc.id);
+                  if (pi >= 0) setPhotoGalleryIndex(pi);
+                  setEditingDocId(null);
+                  setEditingDocTitle('');
+                  setEditingDocDate('');
+                  setEditingDocAttribution('');
+                  setEditingPhotoCategory('standard');
+                  setEditingGroupParticipantIds([]);
+                }}
+                className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
+              >
+                {t('details.save')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingDocId(null);
+                  setEditingDocTitle('');
+                  setEditingDocDate('');
+                  setEditingDocAttribution('');
+                  setEditingPhotoCategory('standard');
+                  setEditingGroupParticipantIds([]);
+                }}
+                className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
+              >
+                {t('details.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const isSelectedSelf = !!selfIdentity && !!selectedIndividualId && selfIdentity.individualId === selectedIndividualId;
   const showClaimBlock = !selfIdentity;
   const showSelfIdentityData = !!selfIdentity && isSelectedSelf;
@@ -842,6 +1119,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   return (
     <div 
+      data-no-canvas-wheel-zoom
       className={`absolute right-0 top-0 bottom-0 w-80 ${bgClass} border-l flex flex-col shadow-xl z-[120] transition-all duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
       style={{ touchAction: 'pan-y' }}
       onMouseEnter={onMouseEnter}
@@ -1174,12 +1452,57 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   <select
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     value={docForm.kind}
-                    onChange={(e) => setDocForm((prev) => ({ ...prev, kind: e.target.value as 'photo' | 'document' }))}
+                    onChange={(e) =>
+                      setDocForm((prev) => ({
+                        ...prev,
+                        kind: e.target.value as 'photo' | 'document',
+                        photoCategory: e.target.value === 'document' ? 'standard' : prev.photoCategory,
+                        groupPhotoOtherIndividualIds: e.target.value === 'document' ? [] : prev.groupPhotoOtherIndividualIds,
+                      }))
+                    }
                   >
                     <option value="photo">{t('details.photo')}</option>
                     <option value="document">{t('details.document')}</option>
                   </select>
                 </div>
+                {docForm.kind === 'photo' && (
+                  <div>
+                    <label className={`block text-[10px] font-bold uppercase tracking-wider mb-1 ${subTextClass}`}>
+                      {t('details.photoCategoryLabel')}
+                    </label>
+                    <select
+                      className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                      value={docForm.photoCategory}
+                      onChange={(e) =>
+                        setDocForm((prev) => ({
+                          ...prev,
+                          photoCategory: e.target.value as 'standard' | 'group',
+                          groupPhotoOtherIndividualIds: e.target.value === 'standard' ? [] : prev.groupPhotoOtherIndividualIds,
+                        }))
+                      }
+                    >
+                      <option value="standard">{t('details.photoCategoryStandard')}</option>
+                      <option value="group">{t('details.photoCategoryGroup')}</option>
+                    </select>
+                  </div>
+                )}
+                {docForm.kind === 'photo' && docForm.photoCategory === 'group' && individual && (
+                  <div>
+                    <label className={`block text-xs font-bold ${subTextClass} mb-1`}>
+                      {t('details.groupPhotoOtherPeople')}
+                    </label>
+                    <SearchMultiSelect
+                      values={docForm.groupPhotoOtherIndividualIds}
+                      onChange={(ids) => setDocForm((prev) => ({ ...prev, groupPhotoOtherIndividualIds: ids }))}
+                      options={allIndividuals.filter((p) => p.id !== individual.id)}
+                      inputBg={inputBg}
+                      textClass={textClass}
+                      subTextClass={subTextClass}
+                      searchPlaceholder={t('details.groupPhotoSearch')}
+                    />
+                    <p className={`text-[10px] mt-1 ${subTextClass}`}>{t('details.groupPhotoHint')}</p>
+                  </div>
+                )}
                 {docForm.source === 'online' ? (
                   <input
                     placeholder={t('details.webUrlPlaceholder')}
@@ -1271,6 +1594,20 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(resolvedUrl)
                           ? 'photo'
                           : 'document';
+                      const participantIds =
+                        inferredKind === 'photo' &&
+                        docForm.photoCategory === 'group' &&
+                        individual
+                          ? [...new Set([individual.id, ...docForm.groupPhotoOtherIndividualIds])]
+                          : undefined;
+                      if (
+                        inferredKind === 'photo' &&
+                        docForm.photoCategory === 'group' &&
+                        (!participantIds || participantIds.length < 2)
+                      ) {
+                        window.alert(t('details.groupPhotoNeedTwoPeople'));
+                        return;
+                      }
                       onAddDocument(individual.id, {
                         title: docForm.title,
                         url: resolvedUrl,
@@ -1278,13 +1615,26 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         kind: inferredKind,
                         date: docForm.date || undefined,
                         sourceAttribution: docForm.sourceAttribution.trim() || undefined,
+                        ...(participantIds && participantIds.length >= 2
+                          ? { groupPhotoParticipantIds: participantIds }
+                          : {}),
                       });
                       const willShowInGallery =
                         inferredKind === 'photo' || resolvedUrl.startsWith('data:image/');
                       if (willShowInGallery) {
                         setPhotoGalleryIndex(photoDocuments.length);
                       }
-                      setDocForm({ title: '', url: '', source: 'local', kind: 'photo', date: '', sourceAttribution: '', file: null });
+                      setDocForm({
+                        title: '',
+                        url: '',
+                        source: 'local',
+                        kind: 'photo',
+                        date: '',
+                        sourceAttribution: '',
+                        file: null,
+                        photoCategory: 'standard',
+                        groupPhotoOtherIndividualIds: [],
+                      });
                     } finally {
                       setIsSubmittingDocument(false);
                     }
@@ -1300,144 +1650,26 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.documentList')}</div>
                 {documents.length === 0 ? (
                   <p className={`text-xs ${subTextClass}`}>{t('details.noDocumentsYet')}</p>
-                ) : documents.map((doc) => {
-                  const isPhotoDoc = doc.kind === 'photo' || doc.url.startsWith('data:image/');
-                  return (
-                  <div key={doc.id} className={`rounded border p-1.5 ${inputBg}`}>
-                    <div className="flex items-start justify-between gap-1.5">
-                      <div className="min-w-0 flex-1">
-                        <div className={`text-xs font-semibold leading-tight truncate ${textClass}`}>{doc.title}</div>
-                        <div className={`text-[10px] leading-tight mt-0.5 ${subTextClass}`}>
-                          {doc.kind} · {doc.source}
-                          {doc.date ? ` · ${doc.date}` : ''}
+                ) : (
+                  <div className="space-y-3">
+                    {documentsPartition.standardDocs.length > 0 && (
+                      <div className="space-y-2">
+                        <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+                          {t('details.documentsSectionStandard')}
                         </div>
+                        {documentsPartition.standardDocs.map((doc) => renderDocumentRow(doc))}
                       </div>
-                      <div className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (editingDocId === doc.id) {
-                              setEditingDocId(null);
-                              setEditingDocTitle('');
-                              setEditingDocDate('');
-                              setEditingDocAttribution('');
-                              return;
-                            }
-                            setEditingDocId(doc.id);
-                            setEditingDocTitle(doc.title || '');
-                            setEditingDocDate(doc.date || '');
-                            setEditingDocAttribution(doc.sourceAttribution || '');
-                          }}
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${inputBg}`}
-                        >
-                          {editingDocId === doc.id ? t('details.close') : t('details.edit')}
-                        </button>
-                        {isPhotoDoc && onUpdateDocument && (
-                          <button
-                            type="button"
-                            title={t('details.cropResize')}
-                            aria-label={t('details.cropResize')}
-                            onClick={() => {
-                              setCropDrag(null);
-                              setActiveCropDocId(doc.id);
-                              setCropRect(null);
-                            }}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
-                              isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'
-                            } ${subTextClass}`}
-                          >
-                            <span className="inline-flex items-center gap-0.5">
-                              <Crop className="w-3 h-3" />
-                              <span className="hidden sm:inline">{t('details.cropResize')}</span>
-                            </span>
-                          </button>
-                        )}
-                        {isPhotoDoc && (
-                          <button
-                            type="button"
-                            onClick={() => individual && onSetPrimaryPhoto?.(individual.id, doc.id)}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${doc.isPrimaryPhoto ? 'bg-emerald-600 text-white' : inputBg}`}
-                          >
-                            {doc.isPrimaryPhoto ? t('details.primary') : t('details.setPrimary')}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => individual && onRemoveDocument?.(individual.id, doc.id)}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-600 text-white"
-                        >
-                          {t('details.delete')}
-                        </button>
-                      </div>
-                    </div>
-                    {editingDocId === doc.id && (
-                      <div
-                        className={`mt-1.5 pt-1.5 space-y-1.5 border-t ${
-                          isDarkMode ? 'border-slate-700' : 'border-slate-200'
-                        }`}
-                      >
-                        <input
-                          type="text"
-                          placeholder={t('details.documentName')}
-                          className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
-                          value={editingDocTitle}
-                          onChange={(e) => setEditingDocTitle(e.target.value)}
-                        />
-                        <label className={`block text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
-                          {t('details.sourceAttribution')}
-                        </label>
-                        <input
-                          type="text"
-                          placeholder={t('details.sourceAttributionPlaceholder')}
-                          className={`w-full rounded px-1.5 py-1 text-[11px] border outline-none ${inputBg}`}
-                          value={editingDocAttribution}
-                          onChange={(e) => setEditingDocAttribution(e.target.value)}
-                        />
-                        <div className="flex flex-wrap items-center gap-1">
-                          <input
-                            type="date"
-                            className={`rounded px-1.5 py-1 text-[11px] border outline-none flex-1 min-w-[7rem] ${inputBg}`}
-                            value={editingDocDate}
-                            onChange={(e) => setEditingDocDate(e.target.value)}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!individual) return;
-                              onUpdateDocument?.(individual.id, doc.id, {
-                                title: editingDocTitle.trim() || doc.title,
-                                date: editingDocDate || undefined,
-                                sourceAttribution: editingDocAttribution.trim(),
-                              });
-                              const pi = photoDocuments.findIndex((d) => d.id === doc.id);
-                              if (pi >= 0) setPhotoGalleryIndex(pi);
-                              setEditingDocId(null);
-                              setEditingDocTitle('');
-                              setEditingDocDate('');
-                              setEditingDocAttribution('');
-                            }}
-                            className="px-2 py-1 rounded text-[10px] font-bold bg-emerald-600 text-white"
-                          >
-                            {t('details.save')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingDocId(null);
-                              setEditingDocTitle('');
-                              setEditingDocDate('');
-                              setEditingDocAttribution('');
-                            }}
-                            className={`px-2 py-1 rounded text-[10px] font-bold ${inputBg}`}
-                          >
-                            {t('details.cancel')}
-                          </button>
+                    )}
+                    {documentsPartition.groupDocs.length > 0 && (
+                      <div className="space-y-2">
+                        <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+                          {t('details.documentsSectionGroupPhoto')}
                         </div>
+                        {documentsPartition.groupDocs.map((doc) => renderDocumentRow(doc))}
                       </div>
                     )}
                   </div>
-                  );
-                })}
+                )}
               </div>
             </div>
           )

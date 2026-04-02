@@ -3,6 +3,12 @@ import { Network, Copy, Check, WifiOff } from 'lucide-react';
 import { P2PStatus, P2PMode } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
+import {
+  TOP_PANEL_TAB_ORDER,
+  TOP_PANEL_TAB_I18N,
+  type TopPanelTabId,
+  type TabIndicatorLevel,
+} from './topPanel/topPanelTabs';
 
 interface P2PVisibilitySettings {
   exposeIdentity: boolean;
@@ -140,6 +146,98 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
+  const [activeTab, setActiveTab] = useState<TopPanelTabId>('network');
+
+  const inviteExpiringSoon = useMemo(() => {
+    const week = 7 * 24 * 60 * 60 * 1000;
+    return invites.some((inv) => {
+      if (inv.status !== 'active' || !inv.expiresAt) return false;
+      const exp = Date.parse(inv.expiresAt);
+      return exp - Date.now() < week && exp > Date.now();
+    });
+  }, [invites]);
+
+  const tabIndicators = useMemo((): Record<TopPanelTabId, TabIndicatorLevel> => {
+    let network: TabIndicatorLevel = 'idle';
+    if (!isOnline) network = 'error';
+    else if (p2pStatus === 'connected') network = 'ok';
+    else if (p2pStatus === 'connecting') network = 'warning';
+    else network = 'idle';
+
+    let session: TabIndicatorLevel = 'idle';
+    if (p2pStatus === 'connected') {
+      if (syncStatusText || initialCompareStatusText) session = 'warning';
+      else session = 'ok';
+    }
+
+    let invitations: TabIndicatorLevel = 'idle';
+    if (invites.length > 0 || pendingInviteToken) invitations = 'ok';
+    if (ownDevicePendingCount > 0 || inviteExpiringSoon) invitations = 'warning';
+
+    const proposalsTab: TabIndicatorLevel =
+      pendingProposalsCount > 0 ? 'error' : proposals.length > 0 ? 'ok' : 'idle';
+
+    const privacy: TabIndicatorLevel = 'ok';
+
+    const activity: TabIndicatorLevel = activityEvents.length > 0 ? 'ok' : 'idle';
+
+    return {
+      network,
+      session,
+      invitations,
+      proposals: proposalsTab,
+      privacy,
+      activity,
+      wot: 'future',
+      money: 'future',
+    };
+  }, [
+    isOnline,
+    p2pStatus,
+    syncStatusText,
+    initialCompareStatusText,
+    invites.length,
+    pendingInviteToken,
+    ownDevicePendingCount,
+    inviteExpiringSoon,
+    pendingProposalsCount,
+    proposals.length,
+    activityEvents.length,
+  ]);
+
+  const indicatorDotClass = (level: TabIndicatorLevel): string => {
+    switch (level) {
+      case 'ok':
+        return 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]';
+      case 'warning':
+        return 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.55)]';
+      case 'error':
+        return 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.55)]';
+      case 'idle':
+        return isDarkMode ? 'bg-slate-600' : 'bg-slate-400';
+      case 'future':
+        return isDarkMode ? 'bg-slate-700 ring-1 ring-slate-500' : 'bg-slate-300 ring-1 ring-slate-400';
+      default:
+        return 'bg-slate-500';
+    }
+  };
+
+  const tabIndicatorAriaLabel = (tabId: TopPanelTabId, level: TabIndicatorLevel): string => {
+    const tabLabel = t(TOP_PANEL_TAB_I18N[tabId]);
+    const stateKey =
+      level === 'ok'
+        ? 'topPanel.tabIndicatorState_ok'
+        : level === 'warning'
+          ? 'topPanel.tabIndicatorState_warning'
+          : level === 'error'
+            ? 'topPanel.tabIndicatorState_error'
+            : level === 'idle'
+              ? 'topPanel.tabIndicatorState_idle'
+              : 'topPanel.tabIndicatorState_future';
+    return t('topPanel.tabIndicatorAria')
+      .replace('{{tab}}', tabLabel)
+      .replace('{{state}}', t(stateKey));
+  };
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -246,11 +344,55 @@ const TopPanel: React.FC<TopPanelProps> = ({
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
         >
-          <div className="w-full max-w-5xl mx-auto">
-          <div className="flex items-center gap-2 w-full flex-wrap">
-          
-          {/* P2P Network Section */}
-          <div className={`flex items-center gap-2 rounded px-2 py-1 border ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+          <div className="w-full max-w-5xl mx-auto min-w-0 flex flex-col gap-2">
+            <div
+              className="flex gap-1 overflow-x-auto pb-1 px-0.5"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+              role="tablist"
+              aria-label={t('topPanel.share')}
+            >
+              {TOP_PANEL_TAB_ORDER.map((tabId) => {
+                const level = tabIndicators[tabId];
+                const selected = activeTab === tabId;
+                return (
+                  <button
+                    key={tabId}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    id={`top-tab-${tabId}`}
+                    aria-label={tabIndicatorAriaLabel(tabId, level)}
+                    onClick={() => setActiveTab(tabId)}
+                    className={`shrink-0 flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] sm:text-[11px] font-semibold uppercase tracking-wide transition-colors ${
+                      selected
+                        ? isDarkMode
+                          ? 'border-blue-500 bg-blue-950/50 text-blue-200'
+                          : 'border-blue-500 bg-blue-50 text-blue-900'
+                        : isDarkMode
+                          ? 'border-slate-700 bg-neutral-900/40 text-slate-300 hover:bg-neutral-800'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-2 w-2 shrink-0 rounded-full ${indicatorDotClass(level)}`}
+                      aria-hidden
+                    />
+                    <span>{t(TOP_PANEL_TAB_I18N[tabId])}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="min-h-0"
+              role="tabpanel"
+              id={`top-panel-${activeTab}`}
+              aria-labelledby={`top-tab-${activeTab}`}
+            >
+          {/* P2P Network Section — onglet Réseau */}
+          {activeTab === 'network' && (
+          <div className="space-y-2">
+          <div className={`flex flex-wrap items-center gap-2 rounded-lg border p-3 ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
             <Network className={`w-3.5 h-3.5 shrink-0 ${!isOnline ? 'text-red-500' : (p2pStatus === 'connected' ? 'text-green-500' : 'text-slate-500')}`} />
             
             {!isOnline ? (
@@ -317,6 +459,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
           {!isOnline && (
             <span className={`text-[9px] ${subTextClass} italic`}>{t('topPanel.localMode')}</span>
           )}
+          </div>
+          )}
+
+          {activeTab === 'session' && (
+          <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
           {isOnline && syncStatusText && (
             <span
               className={`text-[9px] px-1.5 py-0.5 rounded border ${
@@ -335,11 +483,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
               {t('topPanel.compare')}: {initialCompareStatusText}
             </span>
           )}
-
-        </div>
+          </div>
 
         {p2pStatus !== 'disconnected' && (
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <div className="mt-0 flex items-center gap-2 flex-wrap">
             {showShareAction && (
               <label className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
                 <span>{t('topPanel.transferModeLabel')}</span>
@@ -402,9 +549,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
             )}
           </div>
         )}
+          </div>
+          )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-          <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
+        {activeTab === 'proposals' && (
+        <div className="grid grid-cols-1 gap-4 mt-0">
+          <section className={`rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-3">
               {t('topPanel.proposals')} {proposals.length > 0 ? `(${proposals.length})` : ''}
             </h3>
@@ -479,8 +629,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
               )}
             </div>
           </section>
+        </div>
+        )}
 
-          <section className={`md:col-span-2 rounded-xl border p-4 ${cardClass}`}>
+        {activeTab === 'activity' && (
+          <section className={`rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.activity')}</h3>
             <div className="grid grid-cols-3 gap-2 mb-4">
               <StatCard label={t('topPanel.views')} value={activitySummary.view} isDarkMode={isDarkMode} />
@@ -519,7 +672,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
               </div>
             )}
           </section>
+        )}
 
+        {activeTab === 'privacy' && (
           <section className={`rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.accessControls')}</h3>
             <div className="space-y-2 text-sm">
@@ -533,8 +688,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <ToggleRow label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
             </div>
           </section>
+        )}
 
-          <section className={`md:col-span-3 rounded-xl border p-4 ${cardClass}`}>
+        {activeTab === 'invitations' && (
+          <section className={`rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.connectionProfiles')}</h3>
             <p className={`text-xs mb-3 ${subTextClass}`}>
               {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
@@ -716,8 +873,24 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <p className={`text-[11px] mt-3 ${subTextClass}`}>{t('topPanel.pendingInviteToken')}</p>
             )}
           </section>
-        </div>
-        </div>
+        )}
+
+        {activeTab === 'wot' && (
+          <div className={`rounded-xl border p-4 ${cardClass}`}>
+            <p className={`text-sm ${subTextClass}`}>{t('topPanel.tabWotPlaceholder')}</p>
+            <p className={`text-xs mt-2 ${subTextClass} opacity-80`}>{t('topPanel.tabComingSoon')}</p>
+          </div>
+        )}
+
+        {activeTab === 'money' && (
+          <div className={`rounded-xl border p-4 ${cardClass}`}>
+            <p className={`text-sm ${subTextClass}`}>{t('topPanel.tabMoneyPlaceholder')}</p>
+            <p className={`text-xs mt-2 ${subTextClass} opacity-80`}>{t('topPanel.tabComingSoon')}</p>
+          </div>
+        )}
+
+            </div>
+          </div>
         </div>
       </div>
 
