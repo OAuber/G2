@@ -1,5 +1,5 @@
 {
-  "name": "GeneaVerse 3D",
+  "name": "G2",
   "description": "A privacy-focused, offline-capable 3D genealogy visualizer using P2P principles. Import GEDCOM files and visualize ancestry in a 3D space.",
   "requestFramePermissions": []
 }

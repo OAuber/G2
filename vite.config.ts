@@ -12,8 +12,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
-        name: 'GeneaVerse 3D',
-        short_name: 'GeneaVerse',
+        name: 'G2',
+        short_name: 'G2',
         description: 'A privacy-focused, offline-capable 3D genealogy visualizer using P2P principles.',
         theme_color: '#000000',
         background_color: '#000000',
