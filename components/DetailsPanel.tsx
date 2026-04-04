@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop } from 'lucide-react';
+import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop, Eye, EyeOff } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
 import { parseDate } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
@@ -493,6 +493,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [identityCandidateId, setIdentityCandidateId] = useState('');
   const [exportPassword, setExportPassword] = useState('');
   const [importPassword, setImportPassword] = useState('');
+  const [showExportPassword, setShowExportPassword] = useState(false);
+  const [showImportPassword, setShowImportPassword] = useState(false);
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
   const prevRightPanelOpenRef = useRef(false);
 
@@ -557,6 +559,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   }, [isCreating, isEditing]);
 
   useEffect(() => {
+    if (identityTabSignal > 0) setActiveTab('identity');
+  }, [identityTabSignal]);
+
+  useEffect(() => {
     if (!isIdentifyingSelf) return;
     setActiveTab('identity');
     if (selfIdentity?.individualId) {
@@ -566,7 +572,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     if (preferredIdentityCandidateId) {
       setIdentityCandidateId(preferredIdentityCandidateId);
     }
-  }, [isIdentifyingSelf, selfIdentity?.individualId, preferredIdentityCandidateId, identityTabSignal]);
+  }, [isIdentifyingSelf, selfIdentity?.individualId, preferredIdentityCandidateId]);
 
   const allIndividuals = useMemo(() =>
     data ? (Object.values(data.individuals) as Individual[]).sort((a, b) =>
@@ -1943,6 +1949,20 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <p className={`text-xs ${subTextClass}`}>
                   {t('details.noIdentityForSelected')}
                 </p>
+                <div className={`rounded-lg border p-2.5 space-y-2 ${isDarkMode ? 'border-amber-600/50 bg-amber-950/30' : 'border-amber-300 bg-amber-50'}`}>
+                  <p className={`text-[11px] ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
+                    {t('details.identityMismatchHint')}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onRenounceIdentity}
+                    className={`w-full py-2 rounded text-xs font-bold ${
+                      isDarkMode ? 'bg-amber-800 hover:bg-amber-700 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white'
+                    }`}
+                  >
+                    {t('details.identityMismatchRenounceCta')}
+                  </button>
+                </div>
                 {selectedRemoteIdentityClaim && (
                   <div className="rounded border border-emerald-500/50 bg-emerald-500/10 p-2">
                     <div className="text-[11px] font-semibold text-emerald-500">{t('details.remoteIdentityClaimed')}</div>
@@ -1971,6 +1991,25 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             )}
 
+            {showSelfIdentityData && selfIdentity.introduction && (
+              <div className={`${cardBg} rounded-lg p-2.5 space-y-2 border ${isDarkMode ? 'border-emerald-700/50' : 'border-emerald-600/40'}`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.introductionContext')}</div>
+                <p className={`text-[11px] ${subTextClass}`}>{t('details.introductionContextHint')}</p>
+                <div className={`text-[11px] ${textClass} space-y-1`}>
+                  <div>{t('details.introductionIntroducedAt')}: {new Date(selfIdentity.introduction.introducedAt).toLocaleString()}</div>
+                  {selfIdentity.introduction.inviteId && (
+                    <div>{t('details.introductionInviteId')}: {selfIdentity.introduction.inviteId}</div>
+                  )}
+                  {selfIdentity.introduction.inviterName && (
+                    <div>{t('details.introductionInviterName')}: {selfIdentity.introduction.inviterName}</div>
+                  )}
+                  {selfIdentity.introduction.inviterDeviceKeyId && (
+                    <div>{t('details.introductionInviterDeviceKey')}: {selfIdentity.introduction.inviterDeviceKeyId}</div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {showSelfIdentityData && (
               <>
                 <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
@@ -1982,13 +2021,25 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
                 <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
                   <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identityBackup')}</div>
-                  <input
-                    type="password"
-                    value={exportPassword}
-                    onChange={(e) => setExportPassword(e.target.value)}
-                    placeholder={t('details.exportPasswordPlaceholder')}
-                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showExportPassword ? 'text' : 'password'}
+                      value={exportPassword}
+                      onChange={(e) => setExportPassword(e.target.value)}
+                      placeholder={t('details.exportPasswordPlaceholder')}
+                      autoComplete="new-password"
+                      className={`w-full rounded px-2 py-1 pr-9 text-sm border outline-none ${inputBg}`}
+                    />
+                    <button
+                      type="button"
+                      className={`absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-md ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+                      onClick={() => setShowExportPassword((v) => !v)}
+                      aria-label={showExportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                      title={showExportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                    >
+                      {showExportPassword ? <EyeOff className="w-4 h-4" aria-hidden /> : <Eye className="w-4 h-4" aria-hidden />}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     className={`w-full py-2 rounded text-xs font-bold ${actionBtnClass}`}
@@ -2003,13 +2054,25 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
                     onChange={(e) => setIdentityBackupFile(e.target.files?.[0] || null)}
                   />
-                  <input
-                    type="password"
-                    value={importPassword}
-                    onChange={(e) => setImportPassword(e.target.value)}
-                    placeholder={t('details.importPasswordPlaceholder')}
-                    className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
-                  />
+                  <div className="relative">
+                    <input
+                      type={showImportPassword ? 'text' : 'password'}
+                      value={importPassword}
+                      onChange={(e) => setImportPassword(e.target.value)}
+                      placeholder={t('details.importPasswordPlaceholder')}
+                      autoComplete="new-password"
+                      className={`w-full rounded px-2 py-1 pr-9 text-sm border outline-none ${inputBg}`}
+                    />
+                    <button
+                      type="button"
+                      className={`absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-md ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+                      onClick={() => setShowImportPassword((v) => !v)}
+                      aria-label={showImportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                      title={showImportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                    >
+                      {showImportPassword ? <EyeOff className="w-4 h-4" aria-hidden /> : <Eye className="w-4 h-4" aria-hidden />}
+                    </button>
+                  </div>
                   <button
                     type="button"
                     disabled={!identityBackupFile}

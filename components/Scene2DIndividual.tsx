@@ -29,6 +29,8 @@ interface Scene2DIndividualProps {
   /** Échantillon du zoom ortho (vue individuelle) pour caler l’intro 3D top. */
   onOrthoZoomSample?: (zoom: number) => void;
   onWebGLContextLost?: () => void;
+  selfIndividualId?: string | null;
+  showSelfIntroductionBadge?: boolean;
 }
 
 const Scene2DIndividual: React.FC<Scene2DIndividualProps> = (props) => {

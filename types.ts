@@ -48,12 +48,25 @@ export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type P2PMode = 'host' | 'client' | null;
 export type SelfIdentityStatus = 'unidentified' | 'claimed' | 'witnessed';
 
+/** Contexte d’introduction (spec G2_WOT_TRUST §4.6) — preuve d’accueil, pas attestation WoT. */
+export interface IdentityIntroductionContext {
+  /** Horodatage de l’enregistrement (souvent au claim). */
+  introducedAt: string;
+  inviteId?: string;
+  inviterName?: string;
+  /** Identité publique de l’hôte au moment de l’introduction (client P2P). */
+  inviterDeviceKeyId?: string;
+  inviterDevicePublicKeyJwk?: JsonWebKey;
+}
+
 export interface SelfIdentityPublic {
   individualId: string;
   status: SelfIdentityStatus;
   claimedAt: string;
   deviceKeyId: string;
   devicePublicKeyJwk: JsonWebKey;
+  /** Présent si l’identité a été revendiquée dans un contexte d’invitation P2P (invite + clé hôte connue). */
+  introduction?: IdentityIntroductionContext;
 }
 
 export interface DateInfo {

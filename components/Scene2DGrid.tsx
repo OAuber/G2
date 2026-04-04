@@ -92,6 +92,9 @@ interface Scene2DGridProps {
   /** Échantillon du zoom orthographique (vue individuelle) pour l’intro 3D top. */
   onOrthoZoomSample?: (zoom: number) => void;
   onWebGLContextLost?: () => void;
+  /** Fiche « moi » — badge d’introduction P2P (vue individuelle). */
+  selfIndividualId?: string | null;
+  showSelfIntroductionBadge?: boolean;
 }
 
 interface RibbonDocument {
@@ -538,6 +541,8 @@ interface GridContentProps {
   } | null) => void;
   onIndividualDefaultZoomChange?: (zoom: number) => void;
   onOrthoZoomSample?: (zoom: number) => void;
+  selfIndividualId?: string | null;
+  showSelfIntroductionBadge?: boolean;
 }
 
 interface PhotoOverlayLayerProps {
@@ -591,6 +596,8 @@ const PhotoOverlayLayer: React.FC<PhotoOverlayLayerProps> = ({
 
 const GridContent: React.FC<GridContentProps> = ({
   individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, orthoZoomHandoff, onOrthoZoomHandoffConsumed, onPhotoOverlayChange, onIndividualDefaultZoomChange, onOrthoZoomSample,
+  selfIndividualId = null,
+  showSelfIntroductionBadge = false,
 }) => {
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -1933,6 +1940,32 @@ const GridContent: React.FC<GridContentProps> = ({
         >
           {nameText}
         </Text>
+        {singleIndividual &&
+          selfIndividualId &&
+          indi.id === selfIndividualId &&
+          showSelfIntroductionBadge && (
+            <Html position={[cx + RIBBON_W * 0.55, nameY - fs * 0.08, 0.12]} transform>
+              <span
+                style={{
+                  display: 'inline-block',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  padding: '3px 8px',
+                  borderRadius: 6,
+                  border: isDarkMode ? '1px solid rgba(52,211,153,0.5)' : '1px solid rgba(5,150,105,0.45)',
+                  background: isDarkMode ? 'rgba(6,78,59,0.85)' : 'rgba(209,250,229,0.95)',
+                  color: isDarkMode ? '#a7f3d0' : '#065f46',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                  pointerEvents: 'none',
+                }}
+              >
+                {t('scene2d.identityIntroBadge')}
+              </span>
+            </Html>
+          )}
         {finalDateTraits.map((d) => (
           <group key={d.key}>
             <Text
@@ -2435,6 +2468,8 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   onOrthoZoomHandoffConsumed,
   onOrthoZoomSample,
   onWebGLContextLost,
+  selfIndividualId = null,
+  showSelfIntroductionBadge = false,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -2602,6 +2637,8 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           onPhotoOverlayChange={handlePhotoOverlayChange}
           onIndividualDefaultZoomChange={handleIndividualDefaultZoomChange}
           onOrthoZoomSample={onOrthoZoomSample}
+          selfIndividualId={selfIndividualId}
+          showSelfIntroductionBadge={showSelfIntroductionBadge}
         />
       </Canvas>
 

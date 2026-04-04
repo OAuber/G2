@@ -108,15 +108,16 @@ function computeModePosition(
             ct.z + zOffset
         );
     }
-    // free: random-ish 3/4 view, camera on X- side looking toward X+
+    // free: vue 3/4 stable (pas de Math.random : évite une cible différente à chaque vol / recalcul)
     const sz = Math.max(100, sceneSize);
     const dist = sz * 1.2;
-    const randAngle = (Math.random() - 0.5) * 0.6;
-    const randElev = 0.3 + Math.random() * 0.25;
+    const cosA = 0.92;
+    const elev = 0.38;
+    const zSide = 0.14;
     return new Vector3(
-        ct.x - dist * Math.cos(randAngle),
-        ct.y + dist * randElev,
-        ct.z + dist * Math.sin(randAngle) * 0.5
+        ct.x - dist * cosA,
+        ct.y + dist * elev,
+        ct.z + dist * zSide
     );
 }
 
@@ -558,23 +559,29 @@ const CameraController: React.FC<{
       const selectionChanged = selectedId !== lastSelectedIdRef.current;
       if (selectionChanged) {
         lastSelectedIdRef.current = selectedId;
-        focusStartPos.current.copy(state.camera.position);
-        focusStartLookAt.current.copy(ctrl.target);
-        focusEndLookAt.current.copy(currentLookAt);
-        if (cameraMode === 'top') {
-          focusEndPos.current.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
-        } else {
-          focusEndPos.current.copy(computeModePosition('individual', currentLookAt, sceneSize, selectedGender, treeDirection));
-        }
-        focusUseConnectorPathRef.current = false;
-        focusDurationRef.current = FOCUS_DURATION_DEFAULT;
-        focusProgress.current = 0;
-        isFocusing.current = true;
-        if (cameraMode === 'top') {
-          const orthoCam = state.camera as any;
-          if (orthoCam.isOrthographicCamera) {
-            orthoCam.zoom = topViewOrthoZoom(sceneSize);
-            orthoCam.updateProjectionMatrix();
+        // Vue libre : ne pas forcer le cadrage « individuel » (gros plan ruban) — ça écrasait
+        // la pose après zoom / orbit quand la sélection se stabilisait ou changeait.
+        if (cameraMode !== 'free') {
+          focusStartPos.current.copy(state.camera.position);
+          focusStartLookAt.current.copy(ctrl.target);
+          focusEndLookAt.current.copy(currentLookAt);
+          if (cameraMode === 'top') {
+            focusEndPos.current.set(currentLookAt.x, currentLookAt.y + 10000, currentLookAt.z);
+          } else {
+            focusEndPos.current.copy(
+              computeModePosition('individual', currentLookAt, sceneSize, selectedGender, treeDirection)
+            );
+          }
+          focusUseConnectorPathRef.current = false;
+          focusDurationRef.current = FOCUS_DURATION_DEFAULT;
+          focusProgress.current = 0;
+          isFocusing.current = true;
+          if (cameraMode === 'top') {
+            const orthoCam = state.camera as any;
+            if (orthoCam.isOrthographicCamera) {
+              orthoCam.zoom = topViewOrthoZoom(sceneSize);
+              orthoCam.updateProjectionMatrix();
+            }
           }
         }
       }

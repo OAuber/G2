@@ -7,7 +7,25 @@ import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
-import { GedcomData, Individual, Family, Gender, DragMode, DisplayMode, ViewMode, SortMode, FilterTag, LayoutParams, DEFAULT_LAYOUT_PARAMS, RenderedPerson, CameraMode, P2PStatus, P2PMode, SelfIdentityPublic } from './types';
+import {
+  GedcomData,
+  Individual,
+  Family,
+  Gender,
+  DragMode,
+  DisplayMode,
+  ViewMode,
+  SortMode,
+  FilterTag,
+  LayoutParams,
+  DEFAULT_LAYOUT_PARAMS,
+  RenderedPerson,
+  CameraMode,
+  P2PStatus,
+  P2PMode,
+  SelfIdentityPublic,
+  IdentityIntroductionContext,
+} from './types';
 import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
@@ -787,6 +805,14 @@ function App() {
       return null;
     }
   });
+  const selfIdentityRef = useRef<SelfIdentityPublic | null>(selfIdentity);
+  useEffect(() => {
+    selfIdentityRef.current = selfIdentity;
+  }, [selfIdentity]);
+  /** Côté client : dernière identité publique reçue de l’hôte (SESSION_STATE). */
+  const remoteHostSelfIdentityRef = useRef<SelfIdentityPublic | null>(null);
+  /** Contexte d’invite issu de l’URL (#g2invite), pour attacher introduction au claim. */
+  const inviteIntroductionContextRef = useRef<{ inviteId: string; inviterName?: string } | null>(null);
   const [isIdentifyingSelf, setIsIdentifyingSelf] = useState(false);
   const [identityTabSignal, setIdentityTabSignal] = useState(0);
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -1486,6 +1512,7 @@ function App() {
       sentAt: new Date().toISOString(),
       mode: p2pModeRef.current,
       requestEcho,
+      selfIdentity: selfIdentityRef.current,
     });
   };
 
@@ -2310,6 +2337,10 @@ function App() {
     inviteAcceptRequestedRef.current = false;
     const claims = parseInviteClaimsUnsafe(inviteToken);
     if (!claims) return;
+    inviteIntroductionContextRef.current = {
+      inviteId: claims.inviteId,
+      inviterName: claims.inviterName || undefined,
+    };
     if (claims.sessionId && claims.sessionId !== 'local-session') {
       setPendingInviteHostPeerId(claims.sessionId);
       inviteAutoConnectAttemptedRef.current = false;
@@ -2370,7 +2401,7 @@ function App() {
   useEffect(() => {
     if (p2pStatus !== 'connected') return;
     sendSessionState();
-  }, [p2pStatus, gedcomData]);
+  }, [p2pStatus, gedcomData, selfIdentity]);
 
   useEffect(() => {
     if (p2pStatus !== 'connected' || remotePeerHasData !== null) return;
@@ -2428,6 +2459,7 @@ function App() {
               if (id) setPeerId(id);
               if (status !== 'connected') {
                 setRemotePeerHasData(null);
+                remoteHostSelfIdentityRef.current = null;
                 setP2PSessionUseCase(null);
                 p2pSessionUseCaseRef.current = null;
                 setActiveSessionPeerPolicy(null);
@@ -2969,8 +3001,18 @@ function App() {
                     sentAt?: string;
                     mode?: P2PMode;
                     requestEcho?: boolean;
+                    selfIdentity?: SelfIdentityPublic | null;
                   };
                   setRemotePeerHasData(typeof payload.hasGedcom === 'boolean' ? payload.hasGedcom : null);
+                  if (
+                    p2pModeRef.current === 'client' &&
+                    payload.selfIdentity &&
+                    typeof payload.selfIdentity === 'object' &&
+                    payload.selfIdentity.deviceKeyId &&
+                    payload.selfIdentity.devicePublicKeyJwk
+                  ) {
+                    remoteHostSelfIdentityRef.current = payload.selfIdentity;
+                  }
                   logP2PActivity(
                     'session.state.received',
                     'session',
@@ -4337,12 +4379,9 @@ function App() {
         { royalsDemoPreset: importOptions?.royalsDemo === true },
       );
       setDocumentsByIndividualId(normalizedDocs);
-      if (metadata.selfIdentity && typeof metadata.selfIdentity === 'object') {
-        const maybeIdentity = metadata.selfIdentity as SelfIdentityPublic;
-        if (maybeIdentity.individualId && maybeIdentity.deviceKeyId) {
-          setSelfIdentity(maybeIdentity);
-        }
-      }
+      // Ne pas appliquer metadata.selfIdentity : un bundle reçu d’un pair contient l’identité *publique*
+      // de l’hôte ; l’appliquer localement fausserait l’invité (onglet Identité / partage localStorage).
+      // Restaurer une identité : import du fichier de sauvegarde chiffrée (clé privée) ou revendication locale.
       if (p2pStatus === 'connected') sendSessionState();
       logP2PActivity('tree.bundle.import', 'session', peerId || 'local');
       setBundleToast({ kind: 'success', message: t('app.toasts.archiveImported') });
@@ -5473,6 +5512,28 @@ function App() {
     setIdentityTabSignal((prev) => prev + 1);
   };
 
+  /** Ouvre le panneau détails sur l’onglet Identité (raccourci WoT / session). */
+  const handleOpenIdentityPanel = useCallback(() => {
+    setRightPanelOpen(true);
+    setIdentityTabSignal((prev) => prev + 1);
+  }, []);
+
+  const buildP2PIntroductionContext = (): IdentityIntroductionContext | undefined => {
+    if (p2pModeRef.current !== 'client') return undefined;
+    const inv = inviteIntroductionContextRef.current;
+    const remote = remoteHostSelfIdentityRef.current;
+    const hasInviteMeta = !!(inv?.inviteId || inv?.inviterName);
+    const hasRemoteKeys = !!(remote?.deviceKeyId && remote?.devicePublicKeyJwk);
+    if (!hasInviteMeta && !hasRemoteKeys) return undefined;
+    const introducedAt = new Date().toISOString();
+    const ctx: IdentityIntroductionContext = { introducedAt };
+    if (inv?.inviteId) ctx.inviteId = inv.inviteId;
+    if (inv?.inviterName) ctx.inviterName = inv.inviterName;
+    if (remote?.deviceKeyId) ctx.inviterDeviceKeyId = remote.deviceKeyId;
+    if (remote?.devicePublicKeyJwk) ctx.inviterDevicePublicKeyJwk = remote.devicePublicKeyJwk;
+    return ctx;
+  };
+
   const handleClaimIdentity = async (individualId: string) => {
     if (!gedcomData?.individuals[individualId]) {
       alert(t('app.alerts.selectExistingIndividual'));
@@ -5485,12 +5546,14 @@ function App() {
 
     try {
       const { devicePublicKeyJwk, devicePrivateKeyJwk, deviceKeyId } = await generateIdentityKeyMaterial();
+      const introduction = buildP2PIntroductionContext();
       const claimed: SelfIdentityPublic = {
         individualId,
         status: 'claimed',
         claimedAt: new Date().toISOString(),
         deviceKeyId,
         devicePublicKeyJwk,
+        ...(introduction ? { introduction } : {}),
       };
       setSelfIdentity(claimed);
       localStorage.setItem(SELF_IDENTITY_PRIVATE_STORAGE_KEY, JSON.stringify(devicePrivateKeyJwk));
@@ -6305,6 +6368,8 @@ function App() {
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
             onWebGLContextLost={handleWebGLContextLost}
+            selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+            showSelfIntroductionBadge={!!selfIdentity?.introduction}
           />
         ) : (
           <Scene2DGrid
@@ -6328,6 +6393,8 @@ function App() {
             rightPanelOpen={rightPanelOpen}
             singleIndividual={is2dIndividual}
             onWebGLContextLost={handleWebGLContextLost}
+            selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+            showSelfIntroductionBadge={!!selfIdentity?.introduction}
           />
         )}
         
@@ -6610,6 +6677,12 @@ function App() {
         onRevokeInvite={handleRevokeInvite}
         onAcceptInvite={handleAcceptInvite}
         onReviewProposal={handleReviewProposal}
+        isIdentityClaimed={isIdentified}
+        identityIntroduction={selfIdentity?.introduction}
+        onOpenIdentityPanel={handleOpenIdentityPanel}
+        showCompleteIdentityHint={
+          p2pStatus === 'connected' && !isIdentified && !!pendingInviteToken && inviteOnboardingStage === 'ready'
+        }
       />
 
       {/* --- Bottom Panel (Display) --- */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Network, Copy, Check, WifiOff } from 'lucide-react';
-import { P2PStatus, P2PMode } from '../types';
+import { P2PStatus, P2PMode, IdentityIntroductionContext } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
 import {
@@ -89,6 +89,12 @@ interface TopPanelProps {
   onRevokeInvite: (inviteId: string) => void;
   onAcceptInvite: (inviteId: string) => void;
   onReviewProposal: (proposalId: string) => void;
+  /** WoT / identité — résumé et lien vers le panneau détails. */
+  isIdentityClaimed?: boolean;
+  identityIntroduction?: IdentityIntroductionContext;
+  onOpenIdentityPanel?: () => void;
+  /** Raccourci après invite : invité pas encore identifié. */
+  showCompleteIdentityHint?: boolean;
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -131,6 +137,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onRevokeInvite,
   onAcceptInvite,
   onReviewProposal,
+  isIdentityClaimed = false,
+  identityIntroduction,
+  onOpenIdentityPanel,
+  showCompleteIdentityHint = false,
 }) => {
   const { t } = useI18n();
   const [targetHostId, setTargetHostId] = useState('');
@@ -188,7 +198,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
       proposals: proposalsTab,
       privacy,
       activity,
-      wot: 'future',
+      wot: isIdentityClaimed ? 'ok' : 'future',
       money: 'future',
     };
   }, [
@@ -198,6 +208,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
     initialCompareStatusText,
     invites.length,
     pendingInviteToken,
+    isIdentityClaimed,
     ownDevicePendingCount,
     inviteExpiringSoon,
     pendingProposalsCount,
@@ -484,6 +495,28 @@ const TopPanel: React.FC<TopPanelProps> = ({
             </span>
           )}
           </div>
+
+        {showCompleteIdentityHint && onOpenIdentityPanel && (
+          <div
+            className={`rounded-lg border p-3 mb-2 ${
+              isDarkMode ? 'border-amber-600/50 bg-amber-950/40' : 'border-amber-300 bg-amber-50'
+            }`}
+          >
+            <p className={`text-xs font-semibold ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
+              {t('topPanel.completeIdentityTitle')}
+            </p>
+            <p className={`text-[11px] mt-1 ${subTextClass}`}>{t('topPanel.completeIdentityBody')}</p>
+            <button
+              type="button"
+              onClick={onOpenIdentityPanel}
+              className={`mt-2 text-[11px] px-3 py-1.5 rounded font-bold ${
+                isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+              }`}
+            >
+              {t('topPanel.completeIdentityCta')}
+            </button>
+          </div>
+        )}
 
         {p2pStatus !== 'disconnected' && (
           <div className="mt-0 flex items-center gap-2 flex-wrap">
@@ -876,9 +909,40 @@ const TopPanel: React.FC<TopPanelProps> = ({
         )}
 
         {activeTab === 'wot' && (
-          <div className={`rounded-xl border p-4 ${cardClass}`}>
-            <p className={`text-sm ${subTextClass}`}>{t('topPanel.tabWotPlaceholder')}</p>
-            <p className={`text-xs mt-2 ${subTextClass} opacity-80`}>{t('topPanel.tabComingSoon')}</p>
+          <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+            <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.wotHeading')}</h3>
+            <p className={`text-xs ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
+            <div className={`text-xs space-y-1 rounded-lg border p-2 ${isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
+              <div className="flex justify-between gap-2">
+                <span className={subTextClass}>{t('topPanel.wotIdentityStatus')}</span>
+                <span className={`font-semibold ${isIdentityClaimed ? 'text-emerald-500' : 'text-amber-500'}`}>
+                  {isIdentityClaimed ? t('topPanel.wotIdentityClaimed') : t('topPanel.wotIdentityNone')}
+                </span>
+              </div>
+              {identityIntroduction?.inviterName && (
+                <div className="flex justify-between gap-2">
+                  <span className={subTextClass}>{t('topPanel.wotIntroductionInviter')}</span>
+                  <span className={`font-medium ${textClass} text-right`}>{identityIntroduction.inviterName}</span>
+                </div>
+              )}
+              {identityIntroduction?.inviteId && (
+                <div className={`text-[10px] ${subTextClass} font-mono break-all`}>
+                  {t('topPanel.wotIntroductionInvite')}: {identityIntroduction.inviteId}
+                </div>
+              )}
+            </div>
+            <p className={`text-[11px] ${subTextClass} opacity-90`}>{t('topPanel.wotFutureAttestations')}</p>
+            {onOpenIdentityPanel && (
+              <button
+                type="button"
+                onClick={onOpenIdentityPanel}
+                className={`text-xs px-3 py-2 rounded font-bold w-full sm:w-auto ${
+                  isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                }`}
+              >
+                {t('topPanel.wotOpenIdentity')}
+              </button>
+            )}
           </div>
         )}
 
