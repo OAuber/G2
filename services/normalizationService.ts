@@ -1,4 +1,4 @@
-import { GedcomData, Individual, DateInfo, Gender } from '../types';
+import { GedcomData, DateInfo, Gender } from '../types';
 
 // Constants defined in the prompt
 const AVG_MATERNAL_AGE = 26.0;

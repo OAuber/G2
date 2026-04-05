@@ -491,8 +491,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       ? 'attention'
       : 'none';
   const listSignal: 'none' | 'attention' | 'running' | 'error' = 'none';
-  const globalSignal: 'none' | 'attention' | 'running' | 'error' =
-    programSignal !== 'none' ? programSignal : dataSignal !== 'none' ? dataSignal : listSignal;
 
   return (
     <div 
@@ -740,7 +738,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button 
                           onClick={() => {
                             const isHidingAll = selectedIdsFor2D?.has('__NONE__');
-                            const hasSelection = selectedIdsFor2D && selectedIdsFor2D.size > 0 && !isHidingAll;
                             const isShowingAll = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
                             
                             if (isHidingAll) {

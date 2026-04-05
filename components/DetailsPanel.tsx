@@ -400,17 +400,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   isOpen, 
   onToggle,
   isCreating,
-  onClose,
+  onClose: _onClose,
   onSelectIndividual,
   onUpdateIndividual,
-  onUpdateFamily,
+  onUpdateFamily: _onUpdateFamily,
   onCreateIndividual,
   onDeleteIndividual,
   onCreateNew,
   onCancelCreate,
-  onLinkSpouse,
-  onLinkChildToFamily,
-  onCreateFamilyWithChild,
+  onLinkSpouse: _onLinkSpouse,
+  onLinkChildToFamily: _onLinkChildToFamily,
+  onCreateFamilyWithChild: _onCreateFamilyWithChild,
   onMouseEnter,
   onMouseLeave,
   isDarkMode,
@@ -1246,7 +1246,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               explainIdentityRequiredForEdit();
               return;
             }
-            isCreating ? onCreateIndividual(formData) : handleSaveEdit();
+            if (isCreating) {
+              onCreateIndividual(formData);
+            } else {
+              handleSaveEdit();
+            }
           }} className="space-y-3">
              <div className="flex justify-between items-center">
                  <h3 className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{isCreating ? t('details.newIndividualTitle') : t('details.editIndividualTitle')}</h3>

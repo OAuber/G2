@@ -175,13 +175,14 @@ export const parseGedcom = (content: string): GedcomData => {
         currentEvent = null;
 
         switch (tagU) {
-          case 'NAME':
+          case 'NAME': {
             const decodedNameValue = decodeLegacyNameMojibake(value);
             currentIndi.name = decodedNameValue.replace(/\//g, '');
             const parts = decodedNameValue.split('/');
             if (parts.length > 0) currentIndi.givenName = parts[0].trim();
             if (parts.length > 1) currentIndi.surname = parts[1].trim();
             break;
+          }
           case 'SEX':
             currentIndi.gender = value === 'M' ? Gender.Male : value === 'F' ? Gender.Female : Gender.Unknown;
             break;

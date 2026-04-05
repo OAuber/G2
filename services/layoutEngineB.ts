@@ -534,7 +534,7 @@ export class GenealogyLayoutEngineB {
             }
         }
 
-        let selfWidth = lifespan;
+        const selfWidth = lifespan;
         // In ancestor layout, keep full ribbon depth as occupied width even for
         // leaves (no known parents). Shrinking here causes underestimation and
         // partial overlap of central couples with sparse ancestry.
@@ -793,7 +793,7 @@ export class GenealogyLayoutEngineB {
     /*  createNodeMatrix                                               */
     /* ============================================================== */
 
-    private createNodeMatrix(id: string, x: number, z: number, direction: number) {
+    private createNodeMatrix(id: string, x: number, z: number, _direction: number) {
         const existing = this.nodes.get(id);
         const indi = this.data.individuals[id];
         if (!indi) return;

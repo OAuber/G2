@@ -46,95 +46,18 @@ import {
   IndividualDiffResponsePayload,
 } from './services/p2pProtocol';
 import { InviteTokenClaims, signInviteClaims, verifyInviteToken } from './services/p2pSecurity';
-
-const SELF_IDENTITY_STORAGE_KEY = 'g2:selfIdentityPublic:v1';
-const SELF_IDENTITY_PRIVATE_STORAGE_KEY = 'g2:selfIdentityPrivateJwk:v1';
-const INVITE_SECRET_STORAGE_KEY = 'g2:p2pInviteSecret:v1';
-const AUTOSAVE_SETTINGS_KEY = 'g2:autoSaveEnabled:v1';
-const P2P_TRANSFER_MODE_KEY = 'g2:p2pTransferMode:v1';
-const P2P_BUNDLE_CONTENT_MODE_KEY = 'g2:p2pBundleContentMode:v1';
-const AUTOSAVE_DB_NAME = 'g2-autosave-db';
-const AUTOSAVE_STORE_NAME = 'snapshots';
-const AUTOSAVE_RECORD_KEY = 'latest';
-
-/** Base Prénom_Nom pour titres auto des photos en ligne (comme un nom de fichier). */
-function displayNameSlugForOnlineDocTitle(
-  individualId: string,
-  individuals: Record<string, Individual> | null | undefined,
-): string {
-  const indi = individuals?.[individualId];
-  if (!indi) return individualId.replace(/^@+|@+$/g, '') || 'unknown';
-  const g = (indi.givenName || '').trim();
-  const s = (indi.surname || '').trim();
-  const combined = `${g} ${s}`.trim();
-  if (combined) return combined.replace(/\s+/g, '_');
-  const n = (indi.name || '').replace(/\//g, '').trim().replace(/\s+/g, '_');
-  if (n) return n;
-  return individualId.replace(/^@+|@+$/g, '') || 'unknown';
-}
-
-function shouldReplaceOnlinePhotoTitle(title: string): boolean {
-  const t = title.trim();
-  if (!t || t === 'Untitled') return true;
-  if (t.startsWith('Wikipedia (')) return true;
-  return false;
-}
-
-/** Démo « Rois et reines d’Europe » : Louis XIV dans le bundle enrichi (IDs GEDCOM usuels). */
-const ROYALS_DEMO_LOUIS_IDS = ['I1341', '@I1341@'] as const;
-
-function findIndividualForRoyalsDemo(data: GedcomData): Individual | null {
-  for (const id of ROYALS_DEMO_LOUIS_IDS) {
-    const indi = data.individuals[id];
-    if (indi) return indi;
-  }
-  return null;
-}
-
-type AutoSaveSnapshot = {
-  savedAt: string;
-  databaseName: string;
-  originalGedcomData: GedcomData;
-  documentsByIndividualId: Record<string, unknown>;
-  selfIdentity: SelfIdentityPublic | null;
-};
-
-const openAutoSaveDb = (): Promise<IDBDatabase> =>
-  new Promise((resolve, reject) => {
-    const request = indexedDB.open(AUTOSAVE_DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(AUTOSAVE_STORE_NAME)) {
-        db.createObjectStore(AUTOSAVE_STORE_NAME);
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-
-const saveAutoSaveSnapshot = async (snapshot: AutoSaveSnapshot): Promise<void> => {
-  const db = await openAutoSaveDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(AUTOSAVE_STORE_NAME, 'readwrite');
-    tx.objectStore(AUTOSAVE_STORE_NAME).put(snapshot, AUTOSAVE_RECORD_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-  db.close();
-};
-
-const readAutoSaveSnapshot = async (): Promise<AutoSaveSnapshot | null> => {
-  const db = await openAutoSaveDb();
-  const result = await new Promise<AutoSaveSnapshot | null>((resolve, reject) => {
-    const tx = db.transaction(AUTOSAVE_STORE_NAME, 'readonly');
-    const req = tx.objectStore(AUTOSAVE_STORE_NAME).get(AUTOSAVE_RECORD_KEY);
-    req.onsuccess = () => resolve((req.result as AutoSaveSnapshot | undefined) || null);
-    req.onerror = () => reject(req.error);
-  });
-  db.close();
-  return result;
-};
+import {
+  SELF_IDENTITY_STORAGE_KEY,
+  SELF_IDENTITY_PRIVATE_STORAGE_KEY,
+  INVITE_SECRET_STORAGE_KEY,
+  AUTOSAVE_SETTINGS_KEY,
+  P2P_TRANSFER_MODE_KEY,
+  P2P_BUNDLE_CONTENT_MODE_KEY,
+} from './app/storageKeys';
+import { displayNameSlugForOnlineDocTitle, shouldReplaceOnlinePhotoTitle } from './app/onlineDocTitle';
+import { findIndividualForRoyalsDemo } from './app/royalsDemo';
+import type { AutoSaveSnapshot } from './app/autoSave';
+import { readAutoSaveSnapshot, saveAutoSaveSnapshot } from './app/autoSave';
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
@@ -717,7 +640,7 @@ function App() {
   const [sceneExtras, setSceneExtras] = useState<RenderedPerson[]>([]);
 
   const [showBoxes, setShowBoxes] = useState(true);
-  const [showAxes, setShowAxes] = useState(false);
+  const [showAxes] = useState(false);
   
   // Panels closed by default
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
@@ -743,7 +666,7 @@ function App() {
   
   // New UI Controls State
   const [isLoading, setIsLoading] = useState(false);
-  const [dragMode, setDragMode] = useState<DragMode>('descendants');
+  const [dragMode] = useState<DragMode>('descendants');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('2d-grid');
   const [flyTarget, setFlyTarget] = useState<CameraMode | null>(null);
   /** Transition de zoom ortho entre vue grille 2D et vue individu (évite le saut de taille du ruban). */
@@ -760,7 +683,7 @@ function App() {
   const is2dIndividual = displayMode === '2d-individual';
   // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
   const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
-  const [centerRequest, setCenterRequest] = useState(0);
+  const [, setCenterRequest] = useState(0);
   const [activeFilters, setActiveFilters] = useState<Set<FilterTag>>(new Set());
 
   // Auto Layout State
@@ -4141,7 +4064,7 @@ function App() {
     if (!originalGedcomData) return;
     const previousIndi = originalGedcomData.individuals[updatedIndi.id];
 
-    let newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
+    const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
     newData.individuals[updatedIndi.id] = {
         ...newData.individuals[updatedIndi.id],
         givenName: updatedIndi.givenName,
@@ -5665,8 +5588,8 @@ function App() {
 
   const handleCreateIndividual = (formData: NewPersonData) => {
     // Only modify ORIGINAL data
-    let currentData = originalGedcomData || { individuals: {}, families: {} };
-    let newData = JSON.parse(JSON.stringify(currentData)) as GedcomData;
+    const currentData = originalGedcomData || { individuals: {}, families: {} };
+    const newData = JSON.parse(JSON.stringify(currentData)) as GedcomData;
 
     // 1. Create New Individual
     const newId = getNextId('I', newData);
@@ -5946,7 +5869,6 @@ function App() {
   const handleUILeave = () => setIsHoveringUI(false);
 
   // Safe Close Handlers to reset hover state
-  const closeLeftPanel = () => { setLeftPanelOpen(false); setIsHoveringUI(false); };
   const closeRightPanel = () => { setRightPanelOpen(false); setIsCreating(false); setIsHoveringUI(false); };
   const closeTopPanel = () => { setTopPanelOpen(false); setIsHoveringUI(false); };
   const closeBottomPanel = () => { setBottomPanelOpen(false); setIsHoveringUI(false); };

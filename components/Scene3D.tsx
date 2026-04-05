@@ -45,13 +45,6 @@ function preferNameLabelIntersections(items: Intersection[]): Intersection[] {
   return nameHits.length > 0 ? [...nameHits, ...rest] : items;
 }
 
-function individualViewDistance(): number {
-    const aspect = window.innerWidth / window.innerHeight;
-    const halfHFov = Math.atan(Math.tan(FOV_RAD / 2) * aspect);
-    const visibleWidth = INDIVIDUAL_WIDTH * 25;
-    return visibleWidth / (2 * Math.tan(halfHFov));
-}
-
 // Ortho zoom factor for the top view
 function topViewOrthoZoom(sceneSize: number): number {
     const minDim = Math.min(window.innerWidth, window.innerHeight);
@@ -680,7 +673,6 @@ const RibbonPhotoOverlays3D: React.FC<{
     const camDir = new Vector3();
     const xAxis = new Vector3(1, 0, 0);
     const yAxis = new Vector3(0, 1, 0);
-    const zAxis = new Vector3(0, 0, 1);
     const rot = new Quaternion();
     const pathQ = new Quaternion();
     cam.getWorldDirection(camDir);
@@ -833,9 +825,9 @@ const Scene3D: React.FC<Scene3DProps> = ({
   showAxes = false, 
   onIndividualClick,
   onRibbonOpen2D,
-  onBackgroundClick,
+  onBackgroundClick: _onBackgroundClick,
   onVisibleIdsChange,
-  dragMode,
+  dragMode: _dragMode,
   cameraMode,
   flyTarget,
   onFlyComplete,
@@ -845,7 +837,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   extraIndividuals,
   setExtraIndividuals,
   autoLayoutMode = 'none',
-  onSetAutoLayoutMode,
+  onSetAutoLayoutMode: _onSetAutoLayoutMode,
   treeDirection = null,
   layoutParams,
   topViewLabelMaxZSpan = 500,
@@ -875,8 +867,8 @@ const Scene3D: React.FC<Scene3DProps> = ({
   const sceneSizeRef = useRef(100);
 
   // --- Auto Layout Calculation ---
-  const { filteredLayoutNodes, allLayoutNodes } = useMemo(() => {
-    if (autoLayoutMode === 'none' || !data || !rootIndividual) return { filteredLayoutNodes: [], allLayoutNodes: [] };
+  const { allLayoutNodes } = useMemo(() => {
+    if (autoLayoutMode === 'none' || !data || !rootIndividual) return { allLayoutNodes: [] };
     
     try {
         const engine = new GenealogyLayoutEngineB(data, layoutParams);
@@ -887,13 +879,10 @@ const Scene3D: React.FC<Scene3DProps> = ({
         else if (autoLayoutMode === 'ancestors') filtered = allNodes.filter(n => n.generation <= 0);
         else if (autoLayoutMode === 'descendants') filtered = allNodes.filter(n => n.generation >= 0);
         
-        return { 
-            filteredLayoutNodes: filtered.filter(n => n.id !== rootIndividual.id),
-            allLayoutNodes: filtered
-        };
+        return { allLayoutNodes: filtered };
     } catch (e) {
         console.error("Layout Engine Error:", e);
-        return { filteredLayoutNodes: [], allLayoutNodes: [] };
+        return { allLayoutNodes: [] };
     }
   }, [autoLayoutMode, data, rootIndividual, layoutParams]);
 
@@ -1009,7 +998,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
         }
         if (cTrait && personState.generationOffset !== 0) personY = personGeo.position[1];
         if (sTrait && !cTrait && !childInExtra && !motherInExtra) {
-             let targetSpouse = spouseInExtra || (sTrait.spouseId === rootIndividual.id ? { data: rootIndividual } as RenderedPerson : undefined);
+             const targetSpouse = spouseInExtra || (sTrait.spouseId === rootIndividual.id ? { data: rootIndividual } as RenderedPerson : undefined);
              if (targetSpouse) {
                  const spouseData = data.individuals[targetSpouse.data.id] || targetSpouse.data;
                  const tGeo = calculateIndividualGeometry(spouseData, 0, 0, data);
@@ -1053,7 +1042,6 @@ const Scene3D: React.FC<Scene3DProps> = ({
   }, [extraIndividuals, mainCalculation, rootIndividual, data, showBoxes, selectedId]);
 
   const { centerTarget, individualCenter, sceneSize } = useMemo(() => {
-    const RIBBON_HALF_WIDTH = 5; // half of INDIVIDUAL_WIDTH (10)
     const defaultIndiv = new Vector3(0, 0, 0);
 
     if (autoLayoutMode !== 'none' && allLayoutNodes.length > 0) {
@@ -1260,7 +1248,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
       if (indi) onIndividualClick(indi);
   }, [data, onIndividualClick]);
 
-  const handleInstancedTraitClick = useCallback((type: string, id: string, relatedId?: string) => {
+  const handleInstancedTraitClick = useCallback((_type: string, id: string, _relatedId?: string) => {
       if (!data) return;
       const indi = data.individuals[id];
       if (indi) onIndividualClick(indi);

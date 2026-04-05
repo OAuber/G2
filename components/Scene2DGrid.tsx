@@ -3,72 +3,11 @@ import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
 import { OrthographicCamera, Text, Html, Image as DreiImage } from '@react-three/drei';
 import * as THREE from 'three';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
+import { findRelationshipPath } from '../services/relationshipPath';
 import { matchesFilters, applySortMode, computeLineageFilterSets } from './Sidebar';
 import { useI18n } from '../i18n';
 
 type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
-
-function findRelationshipPath(data: GedcomData, sourceId: string, targetId: string): Set<string> {
-  if (sourceId === targetId) return new Set([sourceId]);
-  if (!data.individuals[sourceId] || !data.individuals[targetId]) return new Set();
-
-  const getNeighbors = (id: string): string[] => {
-    const indi = data.individuals[id];
-    if (!indi) return [];
-    const nb: string[] = [];
-    if (indi.familyChildId) {
-      const fam = data.families[indi.familyChildId];
-      if (fam) {
-        if (fam.husbandId && fam.husbandId !== id) nb.push(fam.husbandId);
-        if (fam.wifeId && fam.wifeId !== id) nb.push(fam.wifeId);
-      }
-    }
-    if (indi.familySpouseIds) {
-      for (const famId of indi.familySpouseIds) {
-        const fam = data.families[famId];
-        if (!fam) continue;
-        const sp = fam.husbandId === id ? fam.wifeId : fam.husbandId;
-        if (sp) nb.push(sp);
-        if (fam.childrenIds) for (const cid of fam.childrenIds) { if (cid !== id) nb.push(cid); }
-      }
-    }
-    return nb;
-  };
-
-  const prev = new Map<string, Set<string>>();
-  prev.set(sourceId, new Set());
-  let queue: string[] = [sourceId];
-  let found = false;
-
-  while (queue.length > 0 && !found) {
-    const next: string[] = [];
-    for (const cur of queue) {
-      for (const nb of getNeighbors(cur)) {
-        if (nb === targetId) {
-          found = true;
-          if (!prev.has(nb)) prev.set(nb, new Set());
-          prev.get(nb)!.add(cur);
-          continue;
-        }
-        if (!prev.has(nb)) { prev.set(nb, new Set([cur])); next.push(nb); }
-      }
-    }
-    if (found) break;
-    queue = next;
-  }
-
-  if (!found) return new Set();
-  const onPath = new Set<string>();
-  const stack: string[] = [targetId];
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    if (onPath.has(id)) continue;
-    onPath.add(id);
-    const preds = prev.get(id);
-    if (preds) for (const p of preds) stack.push(p);
-  }
-  return onPath;
-}
 
 interface Scene2DGridProps {
   data: GedcomData | null;
@@ -620,7 +559,7 @@ const GridContent: React.FC<GridContentProps> = ({
   const prevSingleIndividualRef = useRef(singleIndividual);
   const prevSelectedIdRef = useRef(selectedId);
   const traitActionByInstanceRef = useRef<Array<{ trait: TraitInfo }>>([]);
-  const [hovered3DAction, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
+  const [, setHovered3DAction] = useState<'descendants' | 'ancestors' | null>(null);
   const [photoReveal, setPhotoReveal] = useState(0);
   const [isAtZoomLimit, setIsAtZoomLimit] = useState(false);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);

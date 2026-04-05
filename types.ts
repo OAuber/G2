@@ -1,4 +1,3 @@
-import React from 'react';
 import { Group } from 'three';
 
 export enum Gender {

@@ -71,12 +71,12 @@ export const calculateIndividualGeometry = (
       : '#94a3b8'; 
 
   // Calculate Marriage Offsets (Time since birth)
-  let rawMarriageTraits: MarriageTrait[] = [];
-  let rawChildrenTraits: ChildTrait[] = [];
+  const rawMarriageTraits: MarriageTrait[] = [];
+  const rawChildrenTraits: ChildTrait[] = [];
 
   if (gedcomData) {
     if (individual.familySpouseIds) {
-      individual.familySpouseIds.forEach((famId, famIndex) => {
+      individual.familySpouseIds.forEach((famId) => {
         const family = gedcomData.families[famId];
         if (family) {
           // Identify Spouse
@@ -90,7 +90,7 @@ export const calculateIndividualGeometry = (
             // First child logic
              if (family.childrenIds && family.childrenIds.length > 0) {
                const firstChild = gedcomData.individuals[family.childrenIds[0]];
-               let fcDate = firstChild?.birthDate?.preciseDate ?? firstChild?.birthDate?.year;
+               const fcDate = firstChild?.birthDate?.preciseDate ?? firstChild?.birthDate?.year;
                if (fcDate !== null && fcDate !== undefined) mDate = fcDate - 1;
             }
           }
