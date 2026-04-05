@@ -3,7 +3,7 @@ import { ActivityLogEvent } from './p2pDomain';
 export interface InviteTokenClaims {
   inviteId: string;
   sessionId: string;
-  role: 'viewer' | 'contributor' | 'editor';
+  role: 'viewer' | 'contributor' | 'editor' | 'comparator';
   accessProfileId: string;
   targetIndividualId?: string;
   targetIndividualName?: string;
@@ -13,6 +13,11 @@ export interface InviteTokenClaims {
   nonce: string;
   /** Lien durable pour le même utilisateur (ex. second appareil / mobile en arrière-plan). */
   intent?: 'standard' | 'own_device';
+  /**
+   * `ephemeral_free` : visite libre sans identification (1.2).
+   * `named_claim` ou absent : invitation nominative (2), rétrocompat.
+   */
+  linkKind?: 'ephemeral_free' | 'named_claim';
 }
 
 export async function signInviteClaims(claims: InviteTokenClaims, secret: string): Promise<string> {

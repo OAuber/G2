@@ -10,6 +10,8 @@ export function useAutoSave(
   documentsByIndividualId: Record<string, IndividualDocument[]>,
   selfIdentity: SelfIdentityPublic | null,
   databaseName: string,
+  /** Si false (ex. invité en visite 1.2), aucune écriture auto-sauvegarde. */
+  persistSnapshot: boolean = true,
 ) {
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
     try {
@@ -52,7 +54,7 @@ export function useAutoSave(
   }, []);
 
   useEffect(() => {
-    if (!autoSaveEnabled || !originalGedcomData || isRestoringAutoSaveRef.current) return;
+    if (!persistSnapshot || !autoSaveEnabled || !originalGedcomData || isRestoringAutoSaveRef.current) return;
     if (autoSaveTimerRef.current !== null) {
       window.clearTimeout(autoSaveTimerRef.current);
     }
@@ -80,7 +82,7 @@ export function useAutoSave(
         window.clearTimeout(autoSaveTimerRef.current);
       }
     };
-  }, [autoSaveEnabled, originalGedcomData, documentsByIndividualId, selfIdentity, databaseName]);
+  }, [persistSnapshot, autoSaveEnabled, originalGedcomData, documentsByIndividualId, selfIdentity, databaseName]);
 
   useEffect(() => {
     return () => {

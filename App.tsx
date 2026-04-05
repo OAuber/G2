@@ -79,7 +79,14 @@ import { useSelfIdentity } from './hooks/useSelfIdentity';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGedcomCore } from './hooks/useGedcomCore';
 import { useDocumentsState } from './hooks/useDocumentsState';
+import { isProbablyLivingForUi } from './app/individualLiving';
 import { readInviteTokenFromLocation } from './app/p2pInviteUrl';
+import {
+  buildEphemeralAccessProfile,
+  resolveLinkKind,
+  sessionAllowsShareCompare,
+  type InviteLinkKind,
+} from './app/inviteLinkKind';
 import {
   createP2PSyncSenders,
   useP2PTransferModes,
@@ -115,17 +122,6 @@ function App() {
     setSelectedIdsFor2D,
   } = useGedcomCore();
   const { documentsByIndividualId, setDocumentsByIndividualId } = useDocumentsState();
-  const {
-    autoSaveEnabled,
-    setAutoSaveEnabled,
-    autoSaveState,
-    setAutoSaveState,
-    autoSaveLastAt,
-    setAutoSaveLastAt,
-    hasAutoSaveDraft,
-    setHasAutoSaveDraft,
-    isRestoringAutoSaveRef,
-  } = useAutoSave(originalGedcomData, documentsByIndividualId, selfIdentity, databaseName);
   const {
     p2pTransferMode,
     setP2PTransferMode,
@@ -232,6 +228,10 @@ function App() {
   const [trustedOwnDevicePeerId, setTrustedOwnDevicePeerId] = useState<string | null>(null);
   const [trustedOwnDeviceInviteId, setTrustedOwnDeviceInviteId] = useState<string | null>(null);
   const [inviteOnboardingStage, setInviteOnboardingStage] = useState<'idle' | 'connecting' | 'connected' | 'accepted' | 'syncing' | 'completed' | 'ready' | 'error'>('idle');
+  /** Invité en visite libre 1.2 après synchronisation. */
+  const [guestSessionMode, setGuestSessionMode] = useState<'none' | 'ephemeral'>('none');
+  /** Lien actif pour la session collaboratif (partage/comparaison réservés au `named_claim`). */
+  const [sessionLinkKind, setSessionLinkKind] = useState<InviteLinkKind | null>(null);
   const [inviteMediaProgress, setInviteMediaProgress] = useState<{
     receivedBatches: number;
     totalBatches: number;
@@ -363,6 +363,11 @@ function App() {
   const serviceWorkerRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const inviteAutoConnectAttemptedRef = useRef(false);
   const p2pInvitesRef = useRef<P2PInviteItem[]>([]);
+  /** Invité (lien dans l’URL) : id d’invitation pour appliquer INVITE_REVOKE (1.2 et nominatif). */
+  const activeGuestInviteIdRef = useRef<string | null>(null);
+  /** Invité « comparateur » : copie distante reçue sans remplacer le GEDCOM local (pour comparaison / future UI). */
+  const peerCompareGedcomRef = useRef<GedcomData | null>(null);
+  const pendingInviteRoleRef = useRef<P2PRole | null>(null);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const originalGedcomDataRef = useRef<GedcomData | null>(null);
   const syncApplyingInProgressRef = useRef(false);
@@ -404,6 +409,9 @@ function App() {
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { pendingInviteTokenRef.current = pendingInviteToken; }, [pendingInviteToken]);
+  useEffect(() => {
+    pendingInviteRoleRef.current = pendingInviteRole;
+  }, [pendingInviteRole]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
   useEffect(() => {
@@ -624,10 +632,23 @@ function App() {
     });
   };
 
+  /** Invité en rôle comparateur : ne pas écraser le GEDCOM / normalisé / médias locaux avec les données hôte. */
+  const isComparatorInviteClient = (): boolean => {
+    if (p2pModeRef.current !== 'client') return false;
+    if (pendingInviteRoleRef.current === 'comparator') return true;
+    const tok = pendingInviteTokenRef.current;
+    if (tok) {
+      const inv = p2pInvitesRef.current.find((i) => i.token === tok);
+      if (inv?.role === 'comparator') return true;
+    }
+    return false;
+  };
+
   const applyIncomingNormalizedGedcom = (
     normalizedRaw: unknown,
     algoVersion?: string
   ) => {
+    if (isComparatorInviteClient()) return;
     if (!normalizedRaw || typeof normalizedRaw !== 'object') return;
     if (algoVersion && algoVersion !== NORMALIZATION_ALGO_VERSION) return;
     const normalized = normalizedRaw as GedcomData;
@@ -663,6 +684,38 @@ function App() {
       (!metadata.normalizationAlgoVersion || metadata.normalizationAlgoVersion === NORMALIZATION_ALGO_VERSION);
     syncReceivingInProgressRef.current = false;
     setP2PSyncStatusText('applying');
+    if (isComparatorInviteClient()) {
+      peerCompareGedcomRef.current = incomingGedcom;
+      setRemotePeerHasData(true);
+      logP2PActivity('sync.received.comparator_bundle', 'session', 'remote');
+      if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+        setInviteGedcomProgress({
+          receivedChunks: 1,
+          totalChunks: 1,
+          applied: true,
+        });
+        setInviteMediaProgress({
+          receivedBatches: 1,
+          totalBatches: 1,
+          receivedDocs: 0,
+          totalDocs: 0,
+          receivedPhotos: 0,
+          totalPhotos: 0,
+        });
+        setInviteNormalizedProgress({
+          receivedChunks: 0,
+          totalChunks: 0,
+          applied: false,
+          fallbackLocal: false,
+        });
+      }
+      setP2PSyncStatusText('done');
+      window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+      logP2PActivity('sync.bundle.received', 'session', 'remote');
+      completeInviteOnboarding();
+      showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+      return;
+    }
     handleDataLoaded(
       incomingGedcom,
       metadata.databaseName || 'Remote P2P Database',
@@ -743,20 +796,42 @@ function App() {
       pendingIncomingDocumentsRef.current = null;
     }
     const targetId = pendingInviteTargetIndividualId;
-    if (targetId && gedcomDataRef.current?.individuals[targetId]) {
-      const target = gedcomDataRef.current.individuals[targetId];
-      setRootIndividual(target);
-      setSelectedIndividual(target);
-      setDisplayMode('2d-individual');
-      setCenterRequest((prev) => prev + 1);
+    const pendingTok = pendingInviteTokenRef.current;
+    const inviteForSession = pendingTok
+      ? p2pInvitesRef.current.find((i) => i.token === pendingTok)
+      : undefined;
+    const linkKindForSession = resolveLinkKind(inviteForSession ?? undefined);
+    setSessionLinkKind(linkKindForSession);
+    activeGuestInviteIdRef.current = inviteForSession?.inviteId ?? null;
+    if (linkKindForSession === 'ephemeral_free') {
+      setGuestSessionMode('ephemeral');
+      setIsIdentifyingSelf(false);
+      if (gedcomDataRef.current) {
+        const ids = Object.keys(gedcomDataRef.current.individuals);
+        if (ids.length > 0) {
+          const first = gedcomDataRef.current.individuals[ids[0]];
+          setRootIndividual(first);
+          setSelectedIndividual(first);
+          setDisplayMode('2d-individual');
+          setCenterRequest((prev) => prev + 1);
+        }
+      }
+    } else {
+      if (targetId && gedcomDataRef.current?.individuals[targetId]) {
+        const target = gedcomDataRef.current.individuals[targetId];
+        setRootIndividual(target);
+        setSelectedIndividual(target);
+        setDisplayMode('2d-individual');
+        setCenterRequest((prev) => prev + 1);
+      }
+      setIsIdentifyingSelf(true);
+      setIdentityTabSignal((prev) => prev + 1);
     }
     setInviteOnboardingStage('completed');
     setInviteRibbonFirstRenderDone(false);
     setInviteGedcomProgress((prev) => prev ? { ...prev, applied: true } : { receivedChunks: 1, totalChunks: 1, applied: true });
     setLeftPanelOpen(true);
     setRightPanelOpen(true);
-    setIsIdentifyingSelf(true);
-    setIdentityTabSignal((prev) => prev + 1);
     if (inviteOnboardingDismissTimerRef.current !== null) {
       window.clearTimeout(inviteOnboardingDismissTimerRef.current);
     }
@@ -793,6 +868,18 @@ function App() {
         exposeDates: true,
         exposePlaces: true,
         exposeNotes: false,
+        allowDocuments: true,
+        allowDownload: false,
+        allowProposal: true,
+        allowDirectEdit: false,
+      };
+    }
+    if (role === 'comparator') {
+      return {
+        exposeIdentity: true,
+        exposeDates: true,
+        exposePlaces: true,
+        exposeNotes: true,
         allowDocuments: true,
         allowDownload: false,
         allowProposal: true,
@@ -1213,6 +1300,10 @@ function App() {
   };
 
   const handleStartCompare = () => {
+    if (!sessionAllowsShareCompare(sessionLinkKind)) {
+      alert(t('app.alerts.shareCompareNamedInviteOnly'));
+      return;
+    }
     if (!isIdentified) {
       alert(t('app.alerts.claimIdentityBeforeCompare'));
       return;
@@ -1233,6 +1324,10 @@ function App() {
   };
 
   const handleStartShare = () => {
+    if (!sessionAllowsShareCompare(sessionLinkKind)) {
+      alert(t('app.alerts.shareCompareNamedInviteOnly'));
+      return;
+    }
     if (!isIdentified) {
       alert(t('app.alerts.claimIdentityBeforeShare'));
       return;
@@ -1259,16 +1354,23 @@ function App() {
     setP2PSyncStatusText('share started');
   };
 
-  const livingCandidates = useMemo(() => {
+  /**
+   * Personnes probablement vivantes (invitations P2P + choix d’identité) : décès selon le GEDCOM d’origine,
+   * pas les dates de décès calculées par la normalisation.
+   */
+  const probablyLivingCandidates = useMemo(() => {
     if (!gedcomData) return [];
     return Object.values(gedcomData.individuals)
-      .filter((indi) => !indi.deathDate?.year)
+      .filter((indi) => isProbablyLivingForUi(indi.id, gedcomData, originalGedcomData))
       .map((indi) => ({
         id: indi.id,
         label: `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id,
       }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [gedcomData]);
+      .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id));
+  }, [gedcomData, originalGedcomData]);
+
+  const livingCandidates = probablyLivingCandidates;
+  const identityClaimCandidates = probablyLivingCandidates;
 
   const pendingProposalsCount = useMemo(
     () => p2pProposals.filter((proposal) => proposal.status === 'pending').length,
@@ -1288,10 +1390,34 @@ function App() {
     () => p2pInvites.find((invite) => invite.token === pendingInviteToken) || null,
     [p2pInvites, pendingInviteToken]
   );
+  const ephemeralNoPersist = useMemo(() => {
+    if (p2pMode !== 'client') return false;
+    if (guestSessionMode === 'ephemeral') return true;
+    if (!pendingInviteToken) return false;
+    const inv = p2pInvites.find((i) => i.token === pendingInviteToken);
+    return resolveLinkKind(inv ?? undefined) === 'ephemeral_free';
+  }, [p2pMode, guestSessionMode, pendingInviteToken, p2pInvites]);
+
+  const {
+    autoSaveEnabled,
+    setAutoSaveEnabled,
+    autoSaveState,
+    setAutoSaveState,
+    autoSaveLastAt,
+    setAutoSaveLastAt,
+    hasAutoSaveDraft,
+    setHasAutoSaveDraft,
+    isRestoringAutoSaveRef,
+  } = useAutoSave(originalGedcomData, documentsByIndividualId, selfIdentity, databaseName, !ephemeralNoPersist);
+
+  const ephemeralGuestActive =
+    p2pMode === 'client' && p2pStatus === 'connected' && guestSessionMode === 'ephemeral';
+
   const pendingInviteRoleLabel = useMemo(() => {
     if (!pendingInviteRole) return '';
     if (pendingInviteRole === 'viewer') return t('topPanel.inviteActionView');
     if (pendingInviteRole === 'contributor') return t('topPanel.inviteActionContribute');
+    if (pendingInviteRole === 'comparator') return t('topPanel.inviteActionCompare');
     return t('topPanel.inviteActionEdit');
   }, [pendingInviteRole, t]);
   const isInviteLandingActive = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
@@ -1678,28 +1804,39 @@ function App() {
       inviteAutoConnectAttemptedRef.current = false;
     }
     setPendingInviteRole(claims.role);
+    pendingInviteRoleRef.current = claims.role;
     setPendingInviteIntent(claims.intent === 'own_device' ? 'own_device' : 'standard');
     setPendingInviteInviterName(claims.inviterName || null);
     setInviteOnboardingStage('idle');
+    const urlLinkKind = resolveLinkKind(claims);
     if (claims.targetIndividualId) {
       setPendingInviteTargetIndividualId(claims.targetIndividualId);
+    } else if (urlLinkKind === 'ephemeral_free') {
+      setPendingInviteTargetIndividualId(null);
     }
     setP2PInvites((prev) => {
       if (prev.some((invite) => invite.inviteId === claims.inviteId)) return prev;
+      const ephemeral = urlLinkKind === 'ephemeral_free';
+      const labelTo = ephemeral
+        ? claims.targetIndividualName || 'ephemeral'
+        : claims.targetIndividualName || 'invite';
       return [
         {
           inviteId: claims.inviteId,
           individualId: claims.targetIndividualId || '',
-          individualName: claims.targetIndividualName || `invité (${claims.role})`,
-          role: claims.role,
+          individualName: ephemeral
+            ? claims.targetIndividualName || ''
+            : claims.targetIndividualName || `invité (${claims.role})`,
+          role: ephemeral ? 'viewer' : claims.role,
           status: 'active',
           personalizedDefault: false,
           createdAt: claims.issuedAt,
           expiresAt: claims.expiresAt,
           token: inviteToken,
           inviteIntent: claims.intent === 'own_device' ? 'own_device' : 'standard',
-          inviteLink: `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(claims.inviterName || 'invitant')}&invite_to=${encodeURIComponent(claims.targetIndividualName || 'invite')}&invite_role=${encodeURIComponent(claims.role)}${claims.intent === 'own_device' ? '&invite_intent=own_device' : ''}#g2invite=${encodeURIComponent(inviteToken)}`,
-          accessProfile: buildAccessProfileFromRole(claims.role),
+          inviteLink: `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(claims.inviterName || 'invitant')}&invite_to=${encodeURIComponent(labelTo)}&invite_role=${encodeURIComponent(claims.role)}${claims.intent === 'own_device' ? '&invite_intent=own_device' : ''}${ephemeral ? '&invite_kind=ephemeral' : ''}#g2invite=${encodeURIComponent(inviteToken)}`,
+          accessProfile: ephemeral ? buildEphemeralAccessProfile() : buildAccessProfileFromRole(claims.role),
+          linkKind: urlLinkKind,
         },
         ...prev,
       ];
@@ -1781,6 +1918,35 @@ function App() {
     };
   }, [isHelpOpen]);
 
+  const resetEphemeralGuestSession = () => {
+    activeGuestInviteIdRef.current = null;
+    peerCompareGedcomRef.current = null;
+    inviteIntroductionContextRef.current = null;
+    p2pService.destroy();
+    setP2pStatus('disconnected');
+    setPeerId(null);
+    setP2pMode(null);
+    p2pModeRef.current = null;
+    setOriginalGedcomData({ individuals: {}, families: {} });
+    setNormalizedGedcomData(null);
+    setDocumentsByIndividualId({});
+    setDatabaseName('Imported Database');
+    setGuestSessionMode('none');
+    setSessionLinkKind(null);
+    setP2PInvites([]);
+    setPendingInviteToken(null);
+    setPendingInviteHostPeerId(null);
+    setPendingInviteTargetIndividualId(null);
+    setInviteOnboardingStage('idle');
+    setSelectedIndividual(null);
+    setRootIndividual(null);
+    setP2PProposals([]);
+    setP2PSyncStatusText(null);
+    setInitialCompareStatusText(null);
+    showTransientToast('success', t('app.toasts.ephemeralSessionEnded'), 2400);
+    window.history.replaceState(null, '', window.location.pathname);
+  };
+
   const initP2PWithMode = (mode: 'host' | 'client', autoConnectHostId?: string) => {
       setP2pMode(mode);
       p2pModeRef.current = mode;
@@ -1791,6 +1957,7 @@ function App() {
               if (id) setPeerId(id);
               if (status !== 'connected') {
                 setRemotePeerHasData(null);
+                peerCompareGedcomRef.current = null;
                 remoteHostSelfIdentityRef.current = null;
                 setP2PSessionUseCase(null);
                 p2pSessionUseCaseRef.current = null;
@@ -1798,6 +1965,8 @@ function App() {
                 activeSessionPeerPolicyRef.current = null;
                 setTrustedOwnDevicePeerId(null);
                 setTrustedOwnDeviceInviteId(null);
+                setSessionLinkKind(null);
+                setGuestSessionMode('none');
               }
               logP2PActivity(`session.${status}`, 'session', id || 'local');
               if (
@@ -1840,6 +2009,7 @@ function App() {
                 documentItemsTotal?: number;
                 photoItemsTotal?: number;
               }) => {
+                if (isComparatorInviteClient()) return;
                 const allowDocumentsInbound =
                   p2pModeRef.current === 'client'
                     ? (remoteAccessPolicy?.allowDocuments ?? true)
@@ -1934,6 +2104,24 @@ function App() {
                   if (syncChunkReceiveTimeoutRef.current !== null) {
                     window.clearTimeout(syncChunkReceiveTimeoutRef.current);
                     syncChunkReceiveTimeoutRef.current = null;
+                  }
+                  if (isComparatorInviteClient()) {
+                    peerCompareGedcomRef.current = incomingGedcom;
+                    setRemotePeerHasData(true);
+                    logP2PActivity('sync.received.comparator_snapshot', 'session', 'remote');
+                    if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                      setInviteGedcomProgress({
+                        receivedChunks: 1,
+                        totalChunks: 1,
+                        applied: true,
+                      });
+                    }
+                    setP2PSyncStatusText('done');
+                    window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+                    logP2PActivity('sync.received', 'session', 'remote');
+                    completeInviteOnboarding();
+                    showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+                    return;
                   }
                   handleDataLoaded(
                     incomingGedcom,
@@ -2036,6 +2224,26 @@ function App() {
                       syncApplyingInProgressRef.current = true;
                       setP2PSyncStatusText('applying');
                       const incomingGedcom = parseGedcom(fullGedcomText);
+                      if (isComparatorInviteClient()) {
+                        peerCompareGedcomRef.current = incomingGedcom;
+                        setRemotePeerHasData(true);
+                        logP2PActivity('sync.received.comparator_snapshot', 'session', 'remote');
+                        if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                          setInviteGedcomProgress({
+                            receivedChunks: acc.totalChunks,
+                            totalChunks: acc.totalChunks,
+                            applied: true,
+                          });
+                        }
+                        setP2PSyncStatusText('done');
+                        window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+                        window.setTimeout(() => {
+                          syncApplyingInProgressRef.current = false;
+                        }, 2000);
+                        logP2PActivity('sync.received', 'session', 'remote');
+                        completeInviteOnboarding();
+                        showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+                      } else {
                       handleDataLoaded(
                         incomingGedcom,
                         acc.databaseName || "Remote P2P Database",
@@ -2067,6 +2275,7 @@ function App() {
                       completeInviteOnboarding();
                       if (!pendingInviteTokenRef.current) {
                         showTransientToast('success', t('app.alerts.synchronizedWithPeer'), 1600);
+                      }
                       }
                     } catch (error) {
                       console.error('Failed to parse chunked GEDCOM sync', error);
@@ -2291,6 +2500,7 @@ function App() {
                       ? (remoteAccessPolicy?.allowDocuments ?? true)
                       : visibilitySettingsRef.current.allowDocuments;
                   if (!allowDocumentsInbound) return;
+                  if (isComparatorInviteClient()) return;
                   applyIncomingDocumentPatch(payload);
                   const docsDelta =
                     payload.operation === 'add' || payload.operation === 'update'
@@ -2391,6 +2601,19 @@ function App() {
                       )
                     );
                     logP2PActivity('invite.revoked.remote', 'invite', payload.inviteId, payload.fromPeerId || 'remote');
+                    if (p2pModeRef.current === 'client' && payload.inviteId) {
+                      const rid = payload.inviteId;
+                      const tokenMatchesPending = p2pInvitesRef.current.some(
+                        (i) => i.inviteId === rid && i.token && i.token === pendingInviteTokenRef.current
+                      );
+                      const matchesGuestSession =
+                        activeGuestInviteIdRef.current === rid ||
+                        inviteIntroductionContextRef.current?.inviteId === rid ||
+                        tokenMatchesPending;
+                      if (matchesGuestSession) {
+                        window.setTimeout(() => resetEphemeralGuestSession(), 0);
+                      }
+                    }
                   }
               }
               if (data.type === 'INVITE_ACCEPT' && data.payload && p2pModeRef.current === 'host') {
@@ -2413,6 +2636,7 @@ function App() {
                           showTransientToast('error', 'Token d’invitation invalide.', 2200);
                           return;
                         }
+                        setSessionLinkKind(resolveLinkKind(targetInvite));
                         const basePolicy = targetInvite.accessProfile || buildAccessProfileFromRole(targetInvite.role);
                         const sessionPolicy = intersectAccessPolicy(basePolicy, visibilitySettingsRef.current);
                         setActiveSessionPeerPolicy(sessionPolicy);
@@ -3124,6 +3348,10 @@ function App() {
       royalsDemoPreset?: boolean;
     }
   ) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     if (!options?.royalsDemoPreset) {
       setRoyalsDemoUiPrefs(null);
     }
@@ -3470,6 +3698,10 @@ function App() {
   };
 
   const handleUpdateIndividual = (updatedIndi: Individual, formData?: NewPersonData) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     if (!originalGedcomData) return;
     const previousIndi = originalGedcomData.individuals[updatedIndi.id];
 
@@ -3693,6 +3925,10 @@ function App() {
     file: File,
     importOptions?: { royalsDemo?: boolean },
   ) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     try {
       const { gedcomContent, metadata } = await parseG2Bundle(file);
       const parsedData = parseGedcom(gedcomContent);
@@ -3862,6 +4098,7 @@ function App() {
       expiresAt,
       nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       intent,
+      linkKind: 'named_claim',
     };
     let token: string;
     try {
@@ -3885,6 +4122,7 @@ function App() {
       inviteLink,
       accessProfile,
       inviteIntent: intent,
+      linkKind: 'named_claim',
     };
     setP2PInvites((prev) => [invite, ...prev]);
     logP2PActivity('invite.created', 'invite', invite.inviteId);
@@ -3914,6 +4152,75 @@ function App() {
       return;
     }
     void handleCreateInvite(selfIdentity.individualId, role, expiresAt, { intent: 'own_device' });
+  };
+
+  const handleCreateEphemeralInvite = async (expiresAt?: string) => {
+    if (!isIdentified) {
+      alert(t('app.alerts.claimIdentityBeforeInvites'));
+      return;
+    }
+    if (!peerId) {
+      showTransientToast('error', t('app.alerts.p2pWaitPeerIdBeforeInvite'), 2600);
+      return;
+    }
+    const inviteId = `inv-eph-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const issuedAt = new Date().toISOString();
+    const accessProfile = buildEphemeralAccessProfile();
+    const inviterIndividual =
+      selfIdentity?.individualId && gedcomData?.individuals?.[selfIdentity.individualId]
+        ? gedcomData.individuals[selfIdentity.individualId]
+        : null;
+    const inviterName = inviterIndividual
+      ? (`${inviterIndividual.givenName || ''} ${inviterIndividual.surname || ''}`.trim() ||
+          inviterIndividual.name ||
+          inviterIndividual.id)
+      : undefined;
+    const claims: InviteTokenClaims = {
+      inviteId,
+      sessionId: peerId,
+      role: 'viewer',
+      accessProfileId: 'profile-ephemeral',
+      inviterName,
+      issuedAt,
+      expiresAt,
+      nonce: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      intent: 'standard',
+      linkKind: 'ephemeral_free',
+    };
+    let token: string;
+    try {
+      token = await signInviteClaims(claims, getOrCreateInviteSecret());
+    } catch (error) {
+      console.error('Failed to sign ephemeral invite token', error);
+      showTransientToast('error', t('app.toasts.inviteSignFailed'), 2200);
+      return;
+    }
+    const inviteLink = `${window.location.origin}${window.location.pathname}?invite_from=${encodeURIComponent(inviterName || 'invitant')}&invite_to=ephemeral&invite_role=viewer&invite_kind=ephemeral#g2invite=${encodeURIComponent(token)}`;
+    const invite: P2PInviteItem = {
+      inviteId,
+      individualId: '',
+      individualName: '',
+      role: 'viewer',
+      expiresAt,
+      status: 'active',
+      personalizedDefault: false,
+      createdAt: issuedAt,
+      token,
+      inviteLink,
+      accessProfile,
+      linkKind: 'ephemeral_free',
+    };
+    setP2PInvites((prev) => [invite, ...prev]);
+    logP2PActivity('invite.created.ephemeral', 'invite', invite.inviteId);
+    if (p2pStatus === 'connected' && p2pModeRef.current === 'host') {
+      p2pService.sendMessage('INVITE_CREATE', {
+        invite,
+        token,
+        inviteLink,
+        fromPeerId: peerId || 'host',
+      });
+    }
+    showTransientToast('success', t('app.toasts.ephemeralInviteCreated'), 2200);
   };
 
   const handleRevokeInvite = (inviteId: string) => {
@@ -4387,6 +4694,10 @@ function App() {
       groupPhotoParticipantIds?: string[];
     }
   ) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     const inferredKind: 'photo' | 'document' =
       doc.kind === 'photo' || isImageLikeUrl(doc.url) ? 'photo' : 'document';
     const participantsRaw = doc.groupPhotoParticipantIds;
@@ -4868,6 +5179,10 @@ function App() {
   };
 
   const handleClaimIdentity = async (individualId: string) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     if (!gedcomData?.individuals[individualId]) {
       alert(t('app.alerts.selectExistingIndividual'));
       return;
@@ -4997,6 +5312,10 @@ function App() {
   };
 
   const handleCreateIndividual = (formData: NewPersonData) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     // Only modify ORIGINAL data
     const currentData = originalGedcomData || { individuals: {}, families: {} };
     const newData = JSON.parse(JSON.stringify(currentData)) as GedcomData;
@@ -5203,6 +5522,10 @@ function App() {
   };
 
   const handleDeleteIndividual = (id: string) => {
+    if (ephemeralGuestActive) {
+      showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+      return;
+    }
     if (!originalGedcomData) return;
     const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
     delete newData.individuals[id]; 
@@ -5599,6 +5922,35 @@ function App() {
 
   return (
     <AppLayout isDarkMode={isDarkMode}>
+      {ephemeralGuestActive && (
+        <div
+          className={`fixed top-2 left-1/2 -translate-x-1/2 z-[110] pointer-events-auto max-w-lg w-[calc(100%-2rem)] rounded-lg border px-3 py-2 shadow-lg ${
+            isDarkMode ? 'bg-slate-900/95 border-teal-800 text-slate-100' : 'bg-white/95 border-teal-200 text-slate-800'
+          }`}
+          role="region"
+          aria-label={t('app.ephemeralGuest.regionAria')}
+        >
+          <p className="text-xs leading-snug">{t('app.ephemeralGuest.banner')}</p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button
+              type="button"
+              onClick={() => resetEphemeralGuestSession()}
+              className={`text-[11px] px-2 py-1.5 rounded font-semibold ${isDarkMode ? 'bg-rose-900 hover:bg-rose-800 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
+            >
+              {t('app.ephemeralGuest.revoke')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(t('app.confirm.ephemeralGraduate'))) resetEphemeralGuestSession();
+              }}
+              className={`text-[11px] px-2 py-1.5 rounded font-semibold ${isDarkMode ? 'bg-teal-800 hover:bg-teal-700 text-white' : 'bg-teal-600 hover:bg-teal-500 text-white'}`}
+            >
+              {t('app.ephemeralGuest.useNormalApp')}
+            </button>
+          </div>
+        </div>
+      )}
       {/* --- Sidebar (Database) --- */}
       <Sidebar 
         data={gedcomData} 
@@ -5963,7 +6315,7 @@ function App() {
         identityTabSignal={identityTabSignal}
         preferredIdentityCandidateId={pendingInviteTargetIndividualId}
         remoteIdentityClaimsByIndividualId={remoteIdentityClaimsByIndividualId}
-        livingCandidates={livingCandidates}
+        identityClaimCandidates={identityClaimCandidates}
         onClaimIdentity={handleClaimIdentity}
         onExportIdentityBackup={handleExportIdentityBackup}
         onImportIdentityBackup={handleImportIdentityBackup}
@@ -6019,8 +6371,13 @@ function App() {
         identityIntroduction={selfIdentity?.introduction}
         onOpenIdentityPanel={handleOpenIdentityPanel}
         showCompleteIdentityHint={
-          p2pStatus === 'connected' && !isIdentified && !!pendingInviteToken && inviteOnboardingStage === 'ready'
+          p2pStatus === 'connected' &&
+          !isIdentified &&
+          inviteOnboardingStage === 'ready' &&
+          sessionLinkKind === 'named_claim'
         }
+        shareCompareAllowed={sessionAllowsShareCompare(sessionLinkKind)}
+        onCreateEphemeralInvite={handleCreateEphemeralInvite}
       />
 
       {/* --- Bottom Panel (Display) --- */}

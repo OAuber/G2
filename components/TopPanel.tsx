@@ -1,11 +1,30 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Network, Copy, Check, WifiOff } from 'lucide-react';
+import {
+  Network,
+  Copy,
+  Check,
+  WifiOff,
+  BookOpen,
+  Link2,
+  RefreshCw,
+  Send,
+  ListChecks,
+  Shield,
+  BarChart3,
+  Fingerprint,
+  Smartphone,
+  UserPlus,
+  Users,
+  Share2,
+} from 'lucide-react';
 import { P2PStatus, P2PMode, IdentityIntroductionContext } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
-import { type TopPanelTabId, type TabIndicatorLevel } from './topPanel/topPanelTabs';
+import { TOP_PANEL_TAB_I18N, type TopPanelTabId, type TabIndicatorLevel } from './topPanel/topPanelTabs';
 import { TopPanelTabList } from './topPanel/TopPanelTabList';
 import type { P2PVisibilitySettings } from '../app/p2pAppTypes';
+import type { InviteLinkKind } from '../app/inviteLinkKind';
+import { InviteQrCode } from './InviteQrCode';
 
 interface TopPanelProps {
   isOpen: boolean;
@@ -51,20 +70,25 @@ interface TopPanelProps {
     inviteId: string;
     individualId: string;
     individualName: string;
-    role: 'viewer' | 'contributor' | 'editor';
+    role: 'viewer' | 'contributor' | 'editor' | 'comparator';
     expiresAt?: string;
     status: 'active' | 'accepted' | 'revoked' | 'expired';
     personalizedDefault: boolean;
     inviteLink?: string;
     inviteIntent?: 'standard' | 'own_device';
+    linkKind?: InviteLinkKind;
   }>;
+  /** Partage/comparaison : session issue d’une invitation nominative (type 2). */
+  shareCompareAllowed?: boolean;
+  /** Lien visite libre anonyme (1.2), sans individu ciblé. `expiresAt` = ISO optionnel. */
+  onCreateEphemeralInvite?: (expiresAt?: string) => void;
   pendingInviteToken?: string | null;
   pendingProposalsCount: number;
   syncStatusText?: string | null;
   initialCompareStatusText?: string | null;
   buildLabel?: string;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
-  onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
+  onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor' | 'comparator', expiresAt?: string) => void;
   /** Auto-invitation : même individu identifié → second appareil (ex. mobile). */
   onCreateOwnDeviceInvite?: (role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
   selfIndividualId?: string | null;
@@ -127,13 +151,16 @@ const TopPanel: React.FC<TopPanelProps> = ({
   identityIntroduction,
   onOpenIdentityPanel,
   showCompleteIdentityHint = false,
+  shareCompareAllowed = true,
+  onCreateEphemeralInvite,
 }) => {
   const { t } = useI18n();
   const [targetHostId, setTargetHostId] = useState('');
   const [copied, setCopied] = useState(false);
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
-  const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor'>('viewer');
+  const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor' | 'comparator'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
+  const [ephemeralInviteExpiresAt, setEphemeralInviteExpiresAt] = useState('');
   const [ownDeviceRole, setOwnDeviceRole] = useState<'viewer' | 'contributor' | 'editor'>('contributor');
   const [ownDeviceTtlPreset, setOwnDeviceTtlPreset] = useState<'none' | '365' | '730' | '1825' | 'custom'>('none');
   const [ownDeviceExpiresCustom, setOwnDeviceExpiresCustom] = useState('');
@@ -142,7 +169,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
-  const [activeTab, setActiveTab] = useState<TopPanelTabId>('network');
+  const [activeTab, setActiveTab] = useState<TopPanelTabId>('guide');
 
   const inviteExpiringSoon = useMemo(() => {
     const week = 7 * 24 * 60 * 60 * 1000;
@@ -178,14 +205,14 @@ const TopPanel: React.FC<TopPanelProps> = ({
     const activity: TabIndicatorLevel = activityEvents.length > 0 ? 'ok' : 'idle';
 
     return {
+      guide: 'idle',
       network,
       session,
       invitations,
       proposals: proposalsTab,
       privacy,
       activity,
-      wot: isIdentityClaimed ? 'ok' : 'future',
-      money: 'future',
+      wot: isIdentityClaimed ? 'ok' : 'warning',
     };
   }, [
     isOnline,
@@ -277,9 +304,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
     if (op === 'create_individual') return t('topPanel.proposalCreate');
     return t('topPanel.proposalDelete');
   };
-  const formatInviteRole = (role: 'viewer' | 'contributor' | 'editor') => {
+  const formatInviteRole = (role: 'viewer' | 'contributor' | 'editor' | 'comparator') => {
     if (role === 'viewer') return t('topPanel.roleViewer');
     if (role === 'contributor') return t('topPanel.roleContributor');
+    if (role === 'comparator') return t('topPanel.roleComparator');
     return t('topPanel.roleEditor');
   };
   const copyInviteLink = async (inviteId: string, link?: string) => {
@@ -290,6 +318,14 @@ const TopPanel: React.FC<TopPanelProps> = ({
   };
   const isInviteMode = p2pMode === 'client' || !!pendingInviteToken;
   const showShareAction = p2pMode === 'host';
+
+  const sessionContextKey = useMemo(() => {
+    if (pendingInviteToken) return 'invitee' as const;
+    if (p2pMode === 'client') return 'guest' as const;
+    if (p2pMode === 'host') return 'host' as const;
+    if (trustedOwnDevicePeerId) return 'ownDevice' as const;
+    return 'solo' as const;
+  }, [pendingInviteToken, p2pMode, trustedOwnDevicePeerId]);
 
   const computeOwnDeviceExpiresAt = (): string | undefined => {
     if (ownDeviceTtlPreset === 'none') return undefined;
@@ -305,8 +341,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
     return undefined;
   };
   // Allow actions when remote state is unknown; handlers perform final checks.
-  const canStartShare = showShareAction && localHasData && remoteHasData !== true;
-  const canStartCompare = localHasData && remoteHasData !== false;
+  const canStartShare = showShareAction && localHasData && remoteHasData !== true && shareCompareAllowed;
+  const canStartCompare = localHasData && remoteHasData !== false && shareCompareAllowed;
 
   useEffect(() => {
     setProposalPage((prev) => Math.min(prev, proposalsPageCount - 1));
@@ -334,11 +370,153 @@ const TopPanel: React.FC<TopPanelProps> = ({
             />
 
             <div
+              className={`rounded-lg border px-3 py-2 ${cardClass}`}
+              role="status"
+              aria-live="polite"
+            >
+              <span className={`font-bold uppercase tracking-wide text-[10px] ${subTextClass}`}>
+                {t('topPanel.contextBadge')}
+              </span>
+              <p className={`text-xs mt-1 leading-relaxed ${textClass}`}>
+                {t(`topPanel.contextMessage_${sessionContextKey}`)}
+              </p>
+            </div>
+
+            <div
               className="min-h-0"
               role="tabpanel"
               id={`top-panel-${activeTab}`}
               aria-labelledby={`top-tab-${activeTab}`}
             >
+          {activeTab === 'guide' && (
+            <section className={`rounded-xl border p-4 space-y-4 ${cardClass}`}>
+              <div className="flex items-start gap-3">
+                <BookOpen className={`w-8 h-8 shrink-0 ${isDarkMode ? 'text-sky-400' : 'text-sky-600'}`} aria-hidden />
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.guideTitle')}</h3>
+                  <p className={`text-xs mt-1.5 leading-relaxed ${subTextClass}`}>{t('topPanel.guideIntro')}</p>
+                  <p className={`text-[11px] mt-2 leading-relaxed ${subTextClass} opacity-95`}>
+                    {t('topPanel.guideServerHint')}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideScenariosTitle')}</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(
+                    [
+                      {
+                        tab: 'invitations' as const,
+                        Icon: Smartphone,
+                        titleKey: 'guideScenarioSoloTitle',
+                        descKey: 'guideScenarioSoloDesc',
+                      },
+                      {
+                        tab: 'invitations' as const,
+                        Icon: UserPlus,
+                        titleKey: 'guideScenarioHostTitle',
+                        descKey: 'guideScenarioHostDesc',
+                      },
+                      {
+                        tab: 'network' as const,
+                        Icon: Users,
+                        titleKey: 'guideScenarioGuestTitle',
+                        descKey: 'guideScenarioGuestDesc',
+                      },
+                      {
+                        tab: 'wot' as const,
+                        Icon: Share2,
+                        titleKey: 'guideScenarioWotTitle',
+                        descKey: 'guideScenarioWotDesc',
+                      },
+                    ] as const
+                  ).map(({ tab, Icon, titleKey, descKey }, i) => (
+                    <div
+                      key={`${titleKey}-${i}`}
+                      className={`rounded-lg border p-3 flex flex-col gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Icon className={`w-4 h-4 shrink-0 ${isDarkMode ? 'text-violet-400' : 'text-violet-600'}`} aria-hidden />
+                        <span className={`text-xs font-bold ${textClass}`}>{t(`topPanel.${titleKey}`)}</span>
+                      </div>
+                      <p className={`text-[11px] leading-snug flex-1 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab(tab)}
+                        className={`text-[11px] px-2 py-1.5 rounded font-semibold w-full sm:w-auto self-start ${
+                          isDarkMode
+                            ? 'bg-violet-900/80 hover:bg-violet-800 text-violet-100 border border-violet-800'
+                            : 'bg-violet-100 hover:bg-violet-200 text-violet-900 border border-violet-200'
+                        }`}
+                      >
+                        {t('topPanel.guideOpen')} — {t(TOP_PANEL_TAB_I18N[tab])}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideSharingModesTitle')}</h4>
+                <div className={`space-y-2 rounded-lg border p-3 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
+                  {(
+                    [
+                      { Icon: Link2, titleKey: 'guideModePeerTitle', descKey: 'guideModePeerDesc' },
+                      { Icon: Send, titleKey: 'guideModeLinkTitle', descKey: 'guideModeLinkDesc' },
+                      { Icon: Share2, titleKey: 'guideModeWotTitle', descKey: 'guideModeWotDesc' },
+                    ] as const
+                  ).map(({ Icon, titleKey, descKey }) => (
+                    <div key={titleKey} className="flex gap-2 items-start">
+                      <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`} aria-hidden />
+                      <div>
+                        <div className={`text-xs font-semibold ${textClass}`}>{t(`topPanel.${titleKey}`)}</div>
+                        <p className={`text-[11px] leading-snug mt-0.5 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideQuickLinksTitle')}</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(
+                    [
+                      { tab: 'network' as const, Icon: Link2, titleKey: 'guideUseNetworkTitle', descKey: 'guideUseNetworkDesc' },
+                      { tab: 'session', Icon: RefreshCw, titleKey: 'guideUseSessionTitle', descKey: 'guideUseSessionDesc' },
+                      { tab: 'invitations', Icon: Send, titleKey: 'guideUseInvitationsTitle', descKey: 'guideUseInvitationsDesc' },
+                      { tab: 'proposals', Icon: ListChecks, titleKey: 'guideUseProposalsTitle', descKey: 'guideUseProposalsDesc' },
+                      { tab: 'privacy', Icon: Shield, titleKey: 'guideUsePrivacyTitle', descKey: 'guideUsePrivacyDesc' },
+                      { tab: 'activity', Icon: BarChart3, titleKey: 'guideUseActivityTitle', descKey: 'guideUseActivityDesc' },
+                      { tab: 'wot', Icon: Fingerprint, titleKey: 'guideUseWotTitle', descKey: 'guideUseWotDesc' },
+                    ] as const
+                  ).map(({ tab, Icon, titleKey, descKey }) => (
+                    <div
+                      key={tab}
+                      className={`rounded-lg border p-3 flex flex-col gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Icon className={`w-4 h-4 shrink-0 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`} aria-hidden />
+                        <span className={`text-xs font-bold ${textClass}`}>{t(`topPanel.${titleKey}`)}</span>
+                      </div>
+                      <p className={`text-[11px] leading-snug flex-1 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab(tab)}
+                        className={`text-[11px] px-2 py-1.5 rounded font-semibold w-full sm:w-auto self-start ${
+                          isDarkMode ? 'bg-sky-900/80 hover:bg-sky-800 text-sky-100 border border-sky-800' : 'bg-sky-100 hover:bg-sky-200 text-sky-900 border border-sky-200'
+                        }`}
+                      >
+                        {t('topPanel.guideOpen')} — {t(TOP_PANEL_TAB_I18N[tab])}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* P2P Network Section — onglet Réseau */}
           {activeTab === 'network' && (
           <div className="space-y-2">
@@ -409,6 +587,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
           {!isOnline && (
             <span className={`text-[9px] ${subTextClass} italic`}>{t('topPanel.localMode')}</span>
           )}
+          {isOnline && (
+            <p className={`text-[10px] mt-1 ${subTextClass}`}>{t('topPanel.networkPeerIdHint')}</p>
+          )}
           </div>
           )}
 
@@ -434,6 +615,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
             </span>
           )}
           </div>
+          <p className={`text-[10px] ${subTextClass}`}>{t('topPanel.sessionDurabilityHint')}</p>
+          {!shareCompareAllowed && p2pStatus === 'connected' && (
+            <p className={`text-[10px] mt-1 ${subTextClass}`}>{t('topPanel.shareCompareNamedInviteHint')}</p>
+          )}
 
         {showCompleteIdentityHint && onOpenIdentityPanel && (
           <div
@@ -648,7 +833,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {activeTab === 'privacy' && (
           <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.accessControls')}</h3>
+            <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.visibilityProfilesTitle')}</h3>
+            <p className={`text-xs mb-3 leading-relaxed ${subTextClass}`}>{t('topPanel.visibilityProfilesIntro')}</p>
+            <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>
+              {t('topPanel.visibilityDefaultProfileTitle')}
+            </h4>
             <div className="space-y-2 text-sm">
               <ToggleRow label={t('topPanel.exposeIdentity')} checked={visibilitySettings.exposeIdentity} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeIdentity: checked })} />
               <ToggleRow label={t('topPanel.exposeDates')} checked={visibilitySettings.exposeDates} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })} />
@@ -659,6 +848,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <ToggleRow label={t('topPanel.allowProposals')} checked={visibilitySettings.allowProposal} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })} />
               <ToggleRow label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
             </div>
+            <p className={`text-[11px] mt-3 leading-relaxed italic ${subTextClass}`}>{t('topPanel.visibilityPerPeerNote')}</p>
           </section>
         )}
 
@@ -668,6 +858,36 @@ const TopPanel: React.FC<TopPanelProps> = ({
             <p className={`text-xs mb-3 ${subTextClass}`}>
               {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
             </p>
+            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.invitationsProfilesBridge')}</p>
+            {!isInviteMode && onCreateEphemeralInvite && (
+              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-teal-900/80 bg-teal-950/25' : 'border-teal-200 bg-teal-50/80'}`}>
+                <div className={`text-sm font-bold mb-1 ${isDarkMode ? 'text-teal-300' : 'text-teal-800'}`}>
+                  {t('topPanel.ephemeralInviteSectionTitle')}
+                </div>
+                <p className={`text-[11px] mb-2 ${subTextClass}`}>{t('topPanel.ephemeralInviteSectionHint')}</p>
+                <label className={`block text-[11px] mb-2 ${subTextClass}`}>
+                  {t('topPanel.ephemeralInviteExpiresOptional')}
+                  <input
+                    type="datetime-local"
+                    value={ephemeralInviteExpiresAt}
+                    onChange={(e) => setEphemeralInviteExpiresAt(e.target.value)}
+                    className={`mt-1 block w-full max-w-xs rounded border px-2 py-1 text-sm ${inputBg}`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const iso = ephemeralInviteExpiresAt
+                      ? new Date(ephemeralInviteExpiresAt).toISOString()
+                      : undefined;
+                    onCreateEphemeralInvite(iso);
+                  }}
+                  className={`text-sm rounded px-3 py-2 font-semibold ${isDarkMode ? 'bg-teal-800 hover:bg-teal-700 text-white' : 'bg-teal-600 text-white hover:bg-teal-500'}`}
+                >
+                  {t('topPanel.createEphemeralInvite')}
+                </button>
+              </div>
+            )}
             {!isInviteMode && (
             <>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-1">
@@ -683,12 +903,15 @@ const TopPanel: React.FC<TopPanelProps> = ({
               </select>
               <select
                 value={newInviteRole}
-                onChange={(e) => setNewInviteRole(e.target.value as 'viewer' | 'contributor' | 'editor')}
+                onChange={(e) =>
+                  setNewInviteRole(e.target.value as 'viewer' | 'contributor' | 'editor' | 'comparator')
+                }
                 className={`text-sm rounded border px-2 py-1 ${inputBg}`}
               >
                 <option value="viewer">{t('topPanel.roleViewer')}</option>
                 <option value="contributor">{t('topPanel.roleContributor')}</option>
                 <option value="editor">{t('topPanel.roleEditor')}</option>
+                <option value="comparator">{t('topPanel.roleComparator')}</option>
               </select>
               <input
                 type="date"
@@ -711,6 +934,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
               </button>
             </div>
             <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.inviteExpiryOptionalHint')}</p>
+            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.comparatorRoleHint')}</p>
             </>
             )}
             {!isInviteMode && onCreateOwnDeviceInvite && selfIndividualId && (
@@ -797,10 +1021,77 @@ const TopPanel: React.FC<TopPanelProps> = ({
               {invites.length === 0 ? (
                 <p className={`text-sm ${subTextClass}`}>{t('topPanel.noInvites')}</p>
               ) : (
-                invites.map((invite) => (
-                  <div key={invite.inviteId} className={`rounded border p-2 text-xs flex items-center justify-between gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
-                    <div>
-                      <div className="font-semibold">{invite.individualName} ({formatInviteRole(invite.role)})</div>
+                invites.map((invite) => {
+                  const isExpired = invite.status === 'expired';
+                  const isRevoked = invite.status === 'revoked';
+                  const canHostRevoke =
+                    (invite.status === 'active' || invite.status === 'accepted') &&
+                    !isInviteMode &&
+                    !isExpired &&
+                    !isRevoked;
+                  const accentClass =
+                    invite.linkKind === 'ephemeral_free'
+                      ? isDarkMode
+                        ? 'border-l-teal-500 bg-teal-950/25'
+                        : 'border-l-teal-500 bg-teal-50/80'
+                      : invite.inviteIntent === 'own_device'
+                        ? isDarkMode
+                          ? 'border-l-indigo-500 bg-indigo-950/20'
+                          : 'border-l-indigo-500 bg-indigo-50/80'
+                        : isDarkMode
+                          ? 'border-l-sky-500 bg-slate-900/40'
+                          : 'border-l-sky-500 bg-sky-50/80';
+                  return (
+                  <div
+                    key={invite.inviteId}
+                    className={`rounded border border-l-4 p-2 text-xs flex flex-wrap items-start justify-between gap-2 ${accentClass} ${
+                      isDarkMode ? 'border-slate-700' : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold flex flex-wrap items-center gap-1.5">
+                        {invite.linkKind === 'ephemeral_free' ? (
+                          <>
+                            <span
+                              className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
+                                isDarkMode
+                                  ? 'border-teal-600 text-teal-300 bg-teal-950/50'
+                                  : 'border-teal-300 text-teal-800 bg-teal-100/70'
+                              }`}
+                            >
+                              {t('topPanel.inviteKindEphemeralBadge')}
+                            </span>
+                            <span>{t('topPanel.ephemeralInviteLabel')}</span>
+                          </>
+                        ) : (
+                          <>
+                            {invite.inviteIntent === 'own_device' ? (
+                              <span
+                                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
+                                  isDarkMode
+                                    ? 'border-indigo-600 text-indigo-300 bg-indigo-950/50'
+                                    : 'border-indigo-300 text-indigo-800 bg-indigo-100/70'
+                                }`}
+                              >
+                                {t('topPanel.inviteKindOwnDeviceShort')}
+                              </span>
+                            ) : (
+                              <span
+                                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
+                                  isDarkMode
+                                    ? 'border-sky-600 text-sky-300 bg-sky-950/50'
+                                    : 'border-sky-300 text-sky-800 bg-sky-100/70'
+                                }`}
+                              >
+                                {t('topPanel.inviteKindNamedShort')}
+                              </span>
+                            )}
+                            <span>
+                              {invite.individualName || '—'} ({formatInviteRole(invite.role)})
+                            </span>
+                          </>
+                        )}
+                      </div>
                       <div className={subTextClass}>
                         {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')}
                         {invite.inviteIntent === 'own_device' ? ` | ${t('topPanel.inviteOwnDeviceBadge')}` : ''}
@@ -811,7 +1102,16 @@ const TopPanel: React.FC<TopPanelProps> = ({
                         <div className={`font-mono text-[10px] truncate max-w-[320px] ${subTextClass}`}>{invite.inviteLink}</div>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
+                    {invite.inviteLink && !isInviteMode && (
+                      <InviteQrCode
+                        url={invite.inviteLink}
+                        isDarkMode={isDarkMode}
+                        label={t('topPanel.inviteQrHint')}
+                        size={88}
+                        className="shrink-0"
+                      />
+                    )}
+                    <div className="flex items-center gap-1 shrink-0">
                       {invite.inviteLink && !isInviteMode && (
                         <button
                           onClick={() => copyInviteLink(invite.inviteId, invite.inviteLink)}
@@ -820,7 +1120,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                           {copiedInviteId === invite.inviteId ? t('topPanel.inviteCopied') : t('topPanel.copyInviteLink')}
                         </button>
                       )}
-                      {invite.status === 'active' && !isInviteMode && (
+                      {canHostRevoke && (
                         <button
                           onClick={() => onRevokeInvite(invite.inviteId)}
                           className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
@@ -838,7 +1138,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
                       )}
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
             {pendingInviteToken && (
@@ -850,8 +1151,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
         {activeTab === 'wot' && (
           <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.wotHeading')}</h3>
-            <p className={`text-xs ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
-            <div className={`text-xs space-y-1 rounded-lg border p-2 ${isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
+            <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
+            <p className={`text-xs leading-relaxed mt-2 ${subTextClass}`}>{t('topPanel.wotSymmetricTrust')}</p>
+            <p className={`text-xs leading-relaxed mt-1 ${subTextClass}`}>{t('topPanel.wotAncestorsSharing')}</p>
+            <div className={`text-xs space-y-1 rounded-lg border p-2 mt-2 ${isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
               <div className="flex justify-between gap-2">
                 <span className={subTextClass}>{t('topPanel.wotIdentityStatus')}</span>
                 <span className={`font-semibold ${isIdentityClaimed ? 'text-emerald-500' : 'text-amber-500'}`}>
@@ -882,13 +1185,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 {t('topPanel.wotOpenIdentity')}
               </button>
             )}
-          </div>
-        )}
-
-        {activeTab === 'money' && (
-          <div className={`rounded-xl border p-4 ${cardClass}`}>
-            <p className={`text-sm ${subTextClass}`}>{t('topPanel.tabMoneyPlaceholder')}</p>
-            <p className={`text-xs mt-2 ${subTextClass} opacity-80`}>{t('topPanel.tabComingSoon')}</p>
           </div>
         )}
 

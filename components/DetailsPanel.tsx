@@ -158,7 +158,8 @@ interface DetailsPanelProps {
   identityTabSignal?: number;
   preferredIdentityCandidateId?: string | null;
   remoteIdentityClaimsByIndividualId?: Record<string, { claimedAt: string; actorPeerId: string }>;
-  livingCandidates: Array<{ id: string; label: string }>;
+  /** Personnes probablement vivantes (décès selon GEDCOM d’origine, pas morts calculés). */
+  identityClaimCandidates: Array<{ id: string; label: string }>;
   onClaimIdentity: (individualId: string) => Promise<void> | void;
   onExportIdentityBackup: (password: string) => Promise<void> | void;
   onImportIdentityBackup: (file: File, password: string) => Promise<void> | void;
@@ -433,7 +434,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   identityTabSignal = 0,
   preferredIdentityCandidateId = null,
   remoteIdentityClaimsByIndividualId,
-  livingCandidates,
+  identityClaimCandidates,
   onClaimIdentity,
   onExportIdentityBackup,
   onImportIdentityBackup,
@@ -1006,7 +1007,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const showSelfIdentityData = !!selfIdentity && isSelectedSelf;
   const showEmptyIdentityForSelectedOther = !!selfIdentity && !!selectedIndividualId && !isSelectedSelf;
   const selectedRemoteIdentityClaim = selectedIndividualId ? remoteIdentityClaimsByIndividualId?.[selectedIndividualId] : undefined;
-  const canModifyRecords = !!selfIdentity && selfIdentity.status === 'claimed';
+  /** Solo / base vide : pas d’identité requise pour créer ou éditer. Avec identité revendiquée, on continue d’exiger le statut « claimed ». */
+  const canModifyRecords = !selfIdentity || selfIdentity.status === 'claimed';
   const explainIdentityRequiredForEdit = useCallback(() => {
     window.alert(t('details.claimIdentityRequiredToEdit'));
   }, [t]);
@@ -1919,7 +1921,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <SearchSelect
                   value={identityCandidateId}
                   onChange={setIdentityCandidateId}
-                  options={livingCandidates
+                  options={identityClaimCandidates
                     .map((candidate) => (data?.individuals[candidate.id] ? data.individuals[candidate.id] : null))
                     .filter((v): v is Individual => !!v)}
                   placeholder={t('details.searchYourself')}

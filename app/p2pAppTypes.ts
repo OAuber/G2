@@ -1,9 +1,10 @@
 import type { Individual, Family } from '../types';
 import type { IndividualDiffPotentialMatch } from '../services/p2pProtocol';
+import type { InviteLinkKind } from './inviteLinkKind';
 
 export type P2PSessionUseCase = 'share' | 'compare' | null;
 
-export type P2PRole = 'viewer' | 'contributor' | 'editor';
+export type P2PRole = 'viewer' | 'contributor' | 'editor' | 'comparator';
 
 export type P2PVisibilitySettings = {
   exposeIdentity: boolean;
@@ -18,6 +19,7 @@ export type P2PVisibilitySettings = {
 
 export type P2PInviteItem = {
   inviteId: string;
+  /** Vide pour les invitations « visite libre » (1.2). */
   individualId: string;
   individualName: string;
   role: P2PRole;
@@ -29,6 +31,8 @@ export type P2PInviteItem = {
   inviteLink?: string;
   accessProfile: P2PVisibilitySettings;
   inviteIntent?: 'standard' | 'own_device';
+  /** Absent ou `named_claim` : invitation nominative (2). */
+  linkKind?: InviteLinkKind;
 };
 
 export type P2PProposalItem = {

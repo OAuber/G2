@@ -29,6 +29,10 @@ const en = {
       backupPasswordMinLength: 'Backup password must be at least 8 characters.',
       missingPrivateKeyMaterial: 'No private key material found on this device.',
       synchronizedWithPeer: 'Synchronized with Peer!',
+      p2pWaitPeerIdBeforeInvite: 'Enable P2P and wait for your Peer ID before creating an invitation.',
+      ephemeralReadOnly: 'In free visit mode (anonymous invite), the tree is read-only.',
+      shareCompareNamedInviteOnly:
+        'Share and initial compare are only available after accepting a named invitation (link tied to someone in the file), not for Peer-ID-only connection.',
     },
     toasts: {
       proposalApplied: 'Fusion applied and Records panel updated.',
@@ -52,11 +56,25 @@ const en = {
       allProposalsAccepted: 'All pending proposals from this peer were accepted.',
       allProposalsRejected: 'All pending proposals from this peer were rejected.',
       ownDeviceSessionEnded: 'Own-device session ended (proposals rejected and invite revoked if applicable).',
+      inviteSignFailed: 'Could not sign the invite token.',
+      ephemeralInviteCreated: 'Anonymous visit link created. Share it or show the QR code.',
+      ephemeralSessionEnded: 'Visit session ended — app reset.',
+      comparatorSnapshotReceived:
+        'Host tree received: your local copy was not replaced. Use Compare to analyze differences and merge via proposals.',
     },
     confirm: {
       replaceIdentityClaim: 'You already claimed another identity on this device. Replace it with the new one?',
       renounceIdentity:
         'WARNING: this will remove your current claimed identity from this device, clear local private key material, and disable share actions until you claim again.\n\nContinue?',
+      ephemeralGraduate:
+        'Leave the visit and use the app normally? Data received from the host will be cleared immediately and the session will end.',
+    },
+    ephemeralGuest: {
+      regionAria: 'Free visit — limited actions',
+      banner:
+        'You are viewing a tree in anonymous visit mode: no editing, no import, no local save of received data.',
+      revoke: 'Leave visit',
+      useNormalApp: 'Use app normally…',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -282,6 +300,7 @@ const en = {
     inviteActionView: 'view',
     inviteActionContribute: 'contribute to',
     inviteActionEdit: 'edit',
+    inviteActionCompare: 'compare with',
     inviteLandingAccept: 'Accept',
     inviteLandingWaiting: 'Waiting for your acceptance',
     inviteLandingConnecting: 'Connecting to P2P host',
@@ -322,6 +341,9 @@ const en = {
     roleViewer: 'viewer',
     roleContributor: 'contributor',
     roleEditor: 'editor',
+    roleComparator: 'comparator',
+    comparatorRoleHint:
+      'Comparator: the invitee keeps their file; the host’s tree is received alongside for comparison and merge-by-proposal (like UUID exchange).',
     inviteExpiryOptionalHint:
       'Optional expiry date: leave empty for an invitation with no time limit.',
     ownDeviceInviteTitle: 'Own-device invite (phone or tablet)',
@@ -341,18 +363,102 @@ const en = {
     ownDeviceRejectAndRevoke: 'Reject all and revoke',
     inviteLandingOwnDeviceHint:
       'Own-device invitation: same database as the host PC; batch-validate records when you are back, or reject if unsure.',
-    tabNetwork: 'Network',
-    tabSession: 'Session',
-    tabInvitations: 'Invitations',
-    tabProposals: 'Proposals',
-    tabPrivacy: 'Privacy',
+    tabGuide: 'Guide',
+    tabNetwork: 'Connection',
+    tabSession: 'Sync',
+    tabInvitations: 'Invites',
+    tabProposals: 'Review',
+    tabPrivacy: 'Visibility',
     tabActivity: 'Activity',
-    tabWot: 'WoT',
-    tabMoney: 'Money',
+    tabWot: 'Identity & trust',
     tabWotPlaceholder:
       'Certifications, validations and trust indicators will live here (WoT G2 milestone).',
-    tabMoneyPlaceholder:
-      'Monetary features, governance and DU: later phase (see G2 roadmap).',
+    guideTitle: 'What can you do here?',
+    guideIntro:
+      'Sharing is peer-to-peer: no central account, and none of your data is sent to the G2 server. Skim the cards below, then open the tab that matches what you need.',
+    guideServerHint:
+      'The site loads the app and may help peers find each other (WebRTC signalling): your tree and direct exchanges are not stored as a central copy on our servers.',
+    contextBadge: 'Context',
+    contextMessage_solo:
+      'Local work or preparing a connection: you can import, edit, and use a second device via a “second device” invite.',
+    contextMessage_host:
+      'You are the host: peers can connect to your Peer ID; the visibility profiles below are the default for sessions you accept.',
+    contextMessage_guest:
+      'You are connected as a guest to the host: the effective visibility rules are those the host applies (summarised after connection).',
+    contextMessage_invitee:
+      'Invitation detected: after connecting to the host, claim your identity if asked; the invite link has a validity window independent of the P2P session.',
+    contextMessage_ownDevice:
+      '“Second device” session: same database as the main PC; batch-validate proposals when you return to the main screen.',
+    guideScenariosTitle: 'Your situation',
+    guideScenarioSoloTitle: 'Solo + phone or tablet',
+    guideScenarioSoloDesc:
+      'Scanning archives or photos on the go: leave the PC at home and use a long-lived “second device” invite.',
+    guideScenarioHostTitle: 'Invite (family or collaborator)',
+    guideScenarioHostDesc:
+      'Create a link tied to a person in the file and pick a role (viewer, contributor, editor, or comparator).',
+    guideScenarioGuestTitle: 'Be invited',
+    guideScenarioGuestDesc:
+      'You received a link: connect to the host’s Peer ID, accept the invite, then claim your identity if needed.',
+    guideScenarioWotTitle: 'Web of Trust node',
+    guideScenarioWotDesc:
+      'Share ancestors with attestations and visibility driven by trust relationships (per-peer tuning will follow).',
+    guideSharingModesTitle: 'Three ways to connect',
+    guideModePeerTitle: 'Peer ID',
+    guideModePeerDesc:
+      'Machine-to-machine connection: no reserved place in the tree until you use an invitation link.',
+    guideModeLinkTitle: 'Personalised invite link',
+    guideModeLinkDesc:
+      'The token in the URL ties a GEDCOM individual, a role, and often an identity claim on the guest device.',
+    guideModeWotTitle: 'Web of Trust (WoT)',
+    guideModeWotDesc:
+      'Symmetric attestations between identities: visibility and duration can be adjusted per peer and link type.',
+    guideQuickLinksTitle: 'Quick links to tabs',
+    networkPeerIdHint:
+      'A Peer ID is enough to connect two browsers; it does not replace a named invite in the tree.',
+    sessionDurabilityHint:
+      'Invite token lifetime ≠ session lifetime: the P2P session lasts while both apps stay connected.',
+    shareCompareNamedInviteHint:
+      'Tree sharing and initial compare are only offered when the session follows a named invitation (someone in the file). Peer-ID-only connection: no share/compare from this tab.',
+    ephemeralInviteSectionTitle: 'Free visit (anonymous link)',
+    ephemeralInviteSectionHint:
+      'No targeted person in the GEDCOM: the guest browses read-only without claiming identity. Scan the QR code or copy the link.',
+    createEphemeralInvite: 'Create free-visit link',
+    ephemeralInviteLabel: 'Free visit (anonymous)',
+    inviteKindEphemeralBadge: '1.2',
+    ephemeralInviteExpiresOptional: 'Link expiry (optional)',
+    inviteKindNamedShort: 'Named',
+    inviteKindOwnDeviceShort: '2nd device',
+    inviteQrHint: 'Scan to open the same link',
+    visibilityProfilesTitle: 'Visibility profiles',
+    visibilityProfilesIntro:
+      'The toggles below define the default profile for peers connecting to you. Per-invitee and per-WoT overrides will let you fine-tune without redoing everything each time.',
+    visibilityDefaultProfileTitle: 'Default profile (all peers)',
+    visibilityPerPeerNote:
+      'Coming soon: duplicate or branch this profile for a specific invitee or WoT attestation without affecting other connections.',
+    invitationsProfilesBridge:
+      'Each invite carries a role; effective visibility combines that role with the host profile (Visibility tab).',
+    guideOpen: 'Open',
+    guideUseNetworkTitle: 'Connect two devices',
+    guideUseNetworkDesc:
+      'Enable P2P, copy your Peer ID, and join a collaborator’s machine to work together live.',
+    guideUseSessionTitle: 'Send or receive a tree',
+    guideUseSessionDesc:
+      'After a named invite is accepted: share or compare databases (streaming or ZIP), optional media. Not available for Peer-ID-only connection or anonymous visit.',
+    guideUseInvitationsTitle: 'Invite with a link',
+    guideUseInvitationsDesc:
+      'Two link families: anonymous free visit (QR or URL, read-only) or named invite tied to a living person (roles and identity claim).',
+    guideUseProposalsTitle: 'Review proposed changes',
+    guideUseProposalsDesc:
+      'Inspect edits proposed by a peer and accept or reject them one by one.',
+    guideUsePrivacyTitle: 'Control visibility',
+    guideUsePrivacyDesc:
+      'Choose what is exposed: identity, dates, places, notes, documents, downloads, and proposals.',
+    guideUseActivityTitle: 'See activity',
+    guideUseActivityDesc:
+      'Browse the session log (views, downloads, proposals).',
+    guideUseWotTitle: 'Identity and trust',
+    guideUseWotDesc:
+      'Check your local identity status and open the Identity panel to claim your profile.',
     tabComingSoon: 'Coming soon',
     completeIdentityTitle: 'Claim your identity to collaborate',
     completeIdentityBody:
@@ -360,13 +466,18 @@ const en = {
     completeIdentityCta: 'Open Identity tab',
     wotHeading: 'Web of Trust (WoT)',
     wotIntro:
-      'Local summary: claimed identity and P2P introduction context. Cross-attestations and advanced status will follow.',
+      'Local identity, peer attestations, and symmetric relationships: you see who introduced you and which visibility rules apply to each link.',
     wotIdentityStatus: 'Local identity',
     wotIdentityClaimed: 'Claimed',
     wotIdentityNone: 'Not claimed',
     wotIntroductionInviter: 'Invited by',
     wotIntroductionInvite: 'Invitation',
-    wotFutureAttestations: 'Peer certifications (WoT attestations) will ship in a later phase.',
+    wotSymmetricTrust:
+      'Attestations are mutual: two identities recognise each other; visibility may differ in each direction.',
+    wotAncestorsSharing:
+      'Sharing ancestors beyond your branch follows WoT rules and visibility profiles (default or per peer).',
+    wotFutureAttestations:
+      'Richer indicators (trust levels, revocation) will extend this panel in future updates.',
     wotOpenIdentity: 'Open Identity panel',
     tabIndicatorState_ok: 'OK',
     tabIndicatorState_warning: 'Needs attention',
@@ -522,7 +633,8 @@ const en = {
     fuseGlobal: 'Fuse global',
     rejectGlobal: 'Reject global',
     identityClaim: 'Identity claim',
-    identityClaimText: 'Link yourself to a living person in this GEDCOM and generate your device keypair.',
+    identityClaimText:
+      'Pick the profile that represents you among people without a death date in the original GEDCOM (estimated deaths from normalization do not remove you from this list). Use search if the list is long.',
     iAmThisPerson: 'I am this person',
     searchYourself: 'Search yourself...',
     claimIdentity: 'Claim that identity',

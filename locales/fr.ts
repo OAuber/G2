@@ -29,6 +29,10 @@ const fr = {
       backupPasswordMinLength: 'Le mot de passe de sauvegarde doit contenir au moins 8 caractères.',
       missingPrivateKeyMaterial: 'Aucune clé privée locale trouvée sur cet appareil.',
       synchronizedWithPeer: 'Synchronisé avec le pair !',
+      p2pWaitPeerIdBeforeInvite: 'Activez le P2P et attendez votre Peer ID avant de créer une invitation.',
+      ephemeralReadOnly: 'En visite libre (invitation anonyme), la base est en lecture seule.',
+      shareCompareNamedInviteOnly:
+        'Le partage et la comparaison initiale ne sont disponibles qu’après acceptation d’une invitation nominative (lien type « personne du fichier »), pas pour une simple connexion par Peer ID seul.',
     },
     toasts: {
       proposalApplied: 'Fusion appliquée et panneau Fiches mis à jour.',
@@ -52,11 +56,25 @@ const fr = {
       allProposalsAccepted: 'Toutes les propositions en attente de ce pair ont été acceptées.',
       allProposalsRejected: 'Toutes les propositions en attente de ce pair ont été rejetées.',
       ownDeviceSessionEnded: 'Session second appareil terminée (propositions rejetées et invitation révoquée si applicable).',
+      inviteSignFailed: 'Impossible de signer le jeton d’invitation.',
+      ephemeralInviteCreated: 'Lien de visite libre (anonyme) créé. Partagez-le ou affichez le QR code.',
+      ephemeralSessionEnded: 'Session de visite terminée — application réinitialisée.',
+      comparatorSnapshotReceived:
+        'Base de l’hôte reçue : votre copie locale n’a pas été remplacée. Utilisez Comparer pour analyser les différences et fusionner par propositions.',
     },
     confirm: {
       replaceIdentityClaim: 'Vous avez déjà revendiqué une autre identité sur cet appareil. La remplacer par la nouvelle ?',
       renounceIdentity:
         "ATTENTION : cela supprimera l'identité revendiquée sur cet appareil, effacera la clé privée locale et désactivera les partages tant que vous ne revendiquez pas à nouveau.\n\nContinuer ?",
+      ephemeralGraduate:
+        'Quitter la visite et utiliser l’application normalement ? Les données reçues de l’hôte seront effacées immédiatement et la session sera fermée.',
+    },
+    ephemeralGuest: {
+      regionAria: 'Visite libre — actions limitées',
+      banner:
+        'Vous consultez une base en visite libre (sans identification) : pas d’édition, pas d’import, pas de sauvegarde locale des données reçues.',
+      revoke: 'Quitter la visite',
+      useNormalApp: 'Utiliser l’app normalement…',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -282,6 +300,7 @@ const fr = {
     inviteActionView: 'consulter',
     inviteActionContribute: 'contribuer à',
     inviteActionEdit: 'éditer',
+    inviteActionCompare: 'comparer avec',
     inviteLandingAccept: 'Accepter',
     inviteLandingWaiting: 'En attente de votre acceptation',
     inviteLandingConnecting: 'Connexion P2P en cours',
@@ -322,6 +341,9 @@ const fr = {
     roleViewer: 'lecteur',
     roleContributor: 'contributeur',
     roleEditor: 'éditeur',
+    roleComparator: 'comparateur',
+    comparatorRoleHint:
+      'Comparateur : l’invité garde son fichier ; la base de l’hôte est reçue à côté pour comparaison et fusions par propositions (comme l’échange par UUID).',
     inviteExpiryOptionalHint:
       'Date d’expiration facultative : laissez vide pour une invitation sans limite de durée.',
     ownDeviceInviteTitle: 'Auto-invitation (mon téléphone ou tablette)',
@@ -341,18 +363,102 @@ const fr = {
     ownDeviceRejectAndRevoke: 'Tout refuser et révoquer',
     inviteLandingOwnDeviceHint:
       'Invitation « second appareil » : même base que sur le PC hôte ; validez les fiches en lot quand vous rentrez, ou refusez en cas de doute.',
-    tabNetwork: 'Réseau',
-    tabSession: 'Session',
+    tabGuide: 'Guide',
+    tabNetwork: 'Connexion',
+    tabSession: 'Échange',
     tabInvitations: 'Invitations',
-    tabProposals: 'Propositions',
-    tabPrivacy: 'Confidentialité',
+    tabProposals: 'À valider',
+    tabPrivacy: 'Visibilité',
     tabActivity: 'Activité',
-    tabWot: 'WoT',
-    tabMoney: 'Monnaie',
+    tabWot: 'Identité & confiance',
     tabWotPlaceholder:
       'Certifications, validations et indicateurs de confiance seront regroupés ici (jalon WoT G2).',
-    tabMoneyPlaceholder:
-      'Fonctions monétaires, gouvernance et DU : phase ultérieure (voir feuille de route G2).',
+    guideTitle: 'Que pouvez-vous faire ici ?',
+    guideIntro:
+      'Le partage est pair-à-pair, sans compte central ni transmission d’aucune de vos données au serveur G2. Parcourez les fiches ci-dessous puis ouvrez l’onglet qui correspond à votre besoin.',
+    guideServerHint:
+      'Le site charge l’application et peut assurer la mise en relation (signalisation WebRTC) : votre arbre et vos échanges directs ne sont pas stockés comme une copie centrale sur nos serveurs.',
+    contextBadge: 'Contexte',
+    contextMessage_solo:
+      'Travail local ou préparation d’une connexion : vous pouvez importer, éditer et utiliser un second appareil via une invitation « second appareil ».',
+    contextMessage_host:
+      'Vous êtes hôte : des pairs peuvent se connecter à votre Peer ID ; les profils de visibilité ci-dessous s’appliquent par défaut aux sessions que vous acceptez.',
+    contextMessage_guest:
+      'Vous êtes connecté en tant qu’invité au pair hôte : les règles de visibilité effectives sont celles que l’hôte vous impose (récapitulées après connexion).',
+    contextMessage_invitee:
+      'Invitation détectée : après connexion au hôte, revendiquez votre identité si demandé ; le lien d’invitation a une durée de validité indépendante de la session P2P.',
+    contextMessage_ownDevice:
+      'Session « second appareil » : même base que le PC hôte ; validez les propositions en lot quand vous revenez sur l’écran principal.',
+    guideScenariosTitle: 'Votre situation',
+    guideScenarioSoloTitle: 'Seul + mobile ou tablette',
+    guideScenarioSoloDesc:
+      'Scanner des archives ou des photos chez un proche : laissez le PC à la maison et utilisez une invitation « second appareil » avec une longue durée.',
+    guideScenarioHostTitle: 'Inviter (famille ou collaborateur)',
+    guideScenarioHostDesc:
+      'Créez un lien lié à une personne du fichier et choisissez le rôle (lecteur, contributeur, éditeur, comparateur).',
+    guideScenarioGuestTitle: 'Être invité',
+    guideScenarioGuestDesc:
+      'Vous avez reçu un lien : connectez-vous au Peer ID de l’hôte, acceptez l’invitation, puis revendiquez votre identité si besoin.',
+    guideScenarioWotTitle: 'Nœud de la toile de confiance',
+    guideScenarioWotDesc:
+      'Partager des ancêtres avec des attestations et une visibilité réglée par relation de confiance (réglages fins par pair à terme).',
+    guideSharingModesTitle: 'Trois façons de se relier',
+    guideModePeerTitle: 'Identifiant pair (Peer ID)',
+    guideModePeerDesc:
+      'Connexion machine à machine : aucune place réservée dans l’arbre tant que vous n’utilisez pas un lien d’invitation.',
+    guideModeLinkTitle: 'Lien d’invitation personnalisé',
+    guideModeLinkDesc:
+      'Le jeton dans l’URL lie une personne du GEDCOM, un rôle et souvent une revendication d’identité sur l’appareil invité.',
+    guideModeWotTitle: 'Toile de confiance (WoT)',
+    guideModeWotDesc:
+      'Relations symétriques attestées entre identités : visibilité et durée pourront être ajustées par pair et par type de lien.',
+    guideQuickLinksTitle: 'Accès rapide aux onglets',
+    networkPeerIdHint:
+      'Le Peer ID suffit pour brancher deux navigateurs ; il ne remplace pas une invitation nommée dans l’arbre.',
+    sessionDurabilityHint:
+      'Durée du jeton d’invitation ≠ durée de la session : la session P2P dure tant que les deux apps restent connectées au réseau.',
+    shareCompareNamedInviteHint:
+      'Le partage d’arbre et la comparaison initiale ne sont proposés que lorsque la session suit une invitation nominative (personne du fichier). Connexion par Peer ID seul : pas de partage/comparaison depuis cet onglet.',
+    ephemeralInviteSectionTitle: 'Visite libre (lien anonyme)',
+    ephemeralInviteSectionHint:
+      'Sans personne ciblée dans le GEDCOM : l’invité consulte en lecture seule, sans identification. Flashez le QR code ou copiez le lien.',
+    createEphemeralInvite: 'Créer un lien de visite libre',
+    ephemeralInviteLabel: 'Visite libre (anonyme)',
+    inviteKindEphemeralBadge: '1.2',
+    ephemeralInviteExpiresOptional: 'Expiration du lien (optionnel)',
+    inviteKindNamedShort: 'Nominatif',
+    inviteKindOwnDeviceShort: '2ᵉ appareil',
+    inviteQrHint: 'Flasher pour ouvrir le même lien',
+    visibilityProfilesTitle: 'Profils de visibilité',
+    visibilityProfilesIntro:
+      'Les interrupteurs ci-dessous définissent le profil par défaut appliqué aux pairs qui se connectent à vous. Des réglages par invité et par relation WoT permettront d’affiner sans tout changer à chaque fois.',
+    visibilityDefaultProfileTitle: 'Profil par défaut (tous les pairs)',
+    visibilityPerPeerNote:
+      'Bientôt : dupliquer ou dériver ce profil pour un invité précis ou une attestation WoT, sans toucher aux autres connexions.',
+    invitationsProfilesBridge:
+      'Chaque invitation embarque un rôle ; la visibilité effective combine ce rôle avec le profil hôte (onglet Visibilité).',
+    guideOpen: 'Ouvrir',
+    guideUseNetworkTitle: 'Relier deux appareils',
+    guideUseNetworkDesc:
+      'Activez le P2P, utilisez votre Peer ID et rejoignez l’ordinateur d’un collaborateur pour travailler en direct.',
+    guideUseSessionTitle: 'Envoyer ou recevoir l’arbre',
+    guideUseSessionDesc:
+      'Après une invitation nominative acceptée : partagez ou comparez des bases (modes progressif ou archive), médias optionnels. Non disponible pour une simple connexion par Peer ID ou une visite anonyme.',
+    guideUseInvitationsTitle: 'Inviter avec un lien',
+    guideUseInvitationsDesc:
+      'Deux familles de liens : visite libre anonyme (QR ou URL, lecture seule) ou invitation nominative liée à une personne vivante (rôles et revendication d’identité).',
+    guideUseProposalsTitle: 'Examiner les changements',
+    guideUseProposalsDesc:
+      'Consultez les modifications proposées par un pair et acceptez-les ou refusez-les une par une.',
+    guideUsePrivacyTitle: 'Contrôler la visibilité',
+    guideUsePrivacyDesc:
+      'Décidez ce qui est visible : identité, dates, lieux, notes, documents, téléchargements et propositions.',
+    guideUseActivityTitle: 'Voir l’activité',
+    guideUseActivityDesc:
+      'Parcourez le journal des événements de la session (vues, téléchargements, propositions).',
+    guideUseWotTitle: 'Identité et confiance',
+    guideUseWotDesc:
+      'Vérifiez le statut de votre identité locale et ouvrez le panneau Identité pour revendiquer votre fiche.',
     tabComingSoon: 'À venir',
     completeIdentityTitle: 'Identifiez-vous pour collaborer',
     completeIdentityBody:
@@ -360,14 +466,18 @@ const fr = {
     completeIdentityCta: 'Ouvrir l’onglet Identité',
     wotHeading: 'Toile de confiance (WoT)',
     wotIntro:
-      'Résumé local : identité revendiquée et contexte d’introduction P2P. Les attestations croisées et statuts avancés suivront.',
+      'Identité locale, attestations entre pairs et relations symétriques : vous voyez qui vous a introduit et quelles règles de visibilité s’appliquent à chaque lien.',
     wotIdentityStatus: 'Identité locale',
     wotIdentityClaimed: 'Revendiquée',
     wotIdentityNone: 'Non revendiquée',
     wotIntroductionInviter: 'Invitation de',
     wotIntroductionInvite: 'Invitation',
+    wotSymmetricTrust:
+      'Les attestations sont réciproques : deux identités se reconnaissent mutuellement ; la visibilité peut être différente dans chaque sens.',
+    wotAncestorsSharing:
+      'Le partage d’ancêtres au-delà de votre branche suit les règles WoT et les profils de visibilité (par défaut ou par pair).',
     wotFutureAttestations:
-      'Les certifications entre pairs (attestations WoT) seront disponibles dans une phase ultérieure.',
+      'Des indicateurs plus riches (niveaux de confiance, révocation) compléteront ce panneau au fil des mises à jour.',
     wotOpenIdentity: 'Ouvrir le panneau Identité',
     tabIndicatorState_ok: 'OK',
     tabIndicatorState_warning: 'Attention',
@@ -523,7 +633,8 @@ const fr = {
     fuseGlobal: 'Fusion globale',
     rejectGlobal: 'Rejet global',
     identityClaim: "Revendiquer l'identité",
-    identityClaimText: 'Liez-vous à une personne vivante de ce GEDCOM et générez votre paire de clés appareil.',
+    identityClaimText:
+      'Choisissez la fiche qui vous représente parmi les personnes sans décès dans le GEDCOM d’origine (les décès estimés par la normalisation ne retirent pas votre fiche de cette liste). Utilisez la recherche si besoin.',
     iAmThisPerson: 'Je suis cette personne',
     searchYourself: 'Recherchez-vous...',
     claimIdentity: 'Revendiquer cette identité',

@@ -310,10 +310,17 @@ const Sidebar: React.FC<SidebarProps> = ({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
+  const hadDataRef = useRef(false);
   useEffect(() => {
-    if (activePane === 'program') return;
-    setActivePane(data ? 'list' : 'data');
-  }, [data, activePane]);
+    const hasData = !!data;
+    if (hasData && !hadDataRef.current) {
+      hadDataRef.current = true;
+      setActivePane((prev) => (prev === 'program' ? prev : 'list'));
+    } else if (!hasData && hadDataRef.current) {
+      hadDataRef.current = false;
+      setActivePane('data');
+    }
+  }, [data]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

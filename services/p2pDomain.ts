@@ -1,6 +1,6 @@
 import { Family, Individual, SelfIdentityPublic } from '../types';
 
-export type P2PRole = 'viewer' | 'contributor' | 'editor';
+export type P2PRole = 'viewer' | 'contributor' | 'editor' | 'comparator';
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'merged';
 export type InviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked';
 export type RevisionSource = 'local' | 'p2p';

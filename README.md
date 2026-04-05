@@ -130,6 +130,7 @@ The UI entry point is [`index.tsx`](index.tsx); [`App.tsx`](App.tsx) orchestrate
 | [`app/p2pSyncSenders.ts`](app/p2pSyncSenders.ts) | Factory for P2P sync senders (GEDCOM chunks, bundles, documents) |
 | [`app/p2pInviteUrl.ts`](app/p2pInviteUrl.ts) | Invite token parsing from the URL |
 | [`app/normalizeDocuments.ts`](app/normalizeDocuments.ts) | Document normalization helpers for UI and P2P |
+| [`app/individualLiving.ts`](app/individualLiving.ts) | “Probably living” checks for identity/invites using **original** GEDCOM death dates (ignores normalization-only estimated deaths) |
 | Other | e.g. [`app/royalsDemo.ts`](app/royalsDemo.ts), [`app/onlineDocTitle.ts`](app/onlineDocTitle.ts) |
 
 ### `hooks/` — React hooks by domain
@@ -146,7 +147,7 @@ Composable state used from `App.tsx`:
 
 ### `components/` — UI
 
-Large scene/panel components (2D grid, 3D scene, details, instanced tree) intentionally stay in dedicated files; smaller pieces are split where it helps maintenance (e.g. [`AppLayout`](components/AppLayout.tsx), [`IndividualNameBillboard`](components/IndividualNameBillboard.tsx), [`topPanel/TopPanelTabList`](components/topPanel/TopPanelTabList.tsx)). Tab metadata for the share panel is in [`components/topPanel/topPanelTabs.ts`](components/topPanel/topPanelTabs.ts).
+Large scene/panel components (2D grid, 3D scene, details, instanced tree) intentionally stay in dedicated files; smaller pieces are split where it helps maintenance (e.g. [`AppLayout`](components/AppLayout.tsx), [`IndividualNameBillboard`](components/IndividualNameBillboard.tsx), [`topPanel/TopPanelTabList`](components/topPanel/TopPanelTabList.tsx)). Tab metadata for the share panel is in [`components/topPanel/topPanelTabs.ts`](components/topPanel/topPanelTabs.ts) (first tab: **Guide** with usage cards; **Money** is not exposed in the UI for now).
 
 `Scene3D` is loaded with `React.lazy` + `Suspense` from `App.tsx` to split the main bundle.
 
