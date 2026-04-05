@@ -1225,7 +1225,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
     }
     cam.zoom = zoom;
     cam.updateProjectionMatrix();
-  }, [cameraMode, ribbonTopIntro, topViewEntryFrom2D]);
+  }, []);
 
   const setupPerspCamera = useCallback((cam: any) => {
     if (!cam) return;

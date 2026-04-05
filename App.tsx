@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
-import Scene3D from './components/Scene3D';
+const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
+import { AppLayout } from './components/AppLayout';
 import {
   GedcomData,
   Individual,
@@ -47,595 +48,91 @@ import {
 } from './services/p2pProtocol';
 import { InviteTokenClaims, signInviteClaims, verifyInviteToken } from './services/p2pSecurity';
 import {
-  SELF_IDENTITY_STORAGE_KEY,
   SELF_IDENTITY_PRIVATE_STORAGE_KEY,
   INVITE_SECRET_STORAGE_KEY,
-  AUTOSAVE_SETTINGS_KEY,
   P2P_TRANSFER_MODE_KEY,
   P2P_BUNDLE_CONTENT_MODE_KEY,
 } from './app/storageKeys';
-import { displayNameSlugForOnlineDocTitle, shouldReplaceOnlinePhotoTitle } from './app/onlineDocTitle';
 import { findIndividualForRoyalsDemo } from './app/royalsDemo';
-import type { AutoSaveSnapshot } from './app/autoSave';
-import { readAutoSaveSnapshot, saveAutoSaveSnapshot } from './app/autoSave';
+import { readAutoSaveSnapshot } from './app/autoSave';
+import type {
+  IndividualDocument,
+  InitialDiffContext,
+  P2PBundleContentMode,
+  P2PInviteItem,
+  P2PProposalItem,
+  P2PRole,
+  P2PSessionUseCase,
+  P2PTransferMode,
+  P2PVisibilitySettings,
+  RejectedInitialMatchMap,
+} from './app/p2pAppTypes';
+import {
+  INITIAL_DIFF_BATCH_LIMIT,
+  INITIAL_DIFF_MAX_RETRY,
+  INITIAL_DIFF_REQUEST_TIMEOUT_MS,
+  NORMALIZATION_ALGO_VERSION,
+  SYNC_CHUNK_RECEIVE_TIMEOUT_MS,
+} from './app/p2pSyncConstants';
+import { isImageLikeUrl, normalizeDocumentsByIndividual } from './app/normalizeDocuments';
+import { useSelfIdentity } from './hooks/useSelfIdentity';
+import { useAutoSave } from './hooks/useAutoSave';
+import { useGedcomCore } from './hooks/useGedcomCore';
+import { useDocumentsState } from './hooks/useDocumentsState';
+import { readInviteTokenFromLocation } from './app/p2pInviteUrl';
+import {
+  createP2PSyncSenders,
+  useP2PTransferModes,
+  type P2PSyncSendersLog,
+} from './hooks/useP2PSession';
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
-  type P2PSessionUseCase = 'share' | 'compare' | null;
-  type P2PRole = 'viewer' | 'contributor' | 'editor';
-  type P2PVisibilitySettings = {
-    exposeIdentity: boolean;
-    exposeDates: boolean;
-    exposePlaces: boolean;
-    exposeNotes: boolean;
-    allowDocuments: boolean;
-    allowDownload: boolean;
-    allowProposal: boolean;
-    allowDirectEdit: boolean;
-  };
+  const {
+    selfIdentity,
+    setSelfIdentity,
+    selfIdentityRef,
+    isIdentifyingSelf,
+    setIsIdentifyingSelf,
+    identityTabSignal,
+    setIdentityTabSignal,
+    isIdentified,
+  } = useSelfIdentity();
+  const {
+    originalGedcomData,
+    setOriginalGedcomData,
+    setNormalizedGedcomData,
+    isNormalized,
+    setIsNormalized,
+    gedcomData,
+    databaseName,
+    setDatabaseName,
+    rootIndividual,
+    setRootIndividual,
+    selectedIndividual,
+    setSelectedIndividual,
+    selectedIdsFor2D,
+    setSelectedIdsFor2D,
+  } = useGedcomCore();
+  const { documentsByIndividualId, setDocumentsByIndividualId } = useDocumentsState();
+  const {
+    autoSaveEnabled,
+    setAutoSaveEnabled,
+    autoSaveState,
+    setAutoSaveState,
+    autoSaveLastAt,
+    setAutoSaveLastAt,
+    hasAutoSaveDraft,
+    setHasAutoSaveDraft,
+    isRestoringAutoSaveRef,
+  } = useAutoSave(originalGedcomData, documentsByIndividualId, selfIdentity, databaseName);
+  const {
+    p2pTransferMode,
+    setP2PTransferMode,
+    p2pBundleContentMode,
+    setP2PBundleContentMode,
+  } = useP2PTransferModes();
 
-  type P2PInviteItem = {
-    inviteId: string;
-    individualId: string;
-    individualName: string;
-    role: P2PRole;
-    expiresAt?: string;
-    status: 'active' | 'accepted' | 'revoked' | 'expired';
-    personalizedDefault: boolean;
-    createdAt: string;
-    token?: string;
-    inviteLink?: string;
-    accessProfile: P2PVisibilitySettings;
-    inviteIntent?: 'standard' | 'own_device';
-  };
-
-  type P2PProposalItem = {
-    proposalId: string;
-    individualId: string;
-    individualLabel: string;
-    authorPeerId: string;
-    proposedAt: string;
-    operation: 'update_individual' | 'create_individual' | 'delete_individual';
-    proposedIndividual?: Individual;
-    proposedFamilies?: Record<string, Family>;
-    relatedIndividuals?: Record<string, Individual>;
-    changeSet: Partial<Individual>;
-    status: 'pending' | 'accepted' | 'rejected';
-    decidedAt?: string;
-    source?: 'live' | 'initial_compare';
-    initialSyncBatchId?: string;
-    matchConfidence?: 'high' | 'medium' | 'low';
-    matchScore?: number;
-    remoteIndividualId?: string;
-    remoteFingerprint?: string;
-    retryAfterReject?: boolean;
-    proposalKind?: 'records' | 'documents';
-    scopeIndividualId?: string;
-    documentItemsDelta?: number;
-    photoItemsDelta?: number;
-  };
-
-  type IndividualDocument = {
-    id: string;
-    title: string;
-    url: string;
-    source: 'local' | 'online';
-    kind: 'photo' | 'document';
-    date?: string;
-    /** Texte libre ou URL (crédit / provenance, ex. « Wikipedia » ou lien). */
-    sourceAttribution?: string;
-    isPrimaryPhoto?: boolean;
-    /** Lien logique partagé entre les copies « photo de groupe ». */
-    groupPhotoLinkId?: string;
-    /** Individu où la photo a été créée (seule fiche avec édition / suppression complètes). */
-    groupPhotoOriginIndividualId?: string;
-    /** Copie sur un autre individu : pas d’édition ni suppression du média ici. */
-    groupPhotoIsMirror?: boolean;
-    /** Personnes présentes sur la photo (méta, incluant l’origine). */
-    groupPhotoParticipantIds?: string[];
-    /** Masquer cette entrée sur le ruban 2D (traits) et dans le diaporama. */
-    hiddenFromRibbonSlideshow?: boolean;
-  };
-
-  const isImageLikeUrl = (url: string): boolean => {
-    if (!url) return false;
-    if (url.startsWith('data:image/')) return true;
-    if (url.startsWith('blob:')) return true;
-    const u = url.trim();
-    if (u.startsWith('http://') || u.startsWith('https://')) {
-      if (/upload\.wikimedia\.org/i.test(u)) return true;
-      if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(u)) return true;
-    }
-    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
-  };
-
-  const normalizeDocumentsByIndividual = (
-    input: Record<string, unknown> | null | undefined,
-    individuals?: Record<string, Individual> | null,
-  ): Record<string, IndividualDocument[]> => {
-    if (!input || typeof input !== 'object') return {};
-    const normalized: Record<string, IndividualDocument[]> = {};
-
-    for (const [individualId, rawDocs] of Object.entries(input)) {
-      if (!Array.isArray(rawDocs)) continue;
-      const baseSlug = displayNameSlugForOnlineDocTitle(individualId, individuals);
-      let onlinePhotoAutoSeq = 0;
-      const docs = rawDocs
-        .map((raw) => {
-          if (!raw || typeof raw !== 'object') return null;
-          const doc = raw as Record<string, unknown>;
-          const url = typeof doc.url === 'string' ? doc.url : '';
-          if (!url) return null;
-          const kind: 'photo' | 'document' =
-            doc.kind === 'photo' || isImageLikeUrl(url) ? 'photo' : 'document';
-          const source: 'local' | 'online' =
-            doc.source === 'local' || doc.source === 'online' ? doc.source : 'online';
-          const isPrimaryPhoto =
-            (doc.isPrimaryPhoto === true || (doc as { isPrimary?: boolean }).isPrimary === true) && kind === 'photo';
-          let title: string = typeof doc.title === 'string' ? doc.title : 'Untitled';
-          const isOnlinePhoto =
-            kind === 'photo' &&
-            (source === 'online' || url.startsWith('http://') || url.startsWith('https://'));
-          if (isOnlinePhoto && shouldReplaceOnlinePhotoTitle(title)) {
-            onlinePhotoAutoSeq += 1;
-            title = `${baseSlug}_${String(onlinePhotoAutoSeq).padStart(2, '0')}`;
-          }
-          const rawAttr = (doc as Record<string, unknown>).sourceAttribution;
-          const sourceAttribution =
-            typeof rawAttr === 'string' && rawAttr.trim() !== '' ? rawAttr.trim() : undefined;
-          const r = doc as Record<string, unknown>;
-          const groupPhotoLinkId = typeof r.groupPhotoLinkId === 'string' ? r.groupPhotoLinkId : undefined;
-          const groupPhotoOriginIndividualId =
-            typeof r.groupPhotoOriginIndividualId === 'string' ? r.groupPhotoOriginIndividualId : undefined;
-          const groupPhotoIsMirror = r.groupPhotoIsMirror === true;
-          const groupPhotoParticipantIds = Array.isArray(r.groupPhotoParticipantIds)
-            ? (r.groupPhotoParticipantIds as unknown[]).filter((x): x is string => typeof x === 'string')
-            : undefined;
-          const hiddenFromRibbonSlideshow =
-            r.hiddenFromRibbonSlideshow === true
-              ? true
-              : r.hiddenFromRibbonSlideshow === false
-                ? false
-                : undefined;
-          return {
-            id: typeof doc.id === 'string' ? doc.id : `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            title,
-            url,
-            source,
-            kind,
-            date: typeof doc.date === 'string' ? doc.date : undefined,
-            sourceAttribution,
-            isPrimaryPhoto,
-            ...(groupPhotoLinkId ? { groupPhotoLinkId } : {}),
-            ...(groupPhotoOriginIndividualId ? { groupPhotoOriginIndividualId } : {}),
-            ...(groupPhotoIsMirror ? { groupPhotoIsMirror: true } : {}),
-            ...(groupPhotoParticipantIds && groupPhotoParticipantIds.length > 0
-              ? { groupPhotoParticipantIds }
-              : {}),
-            ...(hiddenFromRibbonSlideshow === true || hiddenFromRibbonSlideshow === false
-              ? { hiddenFromRibbonSlideshow }
-              : {}),
-          } as IndividualDocument;
-        })
-        .filter((d): d is IndividualDocument => !!d);
-
-      if (docs.length > 0 && !docs.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
-        const firstPhoto = docs.find((d) => d.kind === 'photo');
-        if (firstPhoto) firstPhoto.isPrimaryPhoto = true;
-      }
-
-      normalized[individualId] = docs;
-    }
-    return normalized;
-  };
-
-  // Conservative chunk size for mobile/browser DataChannel compatibility.
-  const SYNC_CHUNK_SIZE = 12_000;
-  const SYNC_CHUNK_SEND_DELAY_MS = 8;
-  const SYNC_CHUNK_RECEIVE_TIMEOUT_MS = 45000;
-  const DOCUMENT_SYNC_CHUNK_SIZE = 48_000;
-  const BUNDLE_SYNC_CHUNK_SIZE = 56_000;
-  const NORMALIZED_SNAPSHOT_CHUNK_SIZE = 20_000;
-  const NORMALIZATION_ALGO_VERSION = 'g2norm-v1';
-  const INITIAL_DIFF_BATCH_LIMIT = 300;
-  const INITIAL_DIFF_MAX_RETRY = 1;
-  const INITIAL_DIFF_REQUEST_TIMEOUT_MS = 12000;
-  type InitialDiffContext = {
-    requestToken: string;
-    batchId: string;
-    retryCount: number;
-    pendingRequestIds: string[];
-    potentialMatchesBySenderId: Record<string, IndividualDiffPotentialMatch>;
-    startedAt: number;
-  };
-  type RejectedInitialMatchMap = Record<string, Set<string>>;
-  type P2PTransferMode = 'progressive' | 'bundle';
-  type P2PBundleContentMode = 'gedcom-only' | 'gedcom-and-documents';
-
-  const sendBundleSnapshotToPeer = async (
-    gedcom: GedcomData,
-    documents: Record<string, IndividualDocument[]>
-  ) => {
-    if (p2pModeRef.current !== 'host') return;
-    const includeDocuments = p2pBundleContentModeRef.current === 'gedcom-and-documents';
-    const transferable = includeDocuments
-      ? await toTransferableDocumentsForPeer(documents)
-      : {};
-    const gedcomText = generateGedcom(gedcom);
-    const normalizedGedcomText = generateGedcom(normalizeGedcom(gedcom));
-    const bundleBlob = await createG2Bundle(gedcomText, {
-      version: '1.0',
-      databaseName: databaseNameRef.current,
-      exportedAt: new Date().toISOString(),
-      documentsByIndividualId: transferable,
-      includesDocuments: includeDocuments,
-      normalizedGedcomContent: normalizedGedcomText,
-      normalizationAlgoVersion: NORMALIZATION_ALGO_VERSION,
-    });
-    const serialized = await bundleBlob.text();
-    if (serialized.length <= BUNDLE_SYNC_CHUNK_SIZE) {
-      p2pService.sendMessage('BUNDLE_SYNC', {
-        bundleContent: serialized,
-      });
-      return;
-    }
-    const transferId = `bundle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const totalChunks = Math.ceil(serialized.length / BUNDLE_SYNC_CHUNK_SIZE);
-    for (let index = 0; index < totalChunks; index += 1) {
-      const chunk = serialized.slice(index * BUNDLE_SYNC_CHUNK_SIZE, (index + 1) * BUNDLE_SYNC_CHUNK_SIZE);
-      window.setTimeout(() => {
-        p2pService.sendMessage('BUNDLE_SYNC_CHUNK', {
-          transferId,
-          index,
-          totalChunks,
-          chunk,
-        });
-      }, index * 4);
-    }
-  };
-
-  const sendP2PSnapshot = (
-    gedcom: GedcomData,
-    documents: Record<string, IndividualDocument[]>,
-    source: 'sync.sent' | 'sync.refresh',
-    options?: { forceBundle?: boolean }
-  ) => {
-    if (p2pModeRef.current !== 'host') return;
-    const transferMode: P2PTransferMode =
-      options?.forceBundle || p2pTransferModeRef.current === 'bundle'
-        ? 'bundle'
-        : 'progressive';
-    if (transferMode === 'bundle') {
-      setP2PSyncStatusText('applying');
-      void sendBundleSnapshotToPeer(gedcom, documents).finally(() => {
-        window.setTimeout(() => setP2PSyncStatusText('done'), 300);
-        window.setTimeout(() => setP2PSyncStatusText(null), 2500);
-      });
-      logP2PActivity(`${source}.bundle`, 'session', peerId || 'host');
-      return;
-    }
-    const gedcomText = generateGedcom(gedcom);
-    const transferId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const totalChunks = Math.ceil(gedcomText.length / SYNC_CHUNK_SIZE);
-    setP2PSyncStatusText(`sending 0/${totalChunks}`);
-    for (let index = 0; index < totalChunks; index += 1) {
-      const start = index * SYNC_CHUNK_SIZE;
-      const chunk = gedcomText.slice(start, start + SYNC_CHUNK_SIZE);
-      window.setTimeout(() => {
-        p2pService.sendMessage('SYNC_GEDCOM_CHUNK', {
-          transferId,
-          index,
-          totalChunks,
-          chunk,
-          databaseName: databaseNameRef.current,
-          sentAt: new Date().toISOString(),
-        });
-        const nextCount = index + 1;
-        if (nextCount === 1 || nextCount === totalChunks || nextCount % 12 === 0) {
-          setP2PSyncStatusText(`sending ${nextCount}/${totalChunks}`);
-        }
-        if (index + 1 === totalChunks) {
-          window.setTimeout(() => setP2PSyncStatusText('waiting apply'), 250);
-        }
-      }, index * SYNC_CHUNK_SEND_DELAY_MS);
-    }
-    if (Object.keys(documents).length > 0) {
-      const docsDelay = Math.max(500, totalChunks * SYNC_CHUNK_SEND_DELAY_MS + 650);
-      if (snapshotDocumentsSendTimerRef.current !== null) {
-        window.clearTimeout(snapshotDocumentsSendTimerRef.current);
-      }
-      snapshotDocumentsSendTimerRef.current = window.setTimeout(() => {
-        void (async () => {
-          const transferable = await toTransferableDocumentsForPeer(documents);
-          sendDocumentsSnapshotInBatches(transferable);
-        })();
-        snapshotDocumentsSendTimerRef.current = null;
-      }, docsDelay);
-    }
-    const normalizedDelay = Math.max(350, totalChunks * SYNC_CHUNK_SEND_DELAY_MS + 400);
-    window.setTimeout(() => {
-      sendNormalizedSnapshotToPeer(gedcom);
-    }, normalizedDelay);
-    logP2PActivity(source, 'session', peerId || 'host');
-  };
-
-  const sendNormalizedSnapshotToPeer = (gedcom: GedcomData) => {
-    if (p2pModeRef.current !== 'host') return;
-    const normalized = normalizeGedcom(gedcom);
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length <= NORMALIZED_SNAPSHOT_CHUNK_SIZE) {
-      p2pService.sendMessage('NORMALIZED_SNAPSHOT', {
-        normalizedGedcom: normalized,
-        algoVersion: NORMALIZATION_ALGO_VERSION,
-      });
-      return;
-    }
-    const transferId = `norm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const totalChunks = Math.ceil(serialized.length / NORMALIZED_SNAPSHOT_CHUNK_SIZE);
-    for (let index = 0; index < totalChunks; index += 1) {
-      const chunk = serialized.slice(index * NORMALIZED_SNAPSHOT_CHUNK_SIZE, (index + 1) * NORMALIZED_SNAPSHOT_CHUNK_SIZE);
-      window.setTimeout(() => {
-        p2pService.sendMessage('NORMALIZED_SNAPSHOT_CHUNK', {
-          transferId,
-          index,
-          totalChunks,
-          chunk,
-          algoVersion: NORMALIZATION_ALGO_VERSION,
-        });
-      }, index * 4);
-    }
-  };
-
-  const computeMediaStats = (documents: Record<string, IndividualDocument[]>) => {
-    let documentItems = 0;
-    let photoItems = 0;
-    for (const docs of Object.values(documents)) {
-      for (const doc of docs || []) {
-        if (doc.kind === 'photo' || isImageLikeUrl(doc.url)) photoItems += 1;
-        else documentItems += 1;
-      }
-    }
-    return { documentItems, photoItems };
-  };
-
-  const blobToDataUrl = async (blob: Blob): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ''));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-
-  const blobImageUrlToDataUrlViaCanvas = async (blobUrl: string): Promise<string | null> =>
-    new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth || img.width || 1;
-          canvas.height = img.naturalHeight || img.height || 1;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            resolve(null);
-            return;
-          }
-          ctx.drawImage(img, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.9));
-        } catch {
-          resolve(null);
-        }
-      };
-      img.onerror = () => resolve(null);
-      img.src = blobUrl;
-    });
-
-  const toTransferableDocumentsForPeer = async (
-    documents: Record<string, IndividualDocument[]>
-  ): Promise<Record<string, IndividualDocument[]>> => {
-    const result: Record<string, IndividualDocument[]> = {};
-    for (const [individualId, docs] of Object.entries(documents)) {
-      result[individualId] = await Promise.all((docs || []).map(async (doc) => {
-        if (!doc.url.startsWith('blob:')) return doc;
-        try {
-          const response = await fetch(doc.url);
-          if (!response.ok) return doc;
-          const blob = await response.blob();
-          const dataUrl = await blobToDataUrl(blob);
-          return { ...doc, url: dataUrl, source: 'local' as const };
-        } catch {
-          const fallbackDataUrl = await blobImageUrlToDataUrlViaCanvas(doc.url);
-          if (fallbackDataUrl) {
-            return { ...doc, url: fallbackDataUrl, source: 'local' as const };
-          }
-          return doc;
-        }
-      }));
-    }
-    return result;
-  };
-
-  const sendDocumentsToPeer = (
-    documents: Record<string, IndividualDocument[]>,
-    target: string = selectedIndividual?.id || 'documents',
-    mode: 'full' | 'partial' = 'partial',
-    options?: {
-      batchIndex?: number;
-      batchTotal?: number;
-      totalDocumentItems?: number;
-      totalPhotoItems?: number;
-    }
-  ) => {
-    const allowDocuments =
-      p2pModeRef.current === 'client'
-        ? (remoteAccessPolicy?.allowDocuments ?? true)
-        : visibilitySettingsRef.current.allowDocuments;
-    if (!allowDocuments) return;
-    const isPartial = mode === 'partial' && target !== 'documents' && !!target;
-    const documentsPayload = isPartial ? { [target]: documents[target] || [] } : documents;
-    const payloadStats = computeMediaStats(documentsPayload);
-    const meta = {
-      databaseName: databaseNameRef.current,
-      authorPeerId: peerId || 'peer',
-      updatedAt: new Date().toISOString(),
-      partial: isPartial,
-      scopeIndividualId: isPartial ? target : undefined,
-      batchIndex: options?.batchIndex,
-      batchTotal: options?.batchTotal,
-      documentItemsInPayload: payloadStats.documentItems,
-      photoItemsInPayload: payloadStats.photoItems,
-      documentItemsTotal: options?.totalDocumentItems,
-      photoItemsTotal: options?.totalPhotoItems,
-    };
-    const serialized = JSON.stringify(documentsPayload);
-    if (serialized.length <= DOCUMENT_SYNC_CHUNK_SIZE) {
-      p2pService.sendMessage('DOCUMENTS_SYNC', {
-        ...meta,
-        documentsByIndividualId: documentsPayload,
-      });
-    } else {
-      const transferId = `docs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const totalChunks = Math.ceil(serialized.length / DOCUMENT_SYNC_CHUNK_SIZE);
-      for (let index = 0; index < totalChunks; index += 1) {
-        const chunk = serialized.slice(index * DOCUMENT_SYNC_CHUNK_SIZE, (index + 1) * DOCUMENT_SYNC_CHUNK_SIZE);
-        window.setTimeout(() => {
-          p2pService.sendMessage('DOCUMENTS_SYNC_CHUNK', {
-            transferId,
-            index,
-            totalChunks,
-            chunk,
-            ...meta,
-          });
-        }, index * 4);
-      }
-    }
-    logP2PActivity(isPartial ? 'documents.sync.sent.partial' : 'documents.sync.sent.full', 'individual', target, peerId || 'peer');
-  };
-
-  const sendDocumentPatchToPeer = (
-    patch: {
-      operation: 'add' | 'update' | 'remove' | 'set_primary';
-      individualId: string;
-      doc?: IndividualDocument;
-      docId?: string;
-      patch?: Partial<IndividualDocument>;
-    }
-  ) => {
-    const allowDocuments =
-      p2pModeRef.current === 'client'
-        ? (remoteAccessPolicy?.allowDocuments ?? true)
-        : visibilitySettingsRef.current.allowDocuments;
-    if (!allowDocuments) return;
-    const buildDocumentsSnapshotAfterPatch = (): Record<string, IndividualDocument[]> => {
-      const snapshot = documentsRef.current;
-      const current = snapshot[patch.individualId] || [];
-      let next = current;
-      if (patch.operation === 'add' && patch.doc) {
-        const normalized =
-          normalizeDocumentsByIndividual({ [patch.individualId]: [patch.doc] }, gedcomDataRef.current?.individuals)[
-            patch.individualId
-          ] || [];
-        const incoming = normalized[0];
-        if (incoming) {
-          const deduped = current.filter((d) => d.id !== incoming.id);
-          const shouldBecomePrimary = incoming.kind === 'photo' && !deduped.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
-          next = [...deduped, shouldBecomePrimary ? { ...incoming, isPrimaryPhoto: true } : incoming];
-        }
-      } else if (patch.operation === 'update' && patch.docId) {
-        next = current.map((doc) => {
-          if (doc.id !== patch.docId) return doc;
-          const nextUrl = typeof patch.patch?.url === 'string' ? patch.patch.url : doc.url;
-          const nextKind: 'photo' | 'document' =
-            patch.patch?.kind === 'photo' || patch.patch?.kind === 'document'
-              ? patch.patch.kind
-              : ((isImageLikeUrl(nextUrl) || doc.kind === 'photo') ? 'photo' : 'document');
-          return {
-            ...doc,
-            ...patch.patch,
-            kind: nextKind,
-            date: patch.patch?.date === '' ? undefined : (patch.patch?.date ?? doc.date),
-            sourceAttribution:
-              patch.patch?.sourceAttribution === ''
-                ? undefined
-                : typeof patch.patch?.sourceAttribution === 'string'
-                  ? patch.patch.sourceAttribution.trim() || undefined
-                  : doc.sourceAttribution,
-          };
-        });
-      } else if (patch.operation === 'remove' && patch.docId) {
-        next = current.filter((doc) => doc.id !== patch.docId);
-        if (!next.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
-          const firstPhoto = next.find((d) => d.kind === 'photo');
-          if (firstPhoto) {
-            next = next.map((d) => (d.id === firstPhoto.id ? { ...d, isPrimaryPhoto: true } : d));
-          }
-        }
-      } else if (patch.operation === 'set_primary' && patch.docId) {
-        next = current.map((doc) =>
-          (doc.kind === 'photo' || isImageLikeUrl(doc.url))
-            ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === patch.docId }
-            : doc
-        );
-      }
-      if (next === current) return snapshot;
-      return { ...snapshot, [patch.individualId]: next };
-    };
-    window.setTimeout(() => {
-      p2pService.sendMessage('DOCUMENT_PATCH', {
-        ...patch,
-        authorPeerId: peerId || 'peer',
-        updatedAt: new Date().toISOString(),
-      });
-      // Reliability fallback: also send a scoped DOCUMENTS_SYNC snapshot
-      // for peers that may miss patch notifications in some browser/runtime paths.
-      if (p2pModeRef.current === 'client') {
-        window.setTimeout(() => {
-          sendDocumentsToPeer(buildDocumentsSnapshotAfterPatch(), patch.individualId, 'partial');
-        }, 120);
-      }
-    }, 0);
-    logP2PActivity('documents.patch.sent', 'individual', patch.individualId, peerId || 'peer');
-  };
-
-  const sendDocumentsSnapshotInBatches = (documents: Record<string, IndividualDocument[]>) => {
-    const entries = Object.entries(documents);
-    if (entries.length === 0) return;
-    const stats = computeMediaStats(documents);
-    const total = entries.length;
-    entries.forEach(([individualId], index) => {
-      window.setTimeout(() => {
-        sendDocumentsToPeer(
-          documents,
-          individualId,
-          'partial',
-          {
-            batchIndex: index + 1,
-            batchTotal: total,
-            totalDocumentItems: stats.documentItems,
-            totalPhotoItems: stats.photoItems,
-          }
-        );
-      }, index * 8);
-    });
-  };
-
-  const [originalGedcomData, setOriginalGedcomData] = useState<GedcomData | null>(null);
-  const [normalizedGedcomData, setNormalizedGedcomData] = useState<GedcomData | null>(null);
-  const [isNormalized, setIsNormalized] = useState(false);
-  
-  // The active data used for visualization
-  // FIXED: Always use original if normalized is not ready yet
-  const gedcomData = isNormalized && normalizedGedcomData ? normalizedGedcomData : originalGedcomData;
-
-  const [databaseName, setDatabaseName] = useState<string>("My Family Tree");
-  
-  const [rootIndividual, setRootIndividual] = useState<Individual | null>(null);
-  const [selectedIndividual, setSelectedIndividual] = useState<Individual | null>(null);
-  
-  // Selection state for 2D View (Multiple individuals)
-  const [selectedIdsFor2D, setSelectedIdsFor2D] = useState<Set<string>>(new Set());
-  
   // State for 3D View (Expanded individuals)
   const [sceneExtras, setSceneExtras] = useState<RenderedPerson[]>([]);
 
@@ -715,62 +212,16 @@ function App() {
   const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
   const [webglRecoveryKey, setWebglRecoveryKey] = useState(0);
-  const [documentsByIndividualId, setDocumentsByIndividualId] = useState<Record<string, IndividualDocument[]>>({});
   const [remoteIdentityClaimsByIndividualId, setRemoteIdentityClaimsByIndividualId] = useState<Record<string, { claimedAt: string; actorPeerId: string }>>({});
-  const [selfIdentity, setSelfIdentity] = useState<SelfIdentityPublic | null>(() => {
-    try {
-      const raw = localStorage.getItem(SELF_IDENTITY_STORAGE_KEY);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as SelfIdentityPublic;
-      if (!parsed?.individualId || !parsed?.deviceKeyId) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  });
-  const selfIdentityRef = useRef<SelfIdentityPublic | null>(selfIdentity);
-  useEffect(() => {
-    selfIdentityRef.current = selfIdentity;
-  }, [selfIdentity]);
   /** Côté client : dernière identité publique reçue de l’hôte (SESSION_STATE). */
   const remoteHostSelfIdentityRef = useRef<SelfIdentityPublic | null>(null);
   /** Contexte d’invite issu de l’URL (#g2invite), pour attacher introduction au claim. */
   const inviteIntroductionContextRef = useRef<{ inviteId: string; inviterName?: string } | null>(null);
-  const [isIdentifyingSelf, setIsIdentifyingSelf] = useState(false);
-  const [identityTabSignal, setIdentityTabSignal] = useState(0);
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(AUTOSAVE_SETTINGS_KEY);
-      return raw === null ? true : raw === '1';
-    } catch {
-      return true;
-    }
-  });
-  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [autoSaveLastAt, setAutoSaveLastAt] = useState<string | null>(null);
-  const [hasAutoSaveDraft, setHasAutoSaveDraft] = useState(false);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
-  const [p2pTransferMode, setP2PTransferMode] = useState<P2PTransferMode>(() => {
-    const saved = localStorage.getItem(P2P_TRANSFER_MODE_KEY);
-    return saved === 'progressive' ? 'progressive' : 'bundle';
-  });
-  const [p2pBundleContentMode, setP2PBundleContentMode] = useState<P2PBundleContentMode>(() => {
-    const saved = localStorage.getItem(P2P_BUNDLE_CONTENT_MODE_KEY);
-    return saved === 'gedcom-only' ? 'gedcom-only' : 'gedcom-and-documents';
-  });
-  const readInviteTokenFromLocation = (): string | null => {
-    const search = new URLSearchParams(window.location.search);
-    const fromQuery = search.get('g2invite');
-    if (fromQuery) return fromQuery;
-    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
-    if (!hash) return null;
-    const hashParams = new URLSearchParams(hash);
-    return hashParams.get('g2invite');
-  };
 
   const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => readInviteTokenFromLocation());
   const [pendingInviteHostPeerId, setPendingInviteHostPeerId] = useState<string | null>(null);
@@ -816,7 +267,6 @@ function App() {
   });
   const [remoteAccessPolicy, setRemoteAccessPolicy] = useState<P2PVisibilitySettings | null>(null);
   const [activeSessionPeerPolicy, setActiveSessionPeerPolicy] = useState<P2PVisibilitySettings | null>(null);
-  const isIdentified = !!selfIdentity && selfIdentity.status !== 'unidentified';
 
   // Keep ref to data for P2P sync (closure issue)
   const gedcomDataRef = useRef<GedcomData | null>(null);
@@ -840,6 +290,35 @@ function App() {
   const bundleToastTimeoutRef = useRef<number | null>(null);
   const syncChunkReceiveTimeoutRef = useRef<number | null>(null);
   const snapshotDocumentsSendTimerRef = useRef<number | null>(null);
+  const p2pSyncRuntimeRef = useRef<{
+    peerId: string | null;
+    remoteAccessPolicy: P2PVisibilitySettings | null;
+    selectedIndividual: Individual | null | undefined;
+  }>({ peerId: null, remoteAccessPolicy: null, selectedIndividual: undefined });
+  p2pSyncRuntimeRef.current = { peerId, remoteAccessPolicy, selectedIndividual };
+
+  const logP2PActivityRef = useRef<P2PSyncSendersLog | null>(null);
+  const p2pSyncSenders = useMemo(
+    () =>
+      createP2PSyncSenders({
+        p2pModeRef,
+        p2pTransferModeRef,
+        p2pBundleContentModeRef,
+        databaseNameRef,
+        gedcomDataRef,
+        documentsRef,
+        visibilitySettingsRef,
+        snapshotDocumentsSendTimerRef,
+        logP2PActivityRef,
+        getPeerId: () => p2pSyncRuntimeRef.current.peerId,
+        getRemoteAccessPolicy: () => p2pSyncRuntimeRef.current.remoteAccessPolicy,
+        getSelectedIndividual: () => p2pSyncRuntimeRef.current.selectedIndividual,
+        setP2PSyncStatusText,
+      }),
+    []
+  );
+  const { sendP2PSnapshot, sendDocumentPatchToPeer, computeMediaStats } = p2pSyncSenders;
+
   const incomingSyncChunksRef = useRef<Record<string, {
     totalChunks: number;
     databaseName?: string;
@@ -882,8 +361,6 @@ function App() {
   const initialDiffSeenProposalKeysRef = useRef<Set<string>>(new Set());
   const rejectedInitialMatchesRef = useRef<RejectedInitialMatchMap>({});
   const serviceWorkerRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
-  const autoSaveTimerRef = useRef<number | null>(null);
-  const isRestoringAutoSaveRef = useRef(false);
   const inviteAutoConnectAttemptedRef = useRef(false);
   const p2pInvitesRef = useRef<P2PInviteItem[]>([]);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
@@ -942,75 +419,7 @@ function App() {
   useEffect(() => { activeSessionPeerPolicyRef.current = activeSessionPeerPolicy; }, [activeSessionPeerPolicy]);
   useEffect(() => { originalGedcomDataRef.current = originalGedcomData; }, [originalGedcomData]);
   useEffect(() => {
-    try {
-      if (selfIdentity) {
-        localStorage.setItem(SELF_IDENTITY_STORAGE_KEY, JSON.stringify(selfIdentity));
-      } else {
-        localStorage.removeItem(SELF_IDENTITY_STORAGE_KEY);
-      }
-    } catch {
-      // no-op
-    }
-  }, [selfIdentity]);
-  useEffect(() => {
-    try {
-      localStorage.setItem(AUTOSAVE_SETTINGS_KEY, autoSaveEnabled ? '1' : '0');
-    } catch {
-      // no-op
-    }
-  }, [autoSaveEnabled]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const snapshot = await readAutoSaveSnapshot();
-        if (!cancelled && snapshot) {
-          setHasAutoSaveDraft(true);
-          setAutoSaveLastAt(snapshot.savedAt);
-        }
-      } catch {
-        if (!cancelled) setHasAutoSaveDraft(false);
-      }
-    })();
     return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    if (!autoSaveEnabled || !originalGedcomData || isRestoringAutoSaveRef.current) return;
-    if (autoSaveTimerRef.current !== null) {
-      window.clearTimeout(autoSaveTimerRef.current);
-    }
-    autoSaveTimerRef.current = window.setTimeout(async () => {
-      try {
-        setAutoSaveState('saving');
-        const snapshot: AutoSaveSnapshot = {
-          savedAt: new Date().toISOString(),
-          databaseName,
-          originalGedcomData,
-          documentsByIndividualId,
-          selfIdentity,
-        };
-        await saveAutoSaveSnapshot(snapshot);
-        setAutoSaveLastAt(snapshot.savedAt);
-        setAutoSaveState('saved');
-        setHasAutoSaveDraft(true);
-      } catch (error) {
-        console.error('Auto-save failed', error);
-        setAutoSaveState('error');
-      }
-    }, 2200);
-    return () => {
-      if (autoSaveTimerRef.current !== null) {
-        window.clearTimeout(autoSaveTimerRef.current);
-      }
-    };
-  }, [autoSaveEnabled, originalGedcomData, documentsByIndividualId, selfIdentity, databaseName]);
-  useEffect(() => {
-    return () => {
-      if (autoSaveTimerRef.current !== null) {
-        window.clearTimeout(autoSaveTimerRef.current);
-      }
       if (bundleToastTimeoutRef.current !== null) {
         window.clearTimeout(bundleToastTimeoutRef.current);
       }
@@ -4366,6 +3775,7 @@ function App() {
     };
     setP2PActivityEvents((prev) => [...prev, event].slice(-500));
   };
+  logP2PActivityRef.current = logP2PActivity;
 
   const buildIndividualChangeSet = (before: Individual | undefined, after: Individual): Partial<Individual> => {
     if (!before) return after;
@@ -6188,9 +5598,7 @@ function App() {
     : t('help.processing');
 
   return (
-    <div className={`${isDarkMode ? 'dark [color-scheme:dark]' : '[color-scheme:light]'} flex h-screen h-dvh w-screen overflow-hidden relative transition-colors duration-500`}>
-      <div className="absolute inset-0 bg-sky-50 dark:bg-black transition-colors duration-500 -z-10"></div>
-
+    <AppLayout isDarkMode={isDarkMode}>
       {/* --- Sidebar (Database) --- */}
       <Sidebar 
         data={gedcomData} 
@@ -6237,6 +5645,13 @@ function App() {
         {shouldSuspendSceneForInvite ? (
           <div className={`absolute inset-0 ${isDarkMode ? 'bg-black' : 'bg-sky-50'}`} />
         ) : viewMode === '3D' ? (
+          <Suspense
+            fallback={
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="w-10 h-10 animate-spin text-sky-500" aria-hidden />
+              </div>
+            }
+          >
           <Scene3D 
             key={`scene3d-${webglRecoveryKey}`}
             rootIndividual={rootIndividual} 
@@ -6269,6 +5684,7 @@ function App() {
             labelFontSize={labelFontSize}
             onWebGLContextLost={handleWebGLContextLost}
           />
+          </Suspense>
         ) : is2dIndividual ? (
           <Scene2DIndividual
             key={`scene2d-individual-${webglRecoveryKey}`}
@@ -6644,7 +6060,7 @@ function App() {
 
       {renderHelpOverlay()}
 
-    </div>
+    </AppLayout>
   );
 }
 

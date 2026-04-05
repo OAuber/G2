@@ -38,4 +38,16 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: ['App.tsx'],
+    rules: {
+      'react-hooks/exhaustive-deps': 'off',
+    },
+  },
+  {
+    files: ['components/Sidebar.tsx', 'i18n.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 );

@@ -5,6 +5,7 @@ import { Text, Billboard } from '@react-three/drei';
 import { LayoutNode } from '../services/layoutEngineB';
 import { CameraMode, Gender, GedcomData } from '../types';
 import { findRelationshipPath } from '../services/relationshipPath';
+import { IndividualNameBillboard } from './IndividualNameBillboard';
 
 interface InstancedTreeProps {
   nodes: LayoutNode[];
@@ -590,6 +591,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
     }
     baseConnectorColorsRef.current = new Float32Array(lineColors);
 
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- instancing rebuild keyed by graph/layout; boxGeometry/labelFontSize/nodesMap align with nodes/pathGeometry
   }, [nodes, totalTraits, showBoxes, pathGeometry, data, selectedId, isTopView]);
 
   useEffect(() => {
@@ -894,10 +896,12 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   useLayoutEffect(() => {
     if (relationshipRevealEnabled) return;
     applyPathColors(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyPathColors non stabilisé volontairement pour éviter boucles
   }, [relationshipRevealEnabled]);
   useEffect(() => {
     // Re-apply colors when top-view name hover changes partner ribbon emphasis.
     applyPathColors(activePathRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- idem
   }, [hoveredNameId, isTopViewActive]);
   useEffect(() => {
     if (!isTopViewActive) setHoveredNameId(null);
@@ -1354,36 +1358,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       // In top-view, always render multi-union lines when they exist.
       // Keep completeness first; de-dup is handled in nearby label filtering.
       const hasUnionLines = isTopViewActive && spouseUnionLines.length > 1;
-      /* Hooks below: R3F per-node subtree; kept here to avoid splitting 200+ lines of layout math into another component. */
-      /* eslint-disable react-hooks/rules-of-hooks */
-      const nameFacingRef = useRef<THREE.Group>(null);
-      const namePosRef = useRef(new THREE.Vector3());
-      const namePullDirRef = useRef(new THREE.Vector3());
-      namePosRef.current.copy(namePos);
-      useFrame(() => {
-          const g = nameFacingRef.current;
-          if (!g) return;
-          if (isTopView) {
-              g.quaternion.copy(camera.quaternion);
-              return;
-          }
-          const np = namePosRef.current;
-          const pullDir = namePullDirRef.current;
-          pullDir.subVectors(camera.position, np);
-          const dist = pullDir.length();
-          // Tirer le nom vers la caméra pour que le raycast touche le texte avant le ruban (clic nom ≠ ruban).
-          const pull = Math.max(14, thickness * 4);
-          if (dist > 1e-5) {
-              pullDir.multiplyScalar(pull / dist);
-              g.position.copy(np).add(pullDir);
-          } else {
-              g.position.copy(np);
-          }
-          const dx = camera.position.x - np.x;
-          const dz = camera.position.z - np.z;
-          g.rotation.set(0, Math.atan2(dx, dz), 0);
-      });
-      /* eslint-enable react-hooks/rules-of-hooks */
       const marriageLabels = node.traits
           .filter((t): t is { type: 'marriage'; offset: number; spouseId?: string } => t.type === 'marriage')
           .map((t, idx) => {
@@ -1558,7 +1532,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                 })}
               </>
           ) : (
-              <group ref={nameFacingRef} userData={{ geneaverseNameLabel: true }}>
+              <IndividualNameBillboard namePos={namePos} isTopView={isTopView} thickness={thickness}>
                   <Text
                       ref={(r) => {
                           alwaysOnTop(r);
@@ -1589,7 +1563,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
                   >
                       {fullName}
                   </Text>
-              </group>
+              </IndividualNameBillboard>
           )}
 
           {/* Birth date on birth trait axis, opposite side of ribbon */}

@@ -115,6 +115,54 @@ Configuration for the PWA (manifest, precache patterns, standalone display) live
 
 ---
 
+## Architecture (code layout)
+
+The UI entry point is [`index.tsx`](index.tsx); [`App.tsx`](App.tsx) orchestrates domain hooks, P2P wiring, and the main shell (sidebar, scene, panels). Heavy UI lives in [`components/`](components/) (see below). Shared domain logic lives in [`services/`](services/) and app-level helpers in [`app/`](app/).
+
+### `app/` — application layer (non-UI)
+
+| Area | Role |
+|------|------|
+| [`app/autoSave.ts`](app/autoSave.ts) | IndexedDB autosave snapshots and restore |
+| [`app/storageKeys.ts`](app/storageKeys.ts) | `localStorage` key names |
+| [`app/p2pAppTypes.ts`](app/p2pAppTypes.ts) | P2P UI/session types (invites, proposals, documents, visibility) |
+| [`app/p2pSyncConstants.ts`](app/p2pSyncConstants.ts) | Chunk sizes, timeouts, normalization version for sync |
+| [`app/p2pSyncSenders.ts`](app/p2pSyncSenders.ts) | Factory for P2P sync senders (GEDCOM chunks, bundles, documents) |
+| [`app/p2pInviteUrl.ts`](app/p2pInviteUrl.ts) | Invite token parsing from the URL |
+| [`app/normalizeDocuments.ts`](app/normalizeDocuments.ts) | Document normalization helpers for UI and P2P |
+| Other | e.g. [`app/royalsDemo.ts`](app/royalsDemo.ts), [`app/onlineDocTitle.ts`](app/onlineDocTitle.ts) |
+
+### `hooks/` — React hooks by domain
+
+Composable state used from `App.tsx`:
+
+| Hook | Responsibility |
+|------|------------------|
+| [`useGedcomCore`](hooks/useGedcomCore.ts) | Raw/normalized GEDCOM, database name, root/selection |
+| [`useDocumentsState`](hooks/useDocumentsState.ts) | Per-individual documents map |
+| [`useAutoSave`](hooks/useAutoSave.ts) | Autosave toggles and IndexedDB integration |
+| [`useSelfIdentity`](hooks/useSelfIdentity.ts) | Local identity and related UI signals |
+| [`useP2PSession`](hooks/useP2PSession.ts) | Barrel: P2P transfer modes + re-exports for [`createP2PSyncSenders`](app/p2pSyncSenders.ts) |
+
+### `components/` — UI
+
+Large scene/panel components (2D grid, 3D scene, details, instanced tree) intentionally stay in dedicated files; smaller pieces are split where it helps maintenance (e.g. [`AppLayout`](components/AppLayout.tsx), [`IndividualNameBillboard`](components/IndividualNameBillboard.tsx), [`topPanel/TopPanelTabList`](components/topPanel/TopPanelTabList.tsx)). Tab metadata for the share panel is in [`components/topPanel/topPanelTabs.ts`](components/topPanel/topPanelTabs.ts).
+
+`Scene3D` is loaded with `React.lazy` + `Suspense` from `App.tsx` to split the main bundle.
+
+### `services/` — pure or domain logic
+
+GEDCOM parsing ([`gedcomParser.ts`](services/gedcomParser.ts)), normalization ([`normalizationService.ts`](services/normalizationService.ts)), bundles ([`bundleService.ts`](services/bundleService.ts)), layout/geometry, P2P protocol and transport ([`p2p.ts`](services/p2p.ts), [`p2pProtocol.ts`](services/p2pProtocol.ts), [`p2pDomain.ts`](services/p2pDomain.ts)), identity crypto ([`selfIdentityCrypto.ts`](services/selfIdentityCrypto.ts)), relationship paths, etc.
+
+### Tests and quality
+
+- **Vitest**: [`vitest.config.ts`](vitest.config.ts); tests under [`tests/`](tests/) (e.g. `relationshipPath`, `gedcomParser`, `normalizationService`, `bundleService`).
+- **Lint**: `npm run lint` ([`eslint.config.js`](eslint.config.js)).
+- **Format**: optional `npm run format` ([`.prettierrc.json`](.prettierrc.json), [`.prettierignore`](.prettierignore)).
+- **CI**: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs install, build, test, and lint on push/PR to `main`.
+
+---
+
 ## Quick Start
 
 **Prerequisite**: [Node.js](https://nodejs.org/) (v18+)

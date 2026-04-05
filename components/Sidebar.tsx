@@ -313,7 +313,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (activePane === 'program') return;
     setActivePane(data ? 'list' : 'data');
-  }, [data]);
+  }, [data, activePane]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

@@ -800,6 +800,8 @@ const GridContent: React.FC<GridContentProps> = ({
       setHoveredDocId(null);
       document.body.style.cursor = 'default';
     }
+    // Intentionnellement pas hoveredDocId : éviter une boucle ; reset seulement au changement d’individu sélectionné.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   useEffect(() => {

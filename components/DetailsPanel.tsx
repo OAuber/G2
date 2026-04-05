@@ -552,7 +552,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       setIsEditing(false);
     }
     setShowDeleteConfirm(false);
-  }, [isCreating, individual?.id, data]);
+  }, [isCreating, individual, data]);
 
   useEffect(() => {
     if (isCreating || isEditing) setActiveTab('records');
