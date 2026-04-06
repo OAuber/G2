@@ -31,6 +31,11 @@ interface Scene2DIndividualProps {
   onWebGLContextLost?: () => void;
   selfIndividualId?: string | null;
   showSelfIntroductionBadge?: boolean;
+  sceneBackdropColor?: string;
+  /** Molette : uniquement sur ce canvas (vue comparaison empilée). */
+  wheelOnlyOnCanvas?: boolean;
+  /** Rubans « pistes fusion » (mode comparaison). */
+  compareSuggestionIds?: Set<string>;
 }
 
 const Scene2DIndividual: React.FC<Scene2DIndividualProps> = (props) => {

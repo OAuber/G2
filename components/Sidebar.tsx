@@ -225,6 +225,16 @@ interface SidebarProps {
   documentsByIndividualId?: Record<string, SortDocumentRef[]>;
   /** Démo Rois : à l’ouverture du panneau, afficher l’onglet Liste. */
   preferListTabWhenOpening?: boolean;
+  /** Liste fusionnée local + base du pair (mode comparaison 2D). */
+  compareListMode?: boolean;
+  compareRemoteData?: GedcomData | null;
+  selectedCompareRemoteId?: string | null;
+  onCompareSelectLocal?: (indi: Individual) => void;
+  onCompareSelectRemote?: (indi: Individual) => void;
+  compareProcessedLocalIds?: readonly string[];
+  compareProcessedRemoteIds?: readonly string[];
+  /** Médias du pair (même clés que `compareRemoteData.individuals`) pour les filtres doc en ligne/hors ligne. */
+  compareRemoteDocumentsByIndividualId?: Record<string, SortDocumentRef[]>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -266,6 +276,14 @@ const Sidebar: React.FC<SidebarProps> = ({
   onProgramApplyUpdate,
   documentsByIndividualId,
   preferListTabWhenOpening = false,
+  compareListMode = false,
+  compareRemoteData = null,
+  selectedCompareRemoteId = null,
+  onCompareSelectLocal,
+  onCompareSelectRemote,
+  compareProcessedLocalIds = [],
+  compareProcessedRemoteIds = [],
+  compareRemoteDocumentsByIndividualId,
 }) => {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
@@ -274,6 +292,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevSidebarOpenRef = useRef(false);
+  const prevCompareListModeRef = useRef(false);
 
   useEffect(() => {
     if (preferListTabWhenOpening && isOpen && !prevSidebarOpenRef.current) {
@@ -283,23 +302,35 @@ const Sidebar: React.FC<SidebarProps> = ({
   }, [isOpen, preferListTabWhenOpening]);
 
   useEffect(() => {
-    if (selectedId && isOpen) {
-       setTimeout(() => {
-           const container = scrollRef.current;
-           const element = document.getElementById(`sidebar-item-${selectedId}`);
-           if (container && element) {
-               // Scroll uniquement dans le conteneur de la sidebar pour éviter
-               // que scrollIntoView() remonte jusqu'au viewport et fasse disparaître les onglets
-               const containerRect = container.getBoundingClientRect();
-               const elementRect = element.getBoundingClientRect();
-               const offset = elementRect.top - containerRect.top;
-               container.scrollTop = container.scrollTop + offset
-                   - container.clientHeight / 2
-                   + element.clientHeight / 2;
-           }
-       }, 50);
-    }
-  }, [selectedId, isOpen, sortMode, searchTerm]);
+    if (!isOpen) return;
+    setTimeout(() => {
+      const container = scrollRef.current;
+      if (!container) return;
+      const scrollToId = (elId: string) => {
+        const element = document.getElementById(elId);
+        if (!element) return false;
+        const containerRect = container.getBoundingClientRect();
+        const elementRect = element.getBoundingClientRect();
+        const offset = elementRect.top - containerRect.top;
+        container.scrollTop =
+          container.scrollTop + offset - container.clientHeight / 2 + element.clientHeight / 2;
+        return true;
+      };
+      if (compareListMode) {
+        if (selectedId && scrollToId(`sidebar-item-local-${selectedId}`)) return;
+        if (selectedCompareRemoteId && scrollToId(`sidebar-item-remote-${selectedCompareRemoteId}`)) return;
+      } else if (selectedId) {
+        scrollToId(`sidebar-item-${selectedId}`);
+      }
+    }, 50);
+  }, [
+    selectedId,
+    selectedCompareRemoteId,
+    compareListMode,
+    isOpen,
+    sortMode,
+    searchTerm,
+  ]);
 
   // Close menu on outside click
   useEffect(() => {
@@ -321,6 +352,14 @@ const Sidebar: React.FC<SidebarProps> = ({
       setActivePane('data');
     }
   }, [data]);
+
+  /** À l’entrée en mode comparaison 2D uniquement : ouvrir l’onglet Liste (sans écraser un changement d’onglet manuel). */
+  useEffect(() => {
+    if (compareListMode && !prevCompareListModeRef.current) {
+      setActivePane((prev) => (prev === 'program' ? prev : 'list'));
+    }
+    prevCompareListModeRef.current = compareListMode;
+  }, [compareListMode]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -417,6 +456,56 @@ const Sidebar: React.FC<SidebarProps> = ({
     
     return sorted.filter((p) => individualMatchesSearchQuery(p, searchTerm));
   }, [data, searchTerm, sortMode, selectedId, activeFilters, documentsByIndividualId]);
+
+  /** Filtres liste pair : sans sélection distante, ignorer ancêtres/descendants (sinon liste vide). */
+  const activeFiltersRemote = useMemo(() => {
+    if (!selectedCompareRemoteId) {
+      const next = new Set(activeFilters);
+      next.delete('selected-ancestors');
+      next.delete('selected-descendants');
+      return next;
+    }
+    return activeFilters;
+  }, [activeFilters, selectedCompareRemoteId]);
+
+  const filteredListRemote = useMemo(() => {
+    if (!compareListMode || !compareRemoteData) return [];
+    let list = Object.values(compareRemoteData.individuals) as Individual[];
+    const lineageSets = computeLineageFilterSets(
+      compareRemoteData,
+      selectedCompareRemoteId ?? undefined,
+    );
+    if (activeFiltersRemote.size > 0) {
+      list = list.filter((p) =>
+        matchesFilters(p, activeFiltersRemote, {
+          selectedId: selectedCompareRemoteId,
+          lineageSets,
+          documentsByIndividualId: compareRemoteDocumentsByIndividualId,
+        }),
+      );
+    }
+    const sorted = applySortMode(list, sortMode || 'birth-asc');
+    if (!searchTerm) {
+      const slice = sorted.slice(0, 200);
+      if (
+        selectedCompareRemoteId &&
+        !slice.find((p) => p.id === selectedCompareRemoteId)
+      ) {
+        const selectedItem = compareRemoteData.individuals[selectedCompareRemoteId];
+        if (selectedItem) slice.unshift(selectedItem);
+      }
+      return slice;
+    }
+    return sorted.filter((p) => individualMatchesSearchQuery(p, searchTerm));
+  }, [
+    compareListMode,
+    compareRemoteData,
+    searchTerm,
+    sortMode,
+    selectedCompareRemoteId,
+    activeFiltersRemote,
+    compareRemoteDocumentsByIndividualId,
+  ]);
 
   // Styles
   const bgClass = isDarkMode ? 'bg-black border-slate-800' : 'bg-slate-50 border-slate-300';
@@ -642,7 +731,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>}
 
       {/* Search + Sort/Filter Menu */}
-      {activePane === 'list' && data && (
+      {activePane === 'list' && (data || compareListMode) && (
         <div className={`flex flex-col border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
             <div className="p-4 space-y-3 pb-3">
               {/* Search bar */}
@@ -654,7 +743,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   className={`w-full rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-slate-500 border ${inputBg} ${textClass}`}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  disabled={!data}
+                  disabled={!data && !compareRemoteData}
                 />
               </div>
 
@@ -732,10 +821,23 @@ const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Header for Records & Selection */}
             <div className={`px-4 py-2 bg-opacity-50 ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'} flex justify-between items-center text-xs font-semibold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-                <span>{t('sidebar.labels.records')} ({Object.keys(data.individuals).length})</span>
+                <span className="leading-tight">
+                  {compareListMode ? (
+                    <>
+                      {t('sidebar.labels.records')}: {t('app.compare.sidebarLocal')} ({data ? Object.keys(data.individuals).length : 0})
+                      <span className="mx-1">·</span>
+                      {t('app.compare.sidebarRemote')} (
+                      {compareRemoteData ? Object.keys(compareRemoteData.individuals).length : '—'})
+                    </>
+                  ) : (
+                    <>{t('sidebar.labels.records')} ({data ? Object.keys(data.individuals).length : 0})</>
+                  )}
+                </span>
                 <div className="flex items-center gap-2">
                   <span title={t('sidebar.labels.visibleIn2D')}>
-                    2D: {selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__') 
+                    2D: {!data
+                      ? '—'
+                      : selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__') 
                       ? `${selectedIdsFor2D.size}/${Object.keys(data.individuals).length}` 
                       : selectedIdsFor2D?.has('__NONE__') 
                         ? `0/${Object.keys(data.individuals).length}`
@@ -830,7 +932,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
           )
-        ) : !data ? (
+        ) : !data && !(compareListMode && onCompareSelectLocal && onCompareSelectRemote) ? (
           <div className={`p-4 text-sm ${subTextClass}`}>
             <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
             <div className="mt-2 flex flex-col gap-1">
@@ -851,53 +953,273 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ) : (
           <div className="p-2 space-y-1">
-            {filteredList.map((indi) => {
-              const isNoneMode = selectedIdsFor2D?.has('__NONE__');
-              const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
-              const isSelected2D = isNoneMode ? false : (isAllMode ? true : selectedIdsFor2D.has(indi.id));
-              
-              const isCal = indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
-
-              return (
-              <div 
-                key={indi.id} 
-                id={`sidebar-item-${indi.id}`}
-                className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors ${selectedId === indi.id ? (isDarkMode ? 'bg-slate-800' : 'bg-slate-200') : ''} ${itemHover}`}
-              >
-                  <button
-                    onClick={() => onSelectIndividual(indi)}
-                    className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
-                  >
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
-                      indi.gender === 'F' ? 'bg-pink-500 text-pink-500' : 'bg-blue-500 text-blue-500'
-                    }`}>
-                      {indi.givenName?.[0]}{indi.surname?.[0]}
-                      {isCal && <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm" title={t('sidebar.labels.containsCalculatedDates')} />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                          <div className={`text-sm font-medium truncate flex-1 ${textClass}`}>
-                            {indi.givenName} <span className="font-bold">{indi.surname}</span>
+            {compareListMode && onCompareSelectLocal && onCompareSelectRemote ? (
+              <>
+                {data && (
+                  <>
+                <div
+                  className={`sticky top-0 z-[1] -mx-1 px-2 py-1.5 mb-0.5 text-[10px] font-bold uppercase tracking-wider border-b ${
+                    isDarkMode
+                      ? 'bg-black/95 border-slate-700 text-slate-300'
+                      : 'bg-white/95 border-slate-200 text-slate-600'
+                  }`}
+                >
+                  {t('app.compare.sidebarLocal')} ({Object.keys(data.individuals).length})
+                </div>
+                {filteredList.map((indi) => {
+                  const isNoneMode = selectedIdsFor2D?.has('__NONE__');
+                  const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
+                  const isSelected2D = isNoneMode
+                    ? false
+                    : isAllMode
+                      ? true
+                      : selectedIdsFor2D.has(indi.id);
+                  const isCal =
+                    indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
+                  const isProcessed = compareProcessedLocalIds.includes(indi.id);
+                  return (
+                    <div
+                      key={`local-${indi.id}`}
+                      id={`sidebar-item-local-${indi.id}`}
+                      className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors border-l-4 ${
+                        selectedId === indi.id
+                          ? isDarkMode
+                            ? 'border-l-sky-400 bg-slate-800'
+                            : 'border-l-sky-600 bg-sky-100'
+                          : isDarkMode
+                            ? 'border-l-sky-600/80 bg-slate-950/60'
+                            : 'border-l-sky-500 bg-sky-50/95'
+                      } ${isDarkMode ? 'hover:bg-neutral-900/90' : 'hover:bg-sky-100'}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onCompareSelectLocal(indi)}
+                        className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
+                      >
+                        <div
+                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
+                            indi.gender === 'F'
+                              ? 'bg-pink-500 text-pink-500'
+                              : 'bg-blue-500 text-blue-500'
+                          }`}
+                        >
+                          {indi.givenName?.[0]}
+                          {indi.surname?.[0]}
+                          {isCal && (
+                            <div
+                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
+                              title={t('sidebar.labels.containsCalculatedDates')}
+                            />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`text-sm font-medium truncate flex-1 ${textClass}`}
+                            >
+                              {indi.givenName}{' '}
+                              <span className="font-bold">{indi.surname}</span>
+                            </div>
+                            {isProcessed && (
+                              <Check
+                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
+                                aria-hidden
+                              />
+                            )}
+                            <div className="opacity-70">{getSourceIcon(indi.source)}</div>
                           </div>
-                          <div className="opacity-70">
-                            {getSourceIcon(indi.source)}
+                          <div className={`text-xs truncate ${subTextClass}`}>
+                            {safeYear(indi.birthDate?.year)} -{' '}
+                            {safeYear(indi.deathDate?.year)}
                           </div>
-                      </div>
-                      <div className={`text-xs truncate ${subTextClass}`}>
-                        {safeYear(indi.birthDate?.year)} - {safeYear(indi.deathDate?.year)}
-                      </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggle2DSelection?.(indi.id);
+                        }}
+                        className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}
+                        title={
+                          isSelected2D
+                            ? t('sidebar.labels.hideAll')
+                            : t('sidebar.labels.showAll')
+                        }
+                      >
+                        {isSelected2D ? (
+                          <Eye className="w-4 h-4" />
+                        ) : (
+                          <EyeOff className="w-4 h-4 opacity-30" />
+                        )}
+                      </button>
                     </div>
-                  </button>
+                  );
+                })}
+                  </>
+                )}
+                <div
+                  className={`sticky top-0 z-[1] -mx-1 px-2 py-1.5 ${data ? 'mt-2' : ''} mb-0.5 text-[10px] font-bold uppercase tracking-wider border-b ${
+                    isDarkMode
+                      ? 'bg-slate-900/95 border-slate-600 text-slate-300'
+                      : 'bg-slate-200/95 border-slate-300 text-slate-700'
+                  }`}
+                >
+                  {t('app.compare.sidebarRemote')} (
+                  {compareRemoteData ? Object.keys(compareRemoteData.individuals).length : '—'})
+                </div>
+                {compareRemoteData ? (
+                filteredListRemote.map((indi) => {
+                  const isCal =
+                    indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
+                  const isProcessed = compareProcessedRemoteIds.includes(indi.id);
+                  return (
+                    <div
+                      key={`remote-${indi.id}`}
+                      id={`sidebar-item-remote-${indi.id}`}
+                      className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors border-l-4 ${
+                        selectedCompareRemoteId === indi.id
+                          ? isDarkMode
+                            ? 'border-l-amber-400 bg-slate-700'
+                            : 'border-l-amber-600 bg-amber-100'
+                          : isDarkMode
+                            ? 'border-l-slate-500 bg-slate-900/70'
+                            : 'border-l-slate-500 bg-slate-200/95'
+                      } ${isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-200'}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onCompareSelectRemote(indi)}
+                        className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
+                      >
+                        <div
+                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
+                            indi.gender === 'F'
+                              ? 'bg-pink-500 text-pink-500'
+                              : 'bg-blue-500 text-blue-500'
+                          }`}
+                        >
+                          {indi.givenName?.[0]}
+                          {indi.surname?.[0]}
+                          {isCal && (
+                            <div
+                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
+                              title={t('sidebar.labels.containsCalculatedDates')}
+                            />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`text-sm font-medium truncate flex-1 ${textClass}`}
+                            >
+                              {indi.givenName}{' '}
+                              <span className="font-bold">{indi.surname}</span>
+                            </div>
+                            {isProcessed && (
+                              <Check
+                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
+                                aria-hidden
+                              />
+                            )}
+                            <div className="opacity-70">{getSourceIcon(indi.source)}</div>
+                          </div>
+                          <div className={`text-xs truncate ${subTextClass}`}>
+                            {safeYear(indi.birthDate?.year)} -{' '}
+                            {safeYear(indi.deathDate?.year)}
+                          </div>
+                        </div>
+                      </button>
+                      <div className="w-10 shrink-0" aria-hidden />
+                    </div>
+                  );
+                })
+                ) : (
+                  <div className={`px-3 py-4 text-center text-xs leading-snug ${subTextClass}`}>
+                    {t('app.compare.waitingPeerGedcom')}
+                  </div>
+                )}
+              </>
+            ) : (
+              filteredList.map((indi) => {
+                const isNoneMode = selectedIdsFor2D?.has('__NONE__');
+                const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
+                const isSelected2D = isNoneMode
+                  ? false
+                  : isAllMode
+                    ? true
+                    : selectedIdsFor2D.has(indi.id);
 
-                  <button 
-                     onClick={(e) => { e.stopPropagation(); onToggle2DSelection?.(indi.id); }}
-                     className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}
-                     title={isSelected2D ? t('sidebar.labels.hideAll') : t('sidebar.labels.showAll')}
+                const isCal =
+                  indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
+
+                return (
+                  <div
+                    key={indi.id}
+                    id={`sidebar-item-${indi.id}`}
+                    className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors ${selectedId === indi.id ? (isDarkMode ? 'bg-slate-800' : 'bg-slate-200') : ''} ${itemHover}`}
                   >
-                     {isSelected2D ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4 opacity-30" />}
-                  </button>
-              </div>
-            )})}
+                    <button
+                      type="button"
+                      onClick={() => onSelectIndividual(indi)}
+                      className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
+                    >
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
+                          indi.gender === 'F'
+                            ? 'bg-pink-500 text-pink-500'
+                            : 'bg-blue-500 text-blue-500'
+                        }`}
+                      >
+                        {indi.givenName?.[0]}
+                        {indi.surname?.[0]}
+                        {isCal && (
+                          <div
+                            className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
+                            title={t('sidebar.labels.containsCalculatedDates')}
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`text-sm font-medium truncate flex-1 ${textClass}`}
+                          >
+                            {indi.givenName}{' '}
+                            <span className="font-bold">{indi.surname}</span>
+                          </div>
+                          <div className="opacity-70">{getSourceIcon(indi.source)}</div>
+                        </div>
+                        <div className={`text-xs truncate ${subTextClass}`}>
+                          {safeYear(indi.birthDate?.year)} -{' '}
+                          {safeYear(indi.deathDate?.year)}
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggle2DSelection?.(indi.id);
+                      }}
+                      className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}
+                      title={
+                        isSelected2D
+                          ? t('sidebar.labels.hideAll')
+                          : t('sidebar.labels.showAll')
+                      }
+                    >
+                      {isSelected2D ? (
+                        <Eye className="w-4 h-4" />
+                      ) : (
+                        <EyeOff className="w-4 h-4 opacity-30" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
       </div>

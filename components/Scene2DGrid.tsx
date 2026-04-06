@@ -34,6 +34,12 @@ interface Scene2DGridProps {
   /** Fiche « moi » — badge d’introduction P2P (vue individuelle). */
   selfIndividualId?: string | null;
   showSelfIntroductionBadge?: boolean;
+  /** Couleur de fond du conteneur (le canvas reste transparent ; utile pour la zone « pair » en comparaison). */
+  sceneBackdropColor?: string;
+  /** Molette : uniquement sur ce canvas (deux vues 2D empilées). */
+  wheelOnlyOnCanvas?: boolean;
+  /** En mode comparaison : ids de fiches à mettre en avant comme pistes de fusion (rubans). */
+  compareSuggestionIds?: Set<string>;
 }
 
 interface RibbonDocument {
@@ -144,6 +150,10 @@ const FADE = 0.93;
 function defaultColor(g: Gender)  { return COLORS_DEFAULT[g] ?? COLORS_DEFAULT[Gender.Unknown]; }
 function hoverColor(g: Gender)    { return COLORS_HOVER[g]   ?? COLORS_HOVER[Gender.Unknown]; }
 function selectColor(g: Gender)   { return COLORS_SELECT[g]  ?? COLORS_SELECT[Gender.Unknown]; }
+/** Rubans « candidats fusion » en comparaison — teinte ambre sans confondre avec la sélection. */
+function suggestionRibbonColor(g: Gender) {
+  return defaultColor(g).clone().lerp(new THREE.Color('#f59e0b'), 0.58);
+}
 function dimColor(g: Gender, dark: boolean) { return defaultColor(g).clone().lerp(dark ? BG_DARK : BG_LIGHT, FADE); }
 
 /* ------------------------------------------------------------------ */
@@ -279,7 +289,9 @@ const TOUCH_PAN_THRESHOLD_PX = 12;
 const ScrollZoomControls: React.FC<{
   enableHorizontalPan?: boolean;
   onWheelZoomIntent?: (params: { deltaY: number; currentZoom: number }) => boolean;
-}> = ({ enableHorizontalPan = true, onWheelZoomIntent }) => {
+  /** Si vrai, la molette ne zoome que lorsque le curseur est sur ce canvas (pas le fallback window). Utile pour deux vues 2D empilées. */
+  wheelOnlyOnCanvas?: boolean;
+}> = ({ enableHorizontalPan = true, onWheelZoomIntent, wheelOnlyOnCanvas = false }) => {
   const { camera, gl } = useThree();
   const dragging = useRef(false);
   const lastX = useRef(0);
@@ -433,7 +445,9 @@ const ScrollZoomControls: React.FC<{
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
-    window.addEventListener('wheel', onWindowWheel, { passive: true });
+    if (!wheelOnlyOnCanvas) {
+      window.addEventListener('wheel', onWindowWheel, { passive: true });
+    }
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd);
@@ -444,7 +458,9 @@ const ScrollZoomControls: React.FC<{
 
     return () => {
       canvas.removeEventListener('wheel', onWheel);
-      window.removeEventListener('wheel', onWindowWheel);
+      if (!wheelOnlyOnCanvas) {
+        window.removeEventListener('wheel', onWindowWheel);
+      }
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
@@ -452,7 +468,7 @@ const ScrollZoomControls: React.FC<{
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
     };
-  }, [camera, gl, enableHorizontalPan, onWheelZoomIntent]);
+  }, [camera, gl, enableHorizontalPan, onWheelZoomIntent, wheelOnlyOnCanvas]);
 
   return null;
 };
@@ -482,6 +498,7 @@ interface GridContentProps {
   onOrthoZoomSample?: (zoom: number) => void;
   selfIndividualId?: string | null;
   showSelfIntroductionBadge?: boolean;
+  compareSuggestionIds?: Set<string>;
 }
 
 interface PhotoOverlayLayerProps {
@@ -537,6 +554,7 @@ const GridContent: React.FC<GridContentProps> = ({
   individuals, data, selectedId, primaryPhotoUrlById, documentsByIndividualId, onIndividualClick, isDarkMode, relationshipRevealEnabled, singleIndividual = false, onExpandAndSwitch3D, orthoZoomHandoff, onOrthoZoomHandoffConsumed, onPhotoOverlayChange, onIndividualDefaultZoomChange, onOrthoZoomSample,
   selfIndividualId = null,
   showSelfIntroductionBadge = false,
+  compareSuggestionIds,
 }) => {
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -971,9 +989,12 @@ const GridContent: React.FC<GridContentProps> = ({
       const rd = ribbonData[i];
       const isSelected = rd.individual.id === selectedId;
       const isHovered = i === hoveredRef.current;
+      const isSuggestion =
+        !!compareSuggestionIds?.has(rd.individual.id) && rd.individual.id !== selectedId;
 
       let c: THREE.Color;
       if (isSelected)      c = selectColor(rd.individual.gender);
+      else if (isSuggestion) c = suggestionRibbonColor(rd.individual.gender);
       else if (isHovered)  c = hoverColor(rd.individual.gender);
       else                 c = defaultColor(rd.individual.gender);
       mesh.setColorAt(i, c);
@@ -996,7 +1017,7 @@ const GridContent: React.FC<GridContentProps> = ({
     revealOpacityDataRef.current = revealOpacityData;
     revealOpacityAttrRef.current = revealAttr;
     prevRevealIndicesRef.current = new Set();
-  }, [ribbonData, selectedId, ribbonGeometry]);
+  }, [ribbonData, selectedId, ribbonGeometry, compareSuggestionIds]);
 
   /* ---- Layout: responsive grid (runs every frame) ---- */
 
@@ -1463,15 +1484,23 @@ const GridContent: React.FC<GridContentProps> = ({
 
   /* ---- Interaction handlers ---- */
 
+  const ribbonIdleColor = useCallback(
+    (indi: Individual) => {
+      if (indi.id === selectedId) return selectColor(indi.gender);
+      if (compareSuggestionIds?.has(indi.id)) return suggestionRibbonColor(indi.gender);
+      return defaultColor(indi.gender);
+    },
+    [selectedId, compareSuggestionIds],
+  );
+
   const clearPathHighlight = useCallback((mesh: THREE.InstancedMesh) => {
     if (pathSetRef.current.size === 0) return;
     for (let i = 0; i < ribbonData.length; i++) {
       const indi = ribbonData[i].individual;
-      const c = indi.id === selectedId ? selectColor(indi.gender) : defaultColor(indi.gender);
-      mesh.setColorAt(i, c);
+      mesh.setColorAt(i, ribbonIdleColor(indi));
     }
     pathSetRef.current = new Set();
-  }, [ribbonData, selectedId]);
+  }, [ribbonData, ribbonIdleColor]);
 
   const applyPathHighlight = useCallback((mesh: THREE.InstancedMesh, pathIds: Set<string>) => {
     if (pathIds.size === 0) return;
@@ -1506,8 +1535,7 @@ const GridContent: React.FC<GridContentProps> = ({
     // Restore previous hovered color
     if (hoveredRef.current >= 0 && hoveredRef.current < ribbonData.length) {
       const prev = ribbonData[hoveredRef.current].individual;
-      const c = prev.id === selectedId ? selectColor(prev.gender) : defaultColor(prev.gender);
-      mesh.setColorAt(hoveredRef.current, c);
+      mesh.setColorAt(hoveredRef.current, ribbonIdleColor(prev));
     }
 
     // Clear old path highlight
@@ -1567,7 +1595,7 @@ const GridContent: React.FC<GridContentProps> = ({
     hoveredRef.current = id;
     setHoveredIdx(id);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled, singleIndividual, selectedIdx]);
+  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled, singleIndividual, selectedIdx, ribbonIdleColor]);
 
   const handlePointerLeave = useCallback(() => {
     const mesh = ribbonMeshRef.current;
@@ -1575,8 +1603,7 @@ const GridContent: React.FC<GridContentProps> = ({
 
     if (hoveredRef.current < ribbonData.length) {
       const prev = ribbonData[hoveredRef.current].individual;
-      const c = prev.id === selectedId ? selectColor(prev.gender) : defaultColor(prev.gender);
-      mesh.setColorAt(hoveredRef.current, c);
+      mesh.setColorAt(hoveredRef.current, ribbonIdleColor(prev));
     }
 
     clearPathHighlight(mesh);
@@ -1586,7 +1613,7 @@ const GridContent: React.FC<GridContentProps> = ({
     setHovered3DAction(null);
     document.body.style.cursor = 'default';
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId, clearPathHighlight]);
+  }, [ribbonData, selectedId, clearPathHighlight, ribbonIdleColor]);
 
   const handleClick = useCallback((e: SceneMouseEvent) => {
     const id = e.instanceId;
@@ -2411,6 +2438,9 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   onWebGLContextLost,
   selfIndividualId = null,
   showSelfIntroductionBadge = false,
+  sceneBackdropColor,
+  wheelOnlyOnCanvas = false,
+  compareSuggestionIds,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -2421,7 +2451,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   const maskRightRef = useRef<HTMLDivElement>(null);
   const individualDefaultZoomRef = useRef<number | null>(null);
   const contextLostNotifiedRef = useRef(false);
-  const overlayBg = isDarkMode ? '#000000' : '#f0f9ff';
+  const overlayBg = sceneBackdropColor ?? (isDarkMode ? '#000000' : '#f0f9ff');
   const modeSwitchLockRef = useRef(false);
   useEffect(() => {
     modeSwitchLockRef.current = false;
@@ -2519,7 +2549,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   if (!data) return null;
 
   return (
-    <div className="w-full h-full relative" style={{ background: isDarkMode ? '#000000' : '#f0f9ff' }}>
+    <div className="w-full h-full relative" style={{ background: overlayBg }}>
       <PhotoOverlayLayer
         photoLayerRef={photoLayerRef}
         photoImgRef={photoImgRef}
@@ -2558,6 +2588,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
         <ScrollZoomControls
           enableHorizontalPan={!singleIndividual}
           onWheelZoomIntent={handleWheelZoomIntent}
+          wheelOnlyOnCanvas={wheelOnlyOnCanvas}
         />
 
         <ambientLight intensity={1} />
@@ -2580,6 +2611,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           onOrthoZoomSample={onOrthoZoomSample}
           selfIndividualId={selfIndividualId}
           showSelfIntroductionBadge={showSelfIntroductionBadge}
+          compareSuggestionIds={compareSuggestionIds}
         />
       </Canvas>
 

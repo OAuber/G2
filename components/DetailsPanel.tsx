@@ -164,6 +164,8 @@ interface DetailsPanelProps {
   onExportIdentityBackup: (password: string) => Promise<void> | void;
   onImportIdentityBackup: (file: File, password: string) => Promise<void> | void;
   onRenounceIdentity: () => void;
+  /** Mode comparaison deux bases : fiches locale et distante sélectionnées dans les bandes 2D. */
+  comparePair?: { local: Individual | null; remote: Individual | null } | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -439,6 +441,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onExportIdentityBackup,
   onImportIdentityBackup,
   onRenounceIdentity,
+  comparePair = null,
 }) => {
   const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
@@ -1240,6 +1243,61 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             {t('details.tabIdentity')}
           </button>
         </div>
+
+        {comparePair && (comparePair.local || comparePair.remote) && (
+          <div
+            className={`grid grid-cols-2 gap-1 rounded border p-2 text-[11px] ${
+              isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-300 bg-slate-50'
+            }`}
+          >
+            <div
+              className={`rounded px-2 py-1.5 min-h-[3rem] ${
+                isDarkMode ? 'bg-slate-950/80 text-slate-100' : 'bg-white text-slate-900'
+              }`}
+            >
+              <div className={`font-semibold uppercase tracking-wide mb-1 ${subTextClass}`}>
+                {t('details.compareLocalColumn')}
+              </div>
+              {comparePair.local ? (
+                <div>
+                  <div className="font-medium">
+                    {`${comparePair.local.givenName || ''} ${comparePair.local.surname || ''}`.trim() ||
+                      comparePair.local.name ||
+                      comparePair.local.id}
+                  </div>
+                  <div className={subTextClass}>
+                    {comparePair.local.birthDate?.year ?? '?'} — {comparePair.local.deathDate?.year ?? '?'}
+                  </div>
+                </div>
+              ) : (
+                <span className={subTextClass}>—</span>
+              )}
+            </div>
+            <div
+              className={`rounded px-2 py-1.5 min-h-[3rem] ${
+                isDarkMode ? 'bg-slate-800 text-slate-100' : 'bg-slate-200/90 text-slate-900'
+              }`}
+            >
+              <div className={`font-semibold uppercase tracking-wide mb-1 ${subTextClass}`}>
+                {t('details.compareRemoteColumn')}
+              </div>
+              {comparePair.remote ? (
+                <div>
+                  <div className="font-medium">
+                    {`${comparePair.remote.givenName || ''} ${comparePair.remote.surname || ''}`.trim() ||
+                      comparePair.remote.name ||
+                      comparePair.remote.id}
+                  </div>
+                  <div className={subTextClass}>
+                    {comparePair.remote.birthDate?.year ?? '?'} — {comparePair.remote.deathDate?.year ?? '?'}
+                  </div>
+                </div>
+              ) : (
+                <span className={subTextClass}>—</span>
+              )}
+            </div>
+          </div>
+        )}
 
         {(isCreating || isEditing) ? (
           <form onSubmit={(e) => {

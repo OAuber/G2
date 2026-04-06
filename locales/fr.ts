@@ -31,6 +31,8 @@ const fr = {
       synchronizedWithPeer: 'Synchronisé avec le pair !',
       p2pWaitPeerIdBeforeInvite: 'Activez le P2P et attendez votre Peer ID avant de créer une invitation.',
       ephemeralReadOnly: 'En visite libre (invitation anonyme), la base est en lecture seule.',
+      hostNoGedcomToShare:
+        'Aucune base chargée sur cet appareil : impossible d’envoyer l’arbre à l’invité. Chargez ou importez un GEDCOM puis renvoyez une invitation ou reconnectez-vous.',
       shareCompareNamedInviteOnly:
         'Le partage et la comparaison initiale ne sont disponibles qu’après acceptation d’une invitation nominative (lien type « personne du fichier »), pas pour une simple connexion par Peer ID seul.',
     },
@@ -50,6 +52,7 @@ const fr = {
       archiveImportFailed: "Import de l'archive impossible. Vérifiez le format du fichier.",
       documentsUpdatedByPeer: 'Documents mis à jour par le pair.',
       inviteCreated: 'Invitation personnalisée créée.',
+      inviteAcceptedHostSync: 'Invitation acceptée — profil appliqué et synchronisation de l’arbre lancée.',
       ownDeviceInviteCreated: 'Lien auto-invitation (second appareil) créé. Copiez-le pour votre mobile.',
       ownDeviceInviteNeedsLivingSelf:
         "Votre fiche identitaire doit être un membre vivant de l'arbre pour générer ce lien.",
@@ -61,6 +64,8 @@ const fr = {
       ephemeralSessionEnded: 'Session de visite terminée — application réinitialisée.',
       comparatorSnapshotReceived:
         'Base de l’hôte reçue : votre copie locale n’a pas été remplacée. Utilisez Comparer pour analyser les différences et fusionner par propositions.',
+      comparePeerSnapshotReceived:
+        'Base du pair reçue pour la vue comparée (aucune écriture dans votre fichier local).',
     },
     confirm: {
       replaceIdentityClaim: 'Vous avez déjà revendiqué une autre identité sur cet appareil. La remplacer par la nouvelle ?',
@@ -75,6 +80,25 @@ const fr = {
         'Vous consultez une base en visite libre (sans identification) : pas d’édition, pas d’import, pas de sauvegarde locale des données reçues.',
       revoke: 'Quitter la visite',
       useNormalApp: 'Utiliser l’app normalement…',
+    },
+    compare: {
+      localBase: 'Base locale',
+      peerBase: 'Base du pair (aperçu)',
+      markProcessed: 'Marquer la sélection comme traitée',
+      processedLocalAria: 'Individus déjà traités — base locale',
+      processedRemoteAria: 'Individus déjà traités — base du pair',
+      sidebarLocal: 'Local',
+      sidebarRemote: 'Pair',
+      importLocalHint:
+        'Aucun GEDCOM local : importez un fichier ou une archive depuis l’onglet Données pour afficher votre arbre ici. La zone du bas montre la base de l’hôte.',
+      waitingPeerGedcom:
+        'En attente du GEDCOM du pair… La connexion et l’échange initial peuvent prendre quelques secondes.',
+      suggestedPeerMatches: 'Pistes côté pair',
+      suggestedLocalMatches: 'Pistes côté local',
+      mergeHowItWorks:
+        'Aucune fusion automatique : les propositions de fiches ou de changements arrivent dans le panneau Détails ; vous les acceptez ou les rejetez une par une. « Marquer comme traité » est un repère local pour votre suivi.',
+      photosSyncHint:
+        'Photos et documents du pair : envoyés après le GEDCOM (lots séparés), si la politique de session autorise les médias.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -265,6 +289,7 @@ const fr = {
     activity: 'Activité',
     views: 'Vues',
     downloads: 'Téléchargements',
+    merges: 'Fusions / sync',
     noActivity: 'Aucune activité pour le moment.',
     eventsRecorded: 'événements enregistrés.',
     showDetails: 'Afficher le détail',
@@ -531,6 +556,8 @@ const fr = {
     tabDocuments: 'Documents',
     tabReview: 'Revue',
     tabIdentity: 'Identité',
+    compareLocalColumn: 'Fiche locale',
+    compareRemoteColumn: 'Fiche du pair',
     noIndividualCreatedOrSelected: 'Aucun individu créé ou sélectionné',
     cancel: 'Annuler',
     edit: 'Modifier',

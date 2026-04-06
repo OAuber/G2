@@ -1,21 +1,19 @@
 import type { MutableRefObject } from 'react';
 import { generateGedcom } from '../services/gedcomParser';
 import { p2pService } from '../services/p2p';
-import { normalizeGedcom } from '../services/normalizationService';
 import type { ActivityLogEvent } from '../services/p2pDomain';
 import { createG2Bundle } from '../services/bundleService';
 import type { GedcomData, Individual, P2PMode } from '../types';
 import type {
   IndividualDocument,
   P2PBundleContentMode,
+  P2PSessionUseCase,
   P2PTransferMode,
   P2PVisibilitySettings,
 } from './p2pAppTypes';
 import {
   BUNDLE_SYNC_CHUNK_SIZE,
   DOCUMENT_SYNC_CHUNK_SIZE,
-  NORMALIZATION_ALGO_VERSION,
-  NORMALIZED_SNAPSHOT_CHUNK_SIZE,
   SYNC_CHUNK_SEND_DELAY_MS,
   SYNC_CHUNK_SIZE,
 } from './p2pSyncConstants';
@@ -30,6 +28,7 @@ export type P2PSyncSendersLog = (
 
 export type P2PSyncSendersContext = {
   p2pModeRef: MutableRefObject<P2PMode>;
+  p2pSessionUseCaseRef: MutableRefObject<P2PSessionUseCase>;
   p2pTransferModeRef: MutableRefObject<P2PTransferMode>;
   p2pBundleContentModeRef: MutableRefObject<P2PBundleContentMode>;
   databaseNameRef: MutableRefObject<string>;
@@ -185,19 +184,22 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
     gedcom: GedcomData,
     documents: Record<string, IndividualDocument[]>
   ) => {
-    if (ctx.p2pModeRef.current !== 'host') return;
-    const includeDocuments = ctx.p2pBundleContentModeRef.current === 'gedcom-and-documents';
+    /** Invité en session comparer : même chemin bundle que l’hôte (sinon envoi silencieux, l’hôte ne voit que SESSION_STATE). */
+    const allowClientCompareBundle =
+      ctx.p2pModeRef.current === 'client' && ctx.p2pSessionUseCaseRef.current === 'compare';
+    if (ctx.p2pModeRef.current !== 'host' && !allowClientCompareBundle) return;
+    /** Mode comparer : toujours embarquer médias / rubans (sinon invité sans photos sur la colonne distante). */
+    const includeDocuments =
+      ctx.p2pBundleContentModeRef.current === 'gedcom-and-documents' ||
+      ctx.p2pSessionUseCaseRef.current === 'compare';
     const transferable = includeDocuments ? await toTransferableDocumentsForPeer(documents) : {};
     const gedcomText = generateGedcom(gedcom);
-    const normalizedGedcomText = generateGedcom(normalizeGedcom(gedcom));
     const bundleBlob = await createG2Bundle(gedcomText, {
       version: '1.0',
       databaseName: ctx.databaseNameRef.current,
       exportedAt: new Date().toISOString(),
       documentsByIndividualId: transferable,
       includesDocuments: includeDocuments,
-      normalizedGedcomContent: normalizedGedcomText,
-      normalizationAlgoVersion: NORMALIZATION_ALGO_VERSION,
     });
     const serialized = await bundleBlob.text();
     if (serialized.length <= BUNDLE_SYNC_CHUNK_SIZE) {
@@ -221,36 +223,6 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
     }
   };
 
-  const sendNormalizedSnapshotToPeer = (gedcom: GedcomData) => {
-    if (ctx.p2pModeRef.current !== 'host') return;
-    const normalized = normalizeGedcom(gedcom);
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length <= NORMALIZED_SNAPSHOT_CHUNK_SIZE) {
-      p2pService.sendMessage('NORMALIZED_SNAPSHOT', {
-        normalizedGedcom: normalized,
-        algoVersion: NORMALIZATION_ALGO_VERSION,
-      });
-      return;
-    }
-    const transferId = `norm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const totalChunks = Math.ceil(serialized.length / NORMALIZED_SNAPSHOT_CHUNK_SIZE);
-    for (let index = 0; index < totalChunks; index += 1) {
-      const chunk = serialized.slice(
-        index * NORMALIZED_SNAPSHOT_CHUNK_SIZE,
-        (index + 1) * NORMALIZED_SNAPSHOT_CHUNK_SIZE
-      );
-      window.setTimeout(() => {
-        p2pService.sendMessage('NORMALIZED_SNAPSHOT_CHUNK', {
-          transferId,
-          index,
-          totalChunks,
-          chunk,
-          algoVersion: NORMALIZATION_ALGO_VERSION,
-        });
-      }, index * 4);
-    }
-  };
-
   const sendP2PSnapshot = (
     gedcom: GedcomData,
     documents: Record<string, IndividualDocument[]>,
@@ -258,7 +230,9 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
     options?: { forceBundle?: boolean }
   ) => {
     const peerId = ctx.getPeerId();
-    if (ctx.p2pModeRef.current !== 'host') return;
+    const allowClientCompareSnapshot =
+      ctx.p2pModeRef.current === 'client' && ctx.p2pSessionUseCaseRef.current === 'compare';
+    if (ctx.p2pModeRef.current !== 'host' && !allowClientCompareSnapshot) return;
     const transferMode: P2PTransferMode =
       options?.forceBundle || ctx.p2pTransferModeRef.current === 'bundle' ? 'bundle' : 'progressive';
     if (transferMode === 'bundle') {
@@ -311,10 +285,6 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
         ctx.snapshotDocumentsSendTimerRef.current = null;
       }, docsDelay);
     }
-    const normalizedDelay = Math.max(350, totalChunks * SYNC_CHUNK_SEND_DELAY_MS + 400);
-    window.setTimeout(() => {
-      sendNormalizedSnapshotToPeer(gedcom);
-    }, normalizedDelay);
     log(source, 'session', peerId || 'host');
   };
 
@@ -425,7 +395,6 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
   return {
     sendBundleSnapshotToPeer,
     sendP2PSnapshot,
-    sendNormalizedSnapshotToPeer,
     sendDocumentsToPeer,
     sendDocumentPatchToPeer,
     sendDocumentsSnapshotInBatches,

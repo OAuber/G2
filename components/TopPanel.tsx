@@ -284,11 +284,19 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
   const cardClass = isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200';
   const activitySummary = useMemo(() => {
-    const counts = { view: 0, download: 0, proposal: 0 };
+    const counts = { view: 0, download: 0, proposal: 0, merges: 0 };
     for (const event of activityEvents) {
       if (event.eventType.includes('view')) counts.view += 1;
       if (event.eventType.includes('download')) counts.download += 1;
       if (event.eventType.includes('proposal')) counts.proposal += 1;
+      if (
+        event.eventType.includes('merge_apply') ||
+        event.eventType === 'proposal.received' ||
+        event.eventType.includes('compare_peer') ||
+        event.eventType.includes('compare_snapshot')
+      ) {
+        counts.merges += 1;
+      }
     }
     return counts;
   }, [activityEvents]);
@@ -792,10 +800,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
         {activeTab === 'activity' && (
           <section className={`rounded-xl border p-4 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.activity')}</h3>
-            <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
               <StatCard label={t('topPanel.views')} value={activitySummary.view} isDarkMode={isDarkMode} />
               <StatCard label={t('topPanel.downloads')} value={activitySummary.download} isDarkMode={isDarkMode} />
               <StatCard label={t('topPanel.proposals')} value={activitySummary.proposal} isDarkMode={isDarkMode} />
+              <StatCard label={t('topPanel.merges')} value={activitySummary.merges} isDarkMode={isDarkMode} />
             </div>
             <div className="flex items-center justify-between mb-2">
               <p className={`text-xs ${subTextClass}`}>

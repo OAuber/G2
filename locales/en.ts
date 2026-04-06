@@ -31,6 +31,8 @@ const en = {
       synchronizedWithPeer: 'Synchronized with Peer!',
       p2pWaitPeerIdBeforeInvite: 'Enable P2P and wait for your Peer ID before creating an invitation.',
       ephemeralReadOnly: 'In free visit mode (anonymous invite), the tree is read-only.',
+      hostNoGedcomToShare:
+        'No genealogy database is loaded on this device: the tree cannot be sent to the guest. Import a GEDCOM, then re-invite or reconnect.',
       shareCompareNamedInviteOnly:
         'Share and initial compare are only available after accepting a named invitation (link tied to someone in the file), not for Peer-ID-only connection.',
     },
@@ -50,6 +52,7 @@ const en = {
       archiveImportFailed: 'Archive import failed. Please check file format.',
       documentsUpdatedByPeer: 'Documents updated by peer.',
       inviteCreated: 'Invitation created.',
+      inviteAcceptedHostSync: 'Invite accepted — profile applied and tree sync started.',
       ownDeviceInviteCreated: 'Own-device invite link created. Copy it to your phone.',
       ownDeviceInviteNeedsLivingSelf:
         'Your claimed profile must be a living person in the tree to generate this link.',
@@ -61,6 +64,8 @@ const en = {
       ephemeralSessionEnded: 'Visit session ended — app reset.',
       comparatorSnapshotReceived:
         'Host tree received: your local copy was not replaced. Use Compare to analyze differences and merge via proposals.',
+      comparePeerSnapshotReceived:
+        'Peer tree received for side-by-side compare (your local file is unchanged).',
     },
     confirm: {
       replaceIdentityClaim: 'You already claimed another identity on this device. Replace it with the new one?',
@@ -75,6 +80,25 @@ const en = {
         'You are viewing a tree in anonymous visit mode: no editing, no import, no local save of received data.',
       revoke: 'Leave visit',
       useNormalApp: 'Use app normally…',
+    },
+    compare: {
+      localBase: 'Local database',
+      peerBase: 'Peer database (preview)',
+      markProcessed: 'Mark selection as processed',
+      processedLocalAria: 'Already processed — local tree',
+      processedRemoteAria: 'Already processed — peer tree',
+      sidebarLocal: 'Local',
+      sidebarRemote: 'Peer',
+      importLocalHint:
+        'No local GEDCOM: import a file or archive from the Data tab to show your tree here. The lower pane shows the host’s tree.',
+      waitingPeerGedcom:
+        'Waiting for the peer’s GEDCOM… Connection and initial exchange may take a few seconds.',
+      suggestedPeerMatches: 'Hints on peer tree',
+      suggestedLocalMatches: 'Hints on local tree',
+      mergeHowItWorks:
+        'Nothing merges by itself: proposals for people or edits appear in the Details panel; accept or reject each one. « Mark processed » is only a local reminder for your workflow.',
+      photosSyncHint:
+        'Peer photos and documents are sent after the GEDCOM (in separate batches), when the session policy allows media.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -265,6 +289,7 @@ const en = {
     activity: 'Activity',
     views: 'Views',
     downloads: 'Downloads',
+    merges: 'Merges / sync',
     noActivity: 'No activity yet.',
     eventsRecorded: 'events recorded.',
     showDetails: 'Show details',
@@ -531,6 +556,8 @@ const en = {
     tabDocuments: 'Documents',
     tabReview: 'Review',
     tabIdentity: 'Identity',
+    compareLocalColumn: 'Local person',
+    compareRemoteColumn: 'Peer person',
     noIndividualCreatedOrSelected: 'No individual created nor selected',
     cancel: 'Cancel',
     edit: 'Edit',

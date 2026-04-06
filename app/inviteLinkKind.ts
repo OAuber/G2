@@ -1,4 +1,4 @@
-import type { P2PVisibilitySettings } from './p2pAppTypes';
+import type { P2PRole, P2PVisibilitySettings } from './p2pAppTypes';
 import type { InviteTokenClaims } from '../services/p2pSecurity';
 
 /** Liens d’invitation : visite anonyme (1.2) vs nominatif + revendication (2). */
@@ -20,6 +20,56 @@ export function buildEphemeralAccessProfile(): P2PVisibilitySettings {
     allowDownload: false,
     allowProposal: false,
     allowDirectEdit: false,
+  };
+}
+
+/** Profil de visibilité P2P dérivé du rôle d’invitation (hôte / jeton). */
+export function buildAccessProfileFromRole(role: P2PRole): P2PVisibilitySettings {
+  if (role === 'viewer') {
+    return {
+      exposeIdentity: true,
+      exposeDates: true,
+      exposePlaces: false,
+      exposeNotes: false,
+      allowDocuments: true,
+      allowDownload: false,
+      allowProposal: false,
+      allowDirectEdit: false,
+    };
+  }
+  if (role === 'contributor') {
+    return {
+      exposeIdentity: true,
+      exposeDates: true,
+      exposePlaces: true,
+      exposeNotes: false,
+      allowDocuments: true,
+      allowDownload: false,
+      allowProposal: true,
+      allowDirectEdit: false,
+    };
+  }
+  if (role === 'comparator') {
+    return {
+      exposeIdentity: true,
+      exposeDates: true,
+      exposePlaces: true,
+      exposeNotes: true,
+      allowDocuments: true,
+      allowDownload: false,
+      allowProposal: true,
+      allowDirectEdit: false,
+    };
+  }
+  return {
+    exposeIdentity: true,
+    exposeDates: true,
+    exposePlaces: true,
+    exposeNotes: true,
+    allowDocuments: true,
+    allowDownload: true,
+    allowProposal: true,
+    allowDirectEdit: true,
   };
 }
 

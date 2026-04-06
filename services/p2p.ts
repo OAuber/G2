@@ -20,6 +20,8 @@ export class P2PService {
     private onDataReceived: P2PCallback | null = null;
     private onStatusChange: ((status: string, id?: string) => void) | null = null;
     private replayGuard = new NonceReplayGuard();
+    /** Envois avant que `conn.open` soit effectif (évite INVITE_ACCEPT / SYNC perdus). */
+    private pendingOutbound: Array<{ type: P2PMessageType; payload: unknown }> = [];
     private connectTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
     private lastHostId: string | null = null;
     private connectRetryCount = 0;
@@ -63,6 +65,12 @@ export class P2PService {
     public init(onStatus: (status: string, id?: string) => void, onData: P2PCallback) {
         this.onStatusChange = onStatus;
         this.onDataReceived = onData;
+
+        /* Ne pas destroy/recréer le Peer à chaque init : le jeton d’invitation embarque le `sessionId`
+         * (Peer ID hôte). Un nouveau Peer = nouvel ID = lien invalide, connexion impossible, sync vide. */
+        if (this.peer) {
+            return;
+        }
 
         // Create Peer with a random ID
         // Note: In production, you might want to use your own PeerServer
@@ -115,11 +123,14 @@ export class P2PService {
     }
 
     public sendMessage(type: P2PMessageType, payload: unknown) {
-        if (!this.conn || !this.conn.open) return;
-        const envelope = createEnvelope(type, payload, {
-            senderPeerId: this.peer?.id,
-        });
-        this.conn.send(envelope);
+        if (!this.conn || !this.conn.open) {
+            this.pendingOutbound.push({ type, payload });
+            if (import.meta.env.DEV) {
+                console.warn('[P2P] sendMessage mis en file (connexion pas prête):', type, this.pendingOutbound.length);
+            }
+            return;
+        }
+        this.sendMessageNow(type, payload);
     }
 
     private handleConnection(conn: DataConnection) {
@@ -130,6 +141,7 @@ export class P2PService {
             console.log('Connected to peer!');
             this.clearConnectTimeout();
             this.connectRetryCount = 0;
+            this.flushPendingOutbound();
             this.onStatusChange?.('connected');
         });
 
@@ -158,10 +170,28 @@ export class P2PService {
 
     public destroy() {
         this.clearConnectTimeout();
+        this.pendingOutbound = [];
         if (this.conn) this.conn.close();
         if (this.peer) this.peer.destroy();
         this.peer = null;
         this.conn = null;
+    }
+
+    private flushPendingOutbound() {
+        if (!this.conn || !this.conn.open) return;
+        while (this.pendingOutbound.length > 0) {
+            const item = this.pendingOutbound.shift();
+            if (!item) break;
+            this.sendMessageNow(item.type, item.payload);
+        }
+    }
+
+    private sendMessageNow(type: P2PMessageType, payload: unknown) {
+        if (!this.conn || !this.conn.open) return;
+        const envelope = createEnvelope(type, payload, {
+            senderPeerId: this.peer?.id,
+        });
+        this.conn.send(envelope);
     }
 
     private startConnectTimeout(timeoutMs = 15000) {
@@ -239,10 +269,7 @@ export class P2PService {
             status,
             errorCode,
         };
-        const envelope = createEnvelope('ACK', ackPayload, {
-            senderPeerId: this.peer?.id,
-        });
-        this.conn.send(envelope);
+        this.sendMessageNow('ACK', ackPayload);
     }
 }
 

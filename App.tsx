@@ -75,23 +75,37 @@ import {
   SYNC_CHUNK_RECEIVE_TIMEOUT_MS,
 } from './app/p2pSyncConstants';
 import { isImageLikeUrl, normalizeDocumentsByIndividual } from './app/normalizeDocuments';
+import {
+  namespacePeerCompareGedcom,
+  normalizePeerCompareDocumentsFromWire,
+  remapWireMediaDocForPeerCompare,
+  wireIndividualIdToPeerCompareId,
+} from './app/peerCompareIdNamespace';
+import { buildPeerCompareSnapshot, peerCompareInboundAllowDocuments } from './app/peerCompareInbound';
 import { useSelfIdentity } from './hooks/useSelfIdentity';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGedcomCore } from './hooks/useGedcomCore';
 import { useDocumentsState } from './hooks/useDocumentsState';
 import { isProbablyLivingForUi } from './app/individualLiving';
-import { readInviteTokenFromLocation } from './app/p2pInviteUrl';
 import {
+  parseInviteClaimsUnsafe,
+  readInitialInviteBootstrap,
+} from './app/p2pInviteUrl';
+import {
+  buildAccessProfileFromRole,
   buildEphemeralAccessProfile,
   resolveLinkKind,
   sessionAllowsShareCompare,
   type InviteLinkKind,
 } from './app/inviteLinkKind';
+
+const INVITE_BOOTSTRAP = readInitialInviteBootstrap();
 import {
   createP2PSyncSenders,
   useP2PTransferModes,
   type P2PSyncSendersLog,
 } from './hooks/useP2PSession';
+import { rankPeerMatchesForIndividual } from './services/compareIndividualSimilarity';
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
@@ -203,7 +217,7 @@ function App() {
   const [peerId, setPeerId] = useState<string | null>(null);
   const [p2pMode, setP2pMode] = useState<P2PMode>(null);
   const [p2pActivityEvents, setP2PActivityEvents] = useState<ActivityLogEvent[]>([]);
-  const [p2pInvites, setP2PInvites] = useState<P2PInviteItem[]>([]);
+  const [p2pInvites, setP2PInvites] = useState<P2PInviteItem[]>(() => INVITE_BOOTSTRAP.initialInvites);
   const [p2pProposals, setP2PProposals] = useState<P2PProposalItem[]>([]);
   const [activeReviewProposalId, setActiveReviewProposalId] = useState<string | null>(null);
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
@@ -212,19 +226,34 @@ function App() {
   /** Côté client : dernière identité publique reçue de l’hôte (SESSION_STATE). */
   const remoteHostSelfIdentityRef = useRef<SelfIdentityPublic | null>(null);
   /** Contexte d’invite issu de l’URL (#g2invite), pour attacher introduction au claim. */
-  const inviteIntroductionContextRef = useRef<{ inviteId: string; inviterName?: string } | null>(null);
+  const inviteIntroductionContextRef = useRef<{ inviteId: string; inviterName?: string } | null>(
+    INVITE_BOOTSTRAP.claims
+      ? {
+          inviteId: INVITE_BOOTSTRAP.claims.inviteId,
+          inviterName: INVITE_BOOTSTRAP.claims.inviterName || undefined,
+        }
+      : null
+  );
   const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
 
-  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => readInviteTokenFromLocation());
-  const [pendingInviteHostPeerId, setPendingInviteHostPeerId] = useState<string | null>(null);
-  const [pendingInviteTargetIndividualId, setPendingInviteTargetIndividualId] = useState<string | null>(null);
-  const [pendingInviteInviterName, setPendingInviteInviterName] = useState<string | null>(null);
-  const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(null);
-  const [pendingInviteIntent, setPendingInviteIntent] = useState<'standard' | 'own_device' | null>(null);
+  const [pendingInviteToken, setPendingInviteToken] = useState<string | null>(() => INVITE_BOOTSTRAP.token);
+  const [pendingInviteHostPeerId, setPendingInviteHostPeerId] = useState<string | null>(
+    () => INVITE_BOOTSTRAP.hostPeerId
+  );
+  const [pendingInviteTargetIndividualId, setPendingInviteTargetIndividualId] = useState<string | null>(
+    () => INVITE_BOOTSTRAP.targetIndividualId
+  );
+  const [pendingInviteInviterName, setPendingInviteInviterName] = useState<string | null>(
+    () => INVITE_BOOTSTRAP.inviterName
+  );
+  const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(() => INVITE_BOOTSTRAP.role);
+  const [pendingInviteIntent, setPendingInviteIntent] = useState<'standard' | 'own_device' | null>(() =>
+    INVITE_BOOTSTRAP.claims ? INVITE_BOOTSTRAP.intent : null
+  );
   const [trustedOwnDevicePeerId, setTrustedOwnDevicePeerId] = useState<string | null>(null);
   const [trustedOwnDeviceInviteId, setTrustedOwnDeviceInviteId] = useState<string | null>(null);
   const [inviteOnboardingStage, setInviteOnboardingStage] = useState<'idle' | 'connecting' | 'connected' | 'accepted' | 'syncing' | 'completed' | 'ready' | 'error'>('idle');
@@ -302,6 +331,7 @@ function App() {
     () =>
       createP2PSyncSenders({
         p2pModeRef,
+        p2pSessionUseCaseRef,
         p2pTransferModeRef,
         p2pBundleContentModeRef,
         databaseNameRef,
@@ -365,15 +395,46 @@ function App() {
   const p2pInvitesRef = useRef<P2PInviteItem[]>([]);
   /** Invité (lien dans l’URL) : id d’invitation pour appliquer INVITE_REVOKE (1.2 et nominatif). */
   const activeGuestInviteIdRef = useRef<string | null>(null);
-  /** Invité « comparateur » : copie distante reçue sans remplacer le GEDCOM local (pour comparaison / future UI). */
+  /** Invité « comparateur » : copie distante reçue sans remplacer le GEDCOM local (UI comparaison). */
+  const [peerCompareGedcom, setPeerCompareGedcom] = useState<GedcomData | null>(null);
+  /** Médias reçus pour l’aperçu pair (photos / documents), séparés du stockage local. */
+  const [peerCompareDocumentsByIndividualId, setPeerCompareDocumentsByIndividualId] = useState<
+    Record<string, IndividualDocument[]>
+  >({});
   const peerCompareGedcomRef = useRef<GedcomData | null>(null);
-  const pendingInviteRoleRef = useRef<P2PRole | null>(null);
+
+  /** Invité en session comparer : un seul envoi de l’arbre local vers l’hôte après réception du snapshot pair. */
+  const compareGuestReciprocalSentRef = useRef(false);
+  const maybeSendGuestLocalTreeToHostAfterCompareReceive = useCallback(() => {
+    if (compareGuestReciprocalSentRef.current) return;
+    if (p2pModeRef.current !== 'client' || p2pStatusRef.current !== 'connected') return;
+    if (p2pSessionUseCaseRef.current !== 'compare') return;
+    if (!peerCompareGedcomRef.current) return;
+    if (!gedcomDataRef.current) return;
+    compareGuestReciprocalSentRef.current = true;
+    window.setTimeout(() => {
+      if (p2pModeRef.current !== 'client' || p2pStatusRef.current !== 'connected') return;
+      if (!gedcomDataRef.current) return;
+      sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.sent');
+      logP2PActivityRef.current?.('sync.sent.compare_guest_reciprocal', 'session', peerId || 'client', peerId || 'client');
+    }, 500);
+  }, [sendP2PSnapshot, peerId]);
+
+  const [selectedCompareLocalId, setSelectedCompareLocalId] = useState<string | null>(null);
+  const [selectedCompareRemoteId, setSelectedCompareRemoteId] = useState<string | null>(null);
+  const [compareProcessedLocalIds, setCompareProcessedLocalIds] = useState<string[]>([]);
+  const [compareProcessedRemoteIds, setCompareProcessedRemoteIds] = useState<string[]>([]);
+  const pendingInviteRoleRef = useRef<P2PRole | null>(INVITE_BOOTSTRAP.role);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const originalGedcomDataRef = useRef<GedcomData | null>(null);
   const syncApplyingInProgressRef = useRef(false);
   const normalizeTimeoutRef = useRef<number | null>(null);
   const normalizeIdleHandleRef = useRef<number | null>(null);
   const inviteAcceptRequestedRef = useRef(false);
+  /** True depuis « Accepter » l’invitation jusqu’à onboarding `ready` — indépendant du jeton (effacé avant fin des chunks). */
+  const inviteSharedTreeImportActiveRef = useRef(false);
+  /** Jeton mémorisé à l’acceptation pour `completeInviteOnboarding` si le state efface `pendingInviteToken` avant la fin du transfert. */
+  const inviteSharedTreeSessionTokenRef = useRef<string | null>(null);
   const inviteOnboardingDismissTimerRef = useRef<number | null>(null);
   const inviteUiReadyTimerRef = useRef<number | null>(null);
   const inviteRibbonRenderRaf1Ref = useRef<number | null>(null);
@@ -388,6 +449,23 @@ function App() {
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
   const handleInitP2PRef = useRef<() => void>(() => {});
   const topPanelP2pAutoInitForOpenRef = useRef(false);
+  /** Dernière `handleDataLoaded` + état invité éphémère : le handler P2P doit lire des refs, pas une closure figée. */
+  const handleDataLoadedRef = useRef<
+    | ((
+        data: GedcomData,
+        name?: string,
+        options?: {
+          preserveDocuments?: boolean;
+          skipClientNormalizationFallback?: boolean;
+          incomingNormalizedGedcom?: GedcomData | null;
+          incomingNormalizationAlgoVersion?: string;
+          royalsDemoPreset?: boolean;
+        }
+      ) => void)
+    | null
+  >(null);
+  const p2pStatusRef = useRef<P2PStatus>(p2pStatus);
+  const guestSessionModeRef = useRef<'none' | 'ephemeral'>(guestSessionMode);
   // Libère le verrou anti double-tap dès que le mode ou l'animation change
   useEffect(() => { isSwitchingModeRef.current = false; }, [displayMode, flyTarget, topViewEntryFrom2D]);
 
@@ -410,10 +488,35 @@ function App() {
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { pendingInviteTokenRef.current = pendingInviteToken; }, [pendingInviteToken]);
   useEffect(() => {
+    p2pStatusRef.current = p2pStatus;
+    guestSessionModeRef.current = guestSessionMode;
+  }, [p2pStatus, guestSessionMode]);
+  const isInviteClientAwaitingSharedHostTree = (): boolean =>
+    p2pModeRef.current === 'client' &&
+    (!!pendingInviteTokenRef.current || inviteSharedTreeImportActiveRef.current);
+
+  /** Snapshot distant réservé au mode comparer — pas pendant l’import « arbre partagé » (viewer, etc.). Invité comparateur : toujours. */
+  const shouldRouteIncomingGedcomToPeerCompareSnapshot = (): boolean => {
+    /* Invité comparateur en premier : sinon SESSION_STATE peut avoir remis « share » et les DOCUMENTS_SYNC
+     * ne sont plus routés vers peerCompare* (branche comparateur suivie d’un return sans merge). */
+    if (pendingInviteRoleRef.current === 'comparator') return true;
+    if (p2pSessionUseCaseRef.current !== 'compare') return false;
+    if (isInviteClientAwaitingSharedHostTree()) return false;
+    return true;
+  };
+  useEffect(() => {
     pendingInviteRoleRef.current = pendingInviteRole;
   }, [pendingInviteRole]);
   useEffect(() => { databaseNameRef.current = databaseName; }, [databaseName]);
   useEffect(() => { p2pSessionUseCaseRef.current = p2pSessionUseCase; }, [p2pSessionUseCase]);
+  useEffect(() => {
+    peerCompareGedcomRef.current = peerCompareGedcom;
+  }, [peerCompareGedcom]);
+  useEffect(() => {
+    if (!peerCompareGedcom) {
+      setPeerCompareDocumentsByIndividualId({});
+    }
+  }, [peerCompareGedcom]);
   useEffect(() => {
     p2pTransferModeRef.current = p2pTransferMode;
     localStorage.setItem(P2P_TRANSFER_MODE_KEY, p2pTransferMode);
@@ -539,7 +642,7 @@ function App() {
     const shouldBufferForInvite =
       merge &&
       p2pModeRef.current === 'client' &&
-      !!pendingInviteToken &&
+      (!!pendingInviteToken || inviteSharedTreeImportActiveRef.current) &&
       inviteOnboardingStageRef.current !== 'ready';
     if (shouldBufferForInvite) {
       pendingIncomingDocumentsRef.current = pendingIncomingDocumentsRef.current
@@ -632,6 +735,78 @@ function App() {
     });
   };
 
+  const applyPeerCompareDocumentPatch = (payload: {
+    operation?: 'add' | 'update' | 'remove' | 'set_primary';
+    individualId?: string;
+    doc?: unknown;
+    docId?: string;
+    patch?: Record<string, unknown>;
+  }) => {
+    if (!payload.operation || !payload.individualId) return;
+    const individuals = peerCompareGedcomRef.current?.individuals;
+    if (!individuals) return;
+    setPeerCompareDocumentsByIndividualId((prev) => {
+      const individualId = wireIndividualIdToPeerCompareId(payload.individualId as string);
+      const current = prev[individualId] || [];
+      let next = current;
+      if (payload.operation === 'add' && payload.doc) {
+        const normalized =
+          normalizeDocumentsByIndividual(
+            { [individualId]: [remapWireMediaDocForPeerCompare(payload.doc)] },
+            individuals,
+          )[individualId] || [];
+        const incoming = normalized[0];
+        if (!incoming) return prev;
+        const deduped = current.filter((d) => d.id !== incoming.id);
+        const shouldBecomePrimary = incoming.kind === 'photo' && !deduped.some((d) => d.kind === 'photo' && d.isPrimaryPhoto);
+        next = [...deduped, shouldBecomePrimary ? { ...incoming, isPrimaryPhoto: true } : incoming];
+      } else if (payload.operation === 'update' && payload.docId) {
+        next = current.map((doc) => {
+          if (doc.id !== payload.docId) return doc;
+          const patch = payload.patch || {};
+          const nextUrl = typeof patch.url === 'string' ? patch.url : doc.url;
+          const nextKind: 'photo' | 'document' =
+            patch.kind === 'photo' || patch.kind === 'document'
+              ? patch.kind
+              : (isImageLikeUrl(nextUrl) || doc.kind === 'photo' ? 'photo' : 'document');
+          const hiddenRaw = (patch as Record<string, unknown>).hiddenFromRibbonSlideshow;
+          const hiddenFromRibbonSlideshow =
+            hiddenRaw === true ? true : hiddenRaw === false ? false : doc.hiddenFromRibbonSlideshow;
+          return {
+            ...doc,
+            ...patch,
+            kind: nextKind,
+            date: patch.date === '' ? undefined : typeof patch.date === 'string' ? patch.date : doc.date,
+            sourceAttribution:
+              patch.sourceAttribution === ''
+                ? undefined
+                : typeof patch.sourceAttribution === 'string'
+                  ? patch.sourceAttribution.trim() || undefined
+                  : doc.sourceAttribution,
+            hiddenFromRibbonSlideshow:
+              hiddenFromRibbonSlideshow === true ? true : hiddenFromRibbonSlideshow === false ? false : undefined,
+          };
+        });
+      } else if (payload.operation === 'remove' && payload.docId) {
+        next = current.filter((doc) => doc.id !== payload.docId);
+        if (!next.some((d) => d.kind === 'photo' && d.isPrimaryPhoto)) {
+          const firstPhoto = next.find((d) => d.kind === 'photo');
+          if (firstPhoto) {
+            next = next.map((d) => (d.id === firstPhoto.id ? { ...d, isPrimaryPhoto: true } : d));
+          }
+        }
+      } else if (payload.operation === 'set_primary' && payload.docId) {
+        next = current.map((doc) =>
+          (doc.kind === 'photo' || isImageLikeUrl(doc.url))
+            ? { ...doc, kind: 'photo', isPrimaryPhoto: doc.id === payload.docId }
+            : doc
+        );
+      }
+      if (next === current) return prev;
+      return { ...prev, [individualId]: next };
+    });
+  };
+
   /** Invité en rôle comparateur : ne pas écraser le GEDCOM / normalisé / médias locaux avec les données hôte. */
   const isComparatorInviteClient = (): boolean => {
     if (p2pModeRef.current !== 'client') return false;
@@ -650,7 +825,15 @@ function App() {
   ) => {
     if (isComparatorInviteClient()) return;
     if (!normalizedRaw || typeof normalizedRaw !== 'object') return;
-    if (algoVersion && algoVersion !== NORMALIZATION_ALGO_VERSION) return;
+    if (algoVersion && algoVersion !== NORMALIZATION_ALGO_VERSION) {
+      setInviteNormalizedProgress((prev) => ({
+        receivedChunks: prev?.receivedChunks ?? 0,
+        totalChunks: prev?.totalChunks ?? 0,
+        applied: true,
+        fallbackLocal: true,
+      }));
+      return;
+    }
     const normalized = normalizedRaw as GedcomData;
     if (!normalized.individuals || !normalized.families) return;
     normalizedSnapshotAppliedRef.current = true;
@@ -667,14 +850,60 @@ function App() {
     }));
   };
 
+  const showTransientToast = (
+    kind: 'success' | 'error',
+    message: string,
+    durationMs: number = 2500
+  ) => {
+    setBundleToast({ kind, message });
+    if (bundleToastTimeoutRef.current !== null) {
+      window.clearTimeout(bundleToastTimeoutRef.current);
+    }
+    bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), durationMs);
+  };
+
+  /** Commit snapshot pair (bundle / SYNC_GEDCOM / chunk) : logique unique, symétrique hôte ↔ invité. */
+  const commitPeerCompareSnapshotReceived = (
+    incomingWire: GedcomData,
+    wireDocs: Record<string, unknown> | undefined,
+    activity: 'sync.received.compare_peer' | 'sync.received.compare_peer_bundle',
+  ) => {
+    const allow = peerCompareInboundAllowDocuments(
+      p2pModeRef.current,
+      remoteAccessPolicy,
+      visibilitySettingsRef.current,
+    );
+    const { namespacedPeer, documents } = buildPeerCompareSnapshot(incomingWire, wireDocs, allow);
+    syncReceivingInProgressRef.current = false;
+    peerCompareGedcomRef.current = namespacedPeer;
+    setPeerCompareGedcom(namespacedPeer);
+    setPeerCompareDocumentsByIndividualId(documents);
+    setP2PSessionUseCase('compare');
+    p2pSessionUseCaseRef.current = 'compare';
+    setRemotePeerHasData(true);
+    setP2PSyncStatusText('done');
+    window.setTimeout(() => setP2PSyncStatusText(null), 2500);
+    logP2PActivity(activity, 'session', 'remote');
+    showTransientToast('success', t('app.toasts.comparePeerSnapshotReceived'), 2400);
+    maybeSendGuestLocalTreeToHostAfterCompareReceive();
+  };
+
   const applyIncomingBundleSnapshot = async (bundleContent: string) => {
+    setP2PSyncStatusText('applying');
+    try {
     const file = new File([bundleContent], 'p2p-bundle.g2.zip', {
       type: 'application/json;charset=utf-8',
     });
     const { gedcomContent, metadata } = await parseG2Bundle(file);
-    if (!gedcomContent) return;
+    if (!gedcomContent) {
+      setP2PSyncStatusText(null);
+      return;
+    }
     const incomingGedcom = parseGedcom(gedcomContent);
-    if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
+    if (!incomingGedcom?.individuals || !incomingGedcom?.families) {
+      setP2PSyncStatusText(null);
+      return;
+    }
     const normalizedFromBundle = typeof metadata.normalizedGedcomContent === 'string'
       ? parseGedcom(metadata.normalizedGedcomContent)
       : null;
@@ -683,24 +912,49 @@ function App() {
       !!normalizedFromBundle?.families &&
       (!metadata.normalizationAlgoVersion || metadata.normalizationAlgoVersion === NORMALIZATION_ALGO_VERSION);
     syncReceivingInProgressRef.current = false;
-    setP2PSyncStatusText('applying');
     if (isComparatorInviteClient()) {
-      peerCompareGedcomRef.current = incomingGedcom;
+      const hasBundleDocumentsPayload =
+        !!metadata.documentsByIndividualId &&
+        typeof metadata.documentsByIndividualId === 'object' &&
+        Object.keys(metadata.documentsByIndividualId as Record<string, unknown>).length > 0;
+      const allowDocumentsInbound =
+        remoteAccessPolicy?.allowDocuments ?? true;
+      const namespacedPeer = namespacePeerCompareGedcom(incomingGedcom);
+      if (hasBundleDocumentsPayload && allowDocumentsInbound) {
+        setPeerCompareDocumentsByIndividualId(
+          normalizePeerCompareDocumentsFromWire(
+            metadata.documentsByIndividualId as Record<string, unknown>,
+            namespacedPeer.individuals,
+          ),
+        );
+      } else {
+        setPeerCompareDocumentsByIndividualId({});
+      }
+      peerCompareGedcomRef.current = namespacedPeer;
+      setPeerCompareGedcom(namespacedPeer);
       setRemotePeerHasData(true);
       logP2PActivity('sync.received.comparator_bundle', 'session', 'remote');
-      if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+      if (isInviteClientAwaitingSharedHostTree()) {
         setInviteGedcomProgress({
           receivedChunks: 1,
           totalChunks: 1,
           applied: true,
         });
+        const docsStats = hasBundleDocumentsPayload && allowDocumentsInbound
+          ? computeMediaStats(
+              normalizePeerCompareDocumentsFromWire(
+                metadata.documentsByIndividualId as Record<string, unknown>,
+                namespacedPeer.individuals,
+              ),
+            )
+          : { documentItems: 0, photoItems: 0 };
         setInviteMediaProgress({
           receivedBatches: 1,
           totalBatches: 1,
-          receivedDocs: 0,
-          totalDocs: 0,
-          receivedPhotos: 0,
-          totalPhotos: 0,
+          receivedDocs: docsStats.documentItems,
+          totalDocs: docsStats.documentItems,
+          receivedPhotos: docsStats.photoItems,
+          totalPhotos: docsStats.photoItems,
         });
         setInviteNormalizedProgress({
           receivedChunks: 0,
@@ -714,9 +968,20 @@ function App() {
       logP2PActivity('sync.bundle.received', 'session', 'remote');
       completeInviteOnboarding();
       showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+      maybeSendGuestLocalTreeToHostAfterCompareReceive();
       return;
     }
-    handleDataLoaded(
+    /* Hôte (ou client déjà en compare) : bundle pair → snapshot comparateur, pas handleDataLoaded.
+     * Sinon l’invité en mode bundle écrase le GEDCOM local de l’invitant. */
+    if (shouldRouteIncomingGedcomToPeerCompareSnapshot()) {
+      commitPeerCompareSnapshotReceived(
+        incomingGedcom,
+        metadata.documentsByIndividualId as Record<string, unknown> | undefined,
+        'sync.received.compare_peer_bundle',
+      );
+      return;
+    }
+    handleDataLoadedRef.current?.(
       incomingGedcom,
       metadata.databaseName || 'Remote P2P Database',
       {
@@ -738,7 +1003,7 @@ function App() {
         ),
       );
     }
-    if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+    if (isInviteClientAwaitingSharedHostTree()) {
       setInviteGedcomProgress({
         receivedChunks: 1,
         totalChunks: 1,
@@ -771,22 +1036,15 @@ function App() {
     window.setTimeout(() => setP2PSyncStatusText(null), 2500);
     logP2PActivity('sync.bundle.received', 'session', 'remote');
     completeInviteOnboarding();
-  };
-
-  const showTransientToast = (
-    kind: 'success' | 'error',
-    message: string,
-    durationMs: number = 2500
-  ) => {
-    setBundleToast({ kind, message });
-    if (bundleToastTimeoutRef.current !== null) {
-      window.clearTimeout(bundleToastTimeoutRef.current);
+    } catch (error) {
+      console.error('applyIncomingBundleSnapshot', error);
+      setP2PSyncStatusText(null);
+      showTransientToast('error', t('app.alerts.syncFailedLargeGedcom'), 2200);
     }
-    bundleToastTimeoutRef.current = window.setTimeout(() => setBundleToast(null), durationMs);
   };
 
   const completeInviteOnboarding = () => {
-    if (!pendingInviteTokenRef.current) return;
+    if (!pendingInviteTokenRef.current && !inviteSharedTreeImportActiveRef.current) return;
     if (inviteDocsFlushTimerRef.current !== null) {
       window.clearTimeout(inviteDocsFlushTimerRef.current);
       inviteDocsFlushTimerRef.current = null;
@@ -796,7 +1054,9 @@ function App() {
       pendingIncomingDocumentsRef.current = null;
     }
     const targetId = pendingInviteTargetIndividualId;
-    const pendingTok = pendingInviteTokenRef.current;
+    const pendingTok =
+      pendingInviteTokenRef.current ?? inviteSharedTreeSessionTokenRef.current;
+    if (!pendingTok) return;
     const inviteForSession = pendingTok
       ? p2pInvitesRef.current.find((i) => i.token === pendingTok)
       : undefined;
@@ -849,55 +1109,6 @@ function App() {
     return created;
   };
 
-  const buildAccessProfileFromRole = (role: P2PRole): P2PVisibilitySettings => {
-    if (role === 'viewer') {
-      return {
-        exposeIdentity: true,
-        exposeDates: true,
-        exposePlaces: false,
-        exposeNotes: false,
-        allowDocuments: true,
-        allowDownload: false,
-        allowProposal: false,
-        allowDirectEdit: false,
-      };
-    }
-    if (role === 'contributor') {
-      return {
-        exposeIdentity: true,
-        exposeDates: true,
-        exposePlaces: true,
-        exposeNotes: false,
-        allowDocuments: true,
-        allowDownload: false,
-        allowProposal: true,
-        allowDirectEdit: false,
-      };
-    }
-    if (role === 'comparator') {
-      return {
-        exposeIdentity: true,
-        exposeDates: true,
-        exposePlaces: true,
-        exposeNotes: true,
-        allowDocuments: true,
-        allowDownload: false,
-        allowProposal: true,
-        allowDirectEdit: false,
-      };
-    }
-    return {
-      exposeIdentity: true,
-      exposeDates: true,
-      exposePlaces: true,
-      exposeNotes: true,
-      allowDocuments: true,
-      allowDownload: true,
-      allowProposal: true,
-      allowDirectEdit: true,
-    };
-  };
-
   const intersectAccessPolicy = (
     base: P2PVisibilitySettings,
     cap: P2PVisibilitySettings
@@ -912,18 +1123,6 @@ function App() {
     allowDirectEdit: base.allowDirectEdit && cap.allowDirectEdit,
   });
 
-  const parseInviteClaimsUnsafe = (token: string): InviteTokenClaims | null => {
-    const encodedClaims = token.split('.')[0];
-    if (!encodedClaims) return null;
-    try {
-      const padded = encodedClaims.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encodedClaims.length / 4) * 4, '=');
-      const decoded = atob(padded);
-      return JSON.parse(decoded) as InviteTokenClaims;
-    } catch {
-      return null;
-    }
-  };
-
   const sendSessionState = (requestEcho: boolean = false) => {
     p2pService.sendMessage('SESSION_STATE', {
       hasGedcom: !!gedcomDataRef.current,
@@ -932,6 +1131,7 @@ function App() {
       mode: p2pModeRef.current,
       requestEcho,
       selfIdentity: selfIdentityRef.current,
+      sessionUseCase: p2pSessionUseCaseRef.current,
     });
   };
 
@@ -1320,7 +1520,9 @@ function App() {
     p2pSessionUseCaseRef.current = 'compare';
     if (!startInitialCompareExchange()) {
       alert(t('app.alerts.loadGedcomBeforeCompare'));
+      return;
     }
+    sendSessionState();
   };
 
   const handleStartShare = () => {
@@ -1352,6 +1554,7 @@ function App() {
     p2pSessionUseCaseRef.current = 'share';
     sendP2PSnapshot(gedcomDataRef.current, documentsByIndividualId, 'sync.sent');
     setP2PSyncStatusText('share started');
+    sendSessionState();
   };
 
   /**
@@ -1420,7 +1623,17 @@ function App() {
     if (pendingInviteRole === 'comparator') return t('topPanel.inviteActionCompare');
     return t('topPanel.inviteActionEdit');
   }, [pendingInviteRole, t]);
-  const isInviteLandingActive = !!pendingInviteToken && inviteOnboardingStage !== 'ready';
+  /** Invité comparateur : l’overlay plein écran masque la vue double 2D — le retirer dès l’acceptation / synchro. */
+  const inviteLandingBlocksComparatorWorkspace =
+    pendingInviteRole === 'comparator' &&
+    (inviteOnboardingStage === 'idle' ||
+      inviteOnboardingStage === 'connecting' ||
+      inviteOnboardingStage === 'connected' ||
+      inviteOnboardingStage === 'error');
+  const isInviteLandingActive =
+    !!pendingInviteToken &&
+    inviteOnboardingStage !== 'ready' &&
+    !(pendingInviteRole === 'comparator' && !inviteLandingBlocksComparatorWorkspace);
   const inviteLandingDescription = useMemo(() => {
     const template = t('topPanel.inviteLandingText');
     const inviter = pendingInviteInviterName || t('topPanel.inviteLandingInviterFallback');
@@ -1450,7 +1663,12 @@ function App() {
       !inviteMediaProgress ||
       inviteMediaProgress.totalBatches <= 0 ||
       inviteMediaProgress.receivedBatches >= inviteMediaProgress.totalBatches;
-    const normalizedDone = !inviteNormalizedProgress || inviteNormalizedProgress.applied;
+    const normalizedDone =
+      !inviteNormalizedProgress ||
+      inviteNormalizedProgress.applied ||
+      inviteNormalizedProgress.fallbackLocal ||
+      (gedcomApplied &&
+        (inviteOnboardingStage === 'completed' || inviteOnboardingStage === 'ready'));
     const uiReadyLike =
       inviteOnboardingStage === 'ready' ||
       (inviteOnboardingStage === 'completed' && !!rootIndividual && !!selectedIndividual);
@@ -1552,9 +1770,106 @@ function App() {
   }, [p2pMode, documentsByIndividualId, primaryPhotoUrlById]);
   const shouldDeferInviteMediaRendering =
     false;
+  /** Comparateur : pas de suspension — sinon la vue double 2D / split ne s’affiche jamais. */
   const shouldSuspendSceneForInvite =
     p2pMode === 'client' &&
-    inviteSceneDeferred;
+    inviteSceneDeferred &&
+    pendingInviteRole !== 'comparator';
+
+  const compareDualViewActive = useMemo(() => {
+    if (shouldSuspendSceneForInvite) return false;
+    /** État React peut lagguer derrière la ref / le premier bundle ; afficher dès qu’on a un snapshot pair. */
+    const sessionSaysCompare = p2pSessionUseCase === 'compare';
+    const hasPeerTree =
+      !!peerCompareGedcom && Object.keys(peerCompareGedcom.individuals).length > 0;
+    if (!sessionSaysCompare && !hasPeerTree) return false;
+    /** Vue double : hôte (même sans GEDCOM pair encore) ou invité une fois le cas d’usage synchronisé. */
+    return p2pMode === 'host' || p2pMode === 'client';
+  }, [p2pMode, p2pSessionUseCase, peerCompareGedcom, shouldSuspendSceneForInvite]);
+
+  /** Import local après coup : pousser l’arbre vers l’hôte dès que GEDCOM + snapshot pair sont prêts. */
+  useEffect(() => {
+    maybeSendGuestLocalTreeToHostAfterCompareReceive();
+  }, [
+    gedcomData,
+    peerCompareGedcom,
+    p2pMode,
+    p2pSessionUseCase,
+    p2pStatus,
+    maybeSendGuestLocalTreeToHostAfterCompareReceive,
+  ]);
+
+  /** Suggestions de fiches côté pair quand une sélection locale existe (et réciproque). */
+  const compareRemoteMatchSuggestions = useMemo(() => {
+    if (!gedcomData || !peerCompareGedcom || !selectedCompareLocalId) return [];
+    const local = gedcomData.individuals[selectedCompareLocalId];
+    if (!local) return [];
+    return rankPeerMatchesForIndividual(local, Object.values(peerCompareGedcom.individuals), {
+      minScore: 0.35,
+      limit: 8,
+    });
+  }, [gedcomData, peerCompareGedcom, selectedCompareLocalId]);
+
+  const compareLocalMatchSuggestions = useMemo(() => {
+    if (!gedcomData || !peerCompareGedcom || !selectedCompareRemoteId) return [];
+    const remote = peerCompareGedcom.individuals[selectedCompareRemoteId];
+    if (!remote) return [];
+    return rankPeerMatchesForIndividual(remote, Object.values(gedcomData.individuals), {
+      minScore: 0.35,
+      limit: 8,
+    });
+  }, [gedcomData, peerCompareGedcom, selectedCompareRemoteId]);
+
+  const compareRemoteSuggestionIdSet = useMemo(
+    () => new Set(compareRemoteMatchSuggestions.map((s) => s.individual.id)),
+    [compareRemoteMatchSuggestions],
+  );
+  const compareLocalSuggestionIdSet = useMemo(
+    () => new Set(compareLocalMatchSuggestions.map((s) => s.individual.id)),
+    [compareLocalMatchSuggestions],
+  );
+
+  const comparePairIndividuals = useMemo(() => {
+    if (!compareDualViewActive) return null;
+    const local = selectedCompareLocalId && gedcomData?.individuals?.[selectedCompareLocalId]
+      ? gedcomData.individuals[selectedCompareLocalId] ?? null
+      : null;
+    const remote =
+      peerCompareGedcom && selectedCompareRemoteId
+        ? peerCompareGedcom.individuals[selectedCompareRemoteId] ?? null
+        : null;
+    if (!local && !remote) return null;
+    return { local, remote };
+  }, [
+    compareDualViewActive,
+    gedcomData,
+    peerCompareGedcom,
+    selectedCompareLocalId,
+    selectedCompareRemoteId,
+  ]);
+
+  const compareLocalBannerTitle = useMemo(() => {
+    if (!gedcomData || !selectedCompareLocalId) return null;
+    const indi = gedcomData.individuals[selectedCompareLocalId];
+    if (!indi) return null;
+    return `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id;
+  }, [gedcomData, selectedCompareLocalId]);
+
+  const peerComparePrimaryPhotoUrlById = useMemo(() => {
+    const map: Record<string, string> = {};
+    const visiblePhoto = (d: IndividualDocument) =>
+      (d.kind === 'photo' || isImageLikeUrl(d.url)) && d.hiddenFromRibbonSlideshow !== true;
+    for (const [individualId, docs] of Object.entries(peerCompareDocumentsByIndividualId)) {
+      const primaryPhoto =
+        docs.find((d) => d.kind === 'photo' && d.isPrimaryPhoto && visiblePhoto(d)) ??
+        docs.find((d) => d.kind === 'photo' && visiblePhoto(d));
+      if (primaryPhoto?.url) {
+        map[individualId] = primaryPhoto.url;
+      }
+    }
+    return map;
+  }, [peerCompareDocumentsByIndividualId]);
+
   const renderedPrimaryPhotoUrlById = shouldDeferInviteMediaRendering ? {} : primaryPhotoUrlById;
   const renderedDocumentsByIndividualId = shouldDeferInviteMediaRendering ? {} : documentsByIndividualId;
 
@@ -1671,6 +1986,7 @@ function App() {
       inviteMediaRecoveryTimerRef.current = null;
       inviteMediaRecoveryRequestedRef.current = false;
       setInviteMediaRecoveryInFlight(false);
+      setP2PSyncStatusText((s) => (s === 'retry requested' ? null : s));
     }, 4500);
   }, [
     pendingInviteToken,
@@ -1723,6 +2039,8 @@ function App() {
         inviteSceneResumeTimerRef.current = null;
       }
       setInviteSceneDeferred(false);
+      inviteSharedTreeImportActiveRef.current = false;
+      inviteSharedTreeSessionTokenRef.current = null;
       setInviteOnboardingStage('ready');
       setPendingInviteToken(null);
       inviteUiReadyTimerRef.current = null;
@@ -1742,6 +2060,8 @@ function App() {
     if (inviteOnboardingStage !== 'completed') return;
     const forceReadyTimer = window.setTimeout(() => {
       setInviteSceneDeferred(false);
+      inviteSharedTreeImportActiveRef.current = false;
+      inviteSharedTreeSessionTokenRef.current = null;
       setInviteOnboardingStage('ready');
       setPendingInviteToken(null);
     }, 6000);
@@ -1920,7 +2240,14 @@ function App() {
 
   const resetEphemeralGuestSession = () => {
     activeGuestInviteIdRef.current = null;
-    peerCompareGedcomRef.current = null;
+    inviteSharedTreeImportActiveRef.current = false;
+    inviteSharedTreeSessionTokenRef.current = null;
+    setPeerCompareGedcom(null);
+    setPeerCompareDocumentsByIndividualId({});
+    setSelectedCompareLocalId(null);
+    setSelectedCompareRemoteId(null);
+    setCompareProcessedLocalIds([]);
+    setCompareProcessedRemoteIds([]);
     inviteIntroductionContextRef.current = null;
     p2pService.destroy();
     setP2pStatus('disconnected');
@@ -1956,11 +2283,33 @@ function App() {
               setP2pStatus(status as P2PStatus);
               if (id) setPeerId(id);
               if (status !== 'connected') {
+                /* `ready` puis `connecting` arrivent avant `connected` : ne pas effacer l’import d’invitation ni
+                 * le mode session, sinon on annule l’acceptation avant la synchro GEDCOM (landing G2 vide). */
+                const preserveInviteSharedTreeImport =
+                  inviteSharedTreeImportActiveRef.current &&
+                  (status === 'ready' || status === 'connecting');
+                if (!preserveInviteSharedTreeImport) {
+                  inviteSharedTreeImportActiveRef.current = false;
+                  inviteSharedTreeSessionTokenRef.current = null;
+                }
                 setRemotePeerHasData(null);
-                peerCompareGedcomRef.current = null;
+                compareGuestReciprocalSentRef.current = false;
+                setPeerCompareGedcom(null);
+                setPeerCompareDocumentsByIndividualId({});
+                setSelectedCompareLocalId(null);
+                setSelectedCompareRemoteId(null);
+                setCompareProcessedLocalIds([]);
+                setCompareProcessedRemoteIds([]);
                 remoteHostSelfIdentityRef.current = null;
-                setP2PSessionUseCase(null);
-                p2pSessionUseCaseRef.current = null;
+                if (!preserveInviteSharedTreeImport) {
+                  setP2PSessionUseCase(null);
+                  p2pSessionUseCaseRef.current = null;
+                } else {
+                  const uc: P2PSessionUseCase =
+                    pendingInviteRoleRef.current === 'comparator' ? 'compare' : 'share';
+                  setP2PSessionUseCase(uc);
+                  p2pSessionUseCaseRef.current = uc;
+                }
                 setActiveSessionPeerPolicy(null);
                 activeSessionPeerPolicyRef.current = null;
                 setTrustedOwnDevicePeerId(null);
@@ -1981,7 +2330,20 @@ function App() {
                 logP2PActivity('invite.autoconnect.requested', 'session', autoConnectHostId, id || 'local');
               }
               if (status === 'connected') {
-                  setP2PSessionUseCase(null);
+                  /* Ne pas laisser `null` écraser le « share » fixé à l’acceptation d’invitation : sinon
+                   * SESSION_STATE peut réappliquer « compare » et SYNC_GEDCOM remplit peerCompareGedcom au lieu du GEDCOM local. */
+                  if (p2pModeRef.current === 'client' && inviteSharedTreeImportActiveRef.current) {
+                    const uc: P2PSessionUseCase =
+                      pendingInviteRoleRef.current === 'comparator' ? 'compare' : 'share';
+                    setP2PSessionUseCase(uc);
+                    p2pSessionUseCaseRef.current = uc;
+                  } else if (p2pModeRef.current !== 'host') {
+                    /* Invité : réinitialiser le cas d’usage à la connexion.
+                     * Hôte : ne pas mettre à null ici — sinon une seconde émission `connected` (ICE, etc.)
+                     * efface « compare » après INVITE_ACCEPT et le prochain SYNC_GEDCOM remplace le GEDCOM local. */
+                    setP2PSessionUseCase(null);
+                    p2pSessionUseCaseRef.current = null;
+                  }
                   setRemotePeerHasData(null);
                   setActiveSessionPeerPolicy(visibilitySettingsRef.current);
                   activeSessionPeerPolicyRef.current = visibilitySettingsRef.current;
@@ -1997,6 +2359,7 @@ function App() {
               }
           },
           (data) => {
+              const inviteClientAwaitingSharedHostTree = isInviteClientAwaitingSharedHostTree();
               const processIncomingDocumentsPayload = (payload: {
                 documentsByIndividualId?: Record<string, unknown>;
                 authorPeerId?: string;
@@ -2009,6 +2372,32 @@ function App() {
                 documentItemsTotal?: number;
                 photoItemsTotal?: number;
               }) => {
+                if (
+                  p2pSessionUseCaseRef.current === 'compare' &&
+                  peerCompareGedcomRef.current &&
+                  shouldRouteIncomingGedcomToPeerCompareSnapshot()
+                ) {
+                  const allowDocumentsInbound =
+                    p2pModeRef.current === 'client'
+                      ? (remoteAccessPolicy?.allowDocuments ?? true)
+                      : visibilitySettingsRef.current.allowDocuments;
+                  if (!payload.documentsByIndividualId || !allowDocumentsInbound) return;
+                  const docs = normalizePeerCompareDocumentsFromWire(
+                    payload.documentsByIndividualId as Record<string, unknown>,
+                    peerCompareGedcomRef.current.individuals,
+                  );
+                  const merge = payload.partial === true;
+                  setPeerCompareDocumentsByIndividualId((prev) =>
+                    merge ? { ...prev, ...docs } : { ...docs },
+                  );
+                  logP2PActivity(
+                    'documents.sync.received.peer_compare',
+                    'session',
+                    payload.authorPeerId || 'remote',
+                    payload.authorPeerId || 'remote',
+                  );
+                  return;
+                }
                 if (isComparatorInviteClient()) return;
                 const allowDocumentsInbound =
                   p2pModeRef.current === 'client'
@@ -2021,7 +2410,7 @@ function App() {
                 if (!isInitialInviteBatch) {
                   showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1500);
                 }
-                if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                if (inviteClientAwaitingSharedHostTree) {
                   const fallbackStats = computeMediaStats(
                     normalizeDocumentsByIndividual(payload.documentsByIndividualId, gedcomDataRef.current?.individuals),
                   );
@@ -2084,10 +2473,6 @@ function App() {
                 }
               };
               if (data.type === 'SYNC_GEDCOM' && data.payload) {
-                  if (p2pSessionUseCaseRef.current === 'compare') {
-                    logP2PActivity('sync.ignored.compare_mode', 'session', 'remote');
-                    return;
-                  }
                   const payload = data.payload as {
                     gedcom?: GedcomData;
                     gedcomText?: string;
@@ -2099,6 +2484,14 @@ function App() {
                       ? parseGedcom(payload.gedcomText)
                       : (payload.gedcom || (data.payload as GedcomData));
                   if (!incomingGedcom?.individuals || !incomingGedcom?.families) return;
+                  if (shouldRouteIncomingGedcomToPeerCompareSnapshot()) {
+                    commitPeerCompareSnapshotReceived(
+                      incomingGedcom,
+                      payload.documentsByIndividualId as Record<string, unknown> | undefined,
+                      'sync.received.compare_peer',
+                    );
+                    return;
+                  }
                   syncReceivingInProgressRef.current = false;
                   setP2PSyncStatusText('applying');
                   if (syncChunkReceiveTimeoutRef.current !== null) {
@@ -2106,10 +2499,13 @@ function App() {
                     syncChunkReceiveTimeoutRef.current = null;
                   }
                   if (isComparatorInviteClient()) {
-                    peerCompareGedcomRef.current = incomingGedcom;
+                    setPeerCompareDocumentsByIndividualId({});
+                    const namespacedPeer = namespacePeerCompareGedcom(incomingGedcom);
+                    peerCompareGedcomRef.current = namespacedPeer;
+                    setPeerCompareGedcom(namespacedPeer);
                     setRemotePeerHasData(true);
                     logP2PActivity('sync.received.comparator_snapshot', 'session', 'remote');
-                    if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                    if (inviteClientAwaitingSharedHostTree) {
                       setInviteGedcomProgress({
                         receivedChunks: 1,
                         totalChunks: 1,
@@ -2121,14 +2517,15 @@ function App() {
                     logP2PActivity('sync.received', 'session', 'remote');
                     completeInviteOnboarding();
                     showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+                    maybeSendGuestLocalTreeToHostAfterCompareReceive();
                     return;
                   }
-                  handleDataLoaded(
+                  handleDataLoadedRef.current?.(
                     incomingGedcom,
                     payload.databaseName || "Remote P2P Database",
                     { preserveDocuments: true }
                   );
-                  if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                  if (inviteClientAwaitingSharedHostTree) {
                     setInviteGedcomProgress({
                       receivedChunks: 1,
                       totalChunks: 1,
@@ -2156,14 +2553,11 @@ function App() {
                   window.setTimeout(() => setP2PSyncStatusText(null), 2500);
                   logP2PActivity('sync.received', 'session', 'remote');
                   completeInviteOnboarding();
-                  if (!pendingInviteTokenRef.current) {
+                  if (!inviteClientAwaitingSharedHostTree) {
                     showTransientToast('success', t('app.alerts.synchronizedWithPeer'), 1600);
                   }
               }
               if (data.type === 'SYNC_GEDCOM_CHUNK' && data.payload) {
-                  if (p2pSessionUseCaseRef.current === 'compare') {
-                    return;
-                  }
                   const payload = data.payload as {
                     transferId?: string;
                     index?: number;
@@ -2181,7 +2575,7 @@ function App() {
                   ) return;
 
                   syncReceivingInProgressRef.current = true;
-                  if (pendingInviteTokenRef.current && inviteOnboardingStageRef.current !== 'ready') {
+                  if (inviteClientAwaitingSharedHostTree && inviteOnboardingStageRef.current !== 'ready') {
                     setInviteOnboardingStage('syncing');
                   }
                   resetIncomingSyncTimeout();
@@ -2200,7 +2594,7 @@ function App() {
                   if (!acc.parts[payload.index]) {
                     acc.parts[payload.index] = payload.chunk;
                     acc.received += 1;
-                    if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                    if (inviteClientAwaitingSharedHostTree) {
                       setInviteGedcomProgress({
                         receivedChunks: acc.received,
                         totalChunks: acc.totalChunks,
@@ -2224,11 +2618,23 @@ function App() {
                       syncApplyingInProgressRef.current = true;
                       setP2PSyncStatusText('applying');
                       const incomingGedcom = parseGedcom(fullGedcomText);
-                      if (isComparatorInviteClient()) {
-                        peerCompareGedcomRef.current = incomingGedcom;
+                      if (shouldRouteIncomingGedcomToPeerCompareSnapshot()) {
+                        commitPeerCompareSnapshotReceived(
+                          incomingGedcom,
+                          undefined,
+                          'sync.received.compare_peer',
+                        );
+                        window.setTimeout(() => {
+                          syncApplyingInProgressRef.current = false;
+                        }, 2000);
+                      } else if (isComparatorInviteClient()) {
+                        setPeerCompareDocumentsByIndividualId({});
+                        const namespacedPeer = namespacePeerCompareGedcom(incomingGedcom);
+                        peerCompareGedcomRef.current = namespacedPeer;
+                        setPeerCompareGedcom(namespacedPeer);
                         setRemotePeerHasData(true);
                         logP2PActivity('sync.received.comparator_snapshot', 'session', 'remote');
-                        if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                        if (inviteClientAwaitingSharedHostTree) {
                           setInviteGedcomProgress({
                             receivedChunks: acc.totalChunks,
                             totalChunks: acc.totalChunks,
@@ -2243,13 +2649,14 @@ function App() {
                         logP2PActivity('sync.received', 'session', 'remote');
                         completeInviteOnboarding();
                         showTransientToast('success', t('app.toasts.comparatorSnapshotReceived'), 3200);
+                        maybeSendGuestLocalTreeToHostAfterCompareReceive();
                       } else {
-                      handleDataLoaded(
+                      handleDataLoadedRef.current?.(
                         incomingGedcom,
                         acc.databaseName || "Remote P2P Database",
                         { preserveDocuments: true }
                       );
-                      if (pendingInviteTokenRef.current && p2pModeRef.current === 'client') {
+                      if (inviteClientAwaitingSharedHostTree) {
                         setInviteGedcomProgress({
                           receivedChunks: acc.totalChunks,
                           totalChunks: acc.totalChunks,
@@ -2273,7 +2680,7 @@ function App() {
                       }, 2000);
                       logP2PActivity('sync.received', 'session', 'remote');
                       completeInviteOnboarding();
-                      if (!pendingInviteTokenRef.current) {
+                      if (!inviteClientAwaitingSharedHostTree) {
                         showTransientToast('success', t('app.alerts.synchronizedWithPeer'), 1600);
                       }
                       }
@@ -2282,7 +2689,7 @@ function App() {
                       logP2PActivity('sync.parse.error', 'session', 'remote');
                       setP2PSyncStatusText('parse error');
                       syncApplyingInProgressRef.current = false;
-                      if (pendingInviteToken) {
+                      if (inviteClientAwaitingSharedHostTree) {
                         setInviteOnboardingStage('error');
                       } else {
                         showTransientToast('error', t('app.alerts.syncFailedLargeGedcom'), 2200);
@@ -2354,17 +2761,41 @@ function App() {
                     }
                   }
               }
-              if (data.type === 'SYNC_GEDCOM_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
-                  if (p2pSessionUseCaseRef.current !== 'share') return;
-                  setP2PSyncStatusText('peer requested retry');
-                  sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
-                  logP2PActivity('sync.request.received', 'session', peerId || 'host');
+              if (data.type === 'SYNC_GEDCOM_REQUEST' && gedcomDataRef.current) {
+                  /* Hôte : toujours répondre (share, compare ou null) — exclure « compare » cassait la poussée
+                   * vers l’invité comparateur qui envoie SYNC_GEDCOM_REQUEST après connexion. */
+                  if (p2pModeRef.current === 'host') {
+                    const isCompareHost = p2pSessionUseCaseRef.current === 'compare';
+                    setP2PSyncStatusText(
+                      isCompareHost ? 'peer requested compare snapshot' : 'peer requested retry'
+                    );
+                    sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
+                    logP2PActivity(
+                      isCompareHost ? 'sync.request.received.compare' : 'sync.request.received',
+                      'session',
+                      peerId || 'host'
+                    );
+                  } else if (
+                    p2pModeRef.current === 'client' &&
+                    p2pSessionUseCaseRef.current === 'compare'
+                  ) {
+                    setP2PSyncStatusText('peer requested compare snapshot');
+                    sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
+                    logP2PActivity('sync.request.received.compare', 'session', peerId || 'client');
+                  }
               }
               if (data.type === 'BUNDLE_SYNC_REQUEST' && p2pModeRef.current === 'host' && gedcomDataRef.current) {
-                  if (p2pSessionUseCaseRef.current !== 'share') return;
-                  setP2PSyncStatusText('peer requested retry');
+                  /* Même logique que SYNC_GEDCOM_REQUEST : en « comparer », répondre quand même (relance bundle / médias). */
+                  const isCompareHost = p2pSessionUseCaseRef.current === 'compare';
+                  setP2PSyncStatusText(
+                    isCompareHost ? 'peer requested compare snapshot' : 'peer requested retry'
+                  );
                   sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh', { forceBundle: true });
-                  logP2PActivity('sync.bundle.request.received', 'session', peerId || 'host');
+                  logP2PActivity(
+                    isCompareHost ? 'sync.bundle.request.received.compare' : 'sync.bundle.request.received',
+                    'session',
+                    peerId || 'host'
+                  );
               }
               if (data.type === 'BUNDLE_SYNC' && data.payload) {
                   const payload = data.payload as { bundleContent?: string };
@@ -2399,6 +2830,9 @@ function App() {
                   if (!acc.parts[payload.index]) {
                     acc.parts[payload.index] = payload.chunk;
                     acc.received += 1;
+                  }
+                  if (p2pModeRef.current === 'client') {
+                    setP2PSyncStatusText(`receiving ${acc.received}/${acc.totalChunks}`);
                   }
                   if (acc.received >= acc.totalChunks) {
                     const full = acc.parts.join('');
@@ -2500,6 +2934,15 @@ function App() {
                       ? (remoteAccessPolicy?.allowDocuments ?? true)
                       : visibilitySettingsRef.current.allowDocuments;
                   if (!allowDocumentsInbound) return;
+                  if (
+                    p2pSessionUseCaseRef.current === 'compare' &&
+                    peerCompareGedcomRef.current &&
+                    shouldRouteIncomingGedcomToPeerCompareSnapshot()
+                  ) {
+                    applyPeerCompareDocumentPatch(payload);
+                    showTransientToast('success', t('app.toasts.documentsUpdatedByPeer'), 1200);
+                    return;
+                  }
                   if (isComparatorInviteClient()) return;
                   applyIncomingDocumentPatch(payload);
                   const docsDelta =
@@ -2544,7 +2987,36 @@ function App() {
                     mode?: P2PMode;
                     requestEcho?: boolean;
                     selfIdentity?: SelfIdentityPublic | null;
+                    sessionUseCase?: P2PSessionUseCase;
                   };
+                  const rankUseCase = (u: P2PSessionUseCase) =>
+                    u === 'compare' ? 2 : u === 'share' ? 1 : 0;
+                  const inviteClientAwaitingHostSession =
+                    p2pModeRef.current === 'client' &&
+                    (!!pendingInviteTokenRef.current || inviteSharedTreeImportActiveRef.current);
+                  if (
+                    typeof payload.sessionUseCase !== 'undefined' &&
+                    payload.sessionUseCase !== null &&
+                    (payload.sessionUseCase === 'compare' || payload.sessionUseCase === 'share')
+                  ) {
+                    if (inviteClientAwaitingHostSession) {
+                      /* L’hôte impose le mode après acceptation (ex. partage) même si « comparer » était actif avant. */
+                      const incoming = payload.sessionUseCase;
+                      const guestImportingSharedTreeNotComparator =
+                        inviteSharedTreeImportActiveRef.current &&
+                        pendingInviteRoleRef.current !== 'comparator';
+                      if (guestImportingSharedTreeNotComparator && incoming === 'compare') {
+                        /* Ignorer « compare » tant que l’invité importe un arbre partagé (le ref « share » peut avoir
+                         * été effacé par le callback `connected` avant ce message — ne pas exiger ref === 'share'). */
+                      } else {
+                        setP2PSessionUseCase(incoming);
+                        p2pSessionUseCaseRef.current = incoming;
+                      }
+                    } else if (rankUseCase(payload.sessionUseCase) >= rankUseCase(p2pSessionUseCaseRef.current)) {
+                      setP2PSessionUseCase(payload.sessionUseCase);
+                      p2pSessionUseCaseRef.current = payload.sessionUseCase;
+                    }
+                  }
                   setRemotePeerHasData(typeof payload.hasGedcom === 'boolean' ? payload.hasGedcom : null);
                   if (
                     p2pModeRef.current === 'client' &&
@@ -2630,10 +3102,18 @@ function App() {
                       showTransientToast('error', 'Invitation invalide ou révoquée.', 2200);
                     } else {
                       const secret = getOrCreateInviteSecret();
+                      const inviteUseCase: P2PSessionUseCase =
+                        targetInvite.role === 'comparator' ? 'compare' : 'share';
+                      /* Avant verifyInviteToken (async) : fixer le cas d’usage tout de suite, sinon un SYNC_GEDCOM
+                       * du pair peut arriver en premier et passer par handleDataLoaded (écrasement du GEDCOM local). */
+                      setP2PSessionUseCase(inviteUseCase);
+                      p2pSessionUseCaseRef.current = inviteUseCase;
                       verifyInviteToken(payload.token, secret).then((claims) => {
                         if (!claims || claims.inviteId !== payload.inviteId) {
                           logP2PActivity('invite.accept.rejected', 'invite', payload.inviteId!, payload.claimantPeerId || 'remote');
                           showTransientToast('error', 'Token d’invitation invalide.', 2200);
+                          setP2PSessionUseCase(null);
+                          p2pSessionUseCaseRef.current = null;
                           return;
                         }
                         setSessionLinkKind(resolveLinkKind(targetInvite));
@@ -2656,14 +3136,36 @@ function App() {
                           inviteId: payload.inviteId,
                         });
                         if (gedcomDataRef.current) {
-                          setP2PSessionUseCase('share');
-                          p2pSessionUseCaseRef.current = 'share';
-                          sendP2PSnapshot(gedcomDataRef.current, documentsByIndividualId, 'sync.refresh');
+                          sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.refresh');
+                          sendSessionState();
+                          logP2PActivity('invite.accepted', 'invite', payload.inviteId, payload.claimantPeerId || 'remote');
+                          showTransientToast('success', t('app.toasts.inviteAcceptedHostSync'), 2200);
+                          if (inviteUseCase === 'compare') {
+                            window.setTimeout(() => {
+                              if (p2pModeRef.current !== 'host' || p2pStatusRef.current !== 'connected') return;
+                              if (p2pSessionUseCaseRef.current !== 'compare') return;
+                              p2pService.sendMessage('SYNC_GEDCOM_REQUEST', {
+                                reason: 'compare_reciprocal_host_requests_peer_gedcom',
+                                requesterPeerId: peerId || 'host',
+                                requestedAt: new Date().toISOString(),
+                              });
+                              logP2PActivity(
+                                'sync.request.sent.compare_reciprocal',
+                                'session',
+                                peerId || 'host',
+                                payload.claimantPeerId || 'remote'
+                              );
+                            }, 2500);
+                          }
+                        } else {
+                          sendSessionState();
+                          logP2PActivity('invite.accepted', 'invite', payload.inviteId, payload.claimantPeerId || 'remote');
+                          showTransientToast('error', t('app.alerts.hostNoGedcomToShare'), 4200);
                         }
-                        logP2PActivity('invite.accepted', 'invite', payload.inviteId, payload.claimantPeerId || 'remote');
-                        showTransientToast('success', 'Invitation acceptée et profil appliqué.', 2200);
                       }).catch(() => {
                         showTransientToast('error', 'Validation du token échouée.', 2200);
+                        setP2PSessionUseCase(null);
+                        p2pSessionUseCaseRef.current = null;
                       });
                     }
                   }
@@ -2764,6 +3266,11 @@ function App() {
                       } as IndividualDiffRequestPayload);
                       setInitialCompareStatusText(`requesting details ${classification.requestIdsForSenderDetails.length}`);
                       scheduleInitialDiffDetailsRetry(payload.requestToken);
+                    }
+                    /** Envoie l’arbre local au pair pour la vue double (hôte a besoin du GEDCOM invité). */
+                    if (gedcomDataRef.current) {
+                      sendP2PSnapshot(gedcomDataRef.current, documentsRef.current, 'sync.sent');
+                      logP2PActivity('sync.sent.compare_snapshot', 'session', peerId || 'local');
                     }
                   }
                   if (payload.phase === 'details' && Array.isArray(payload.requestIds)) {
@@ -3348,7 +3855,11 @@ function App() {
       royalsDemoPreset?: boolean;
     }
   ) => {
-    if (ephemeralGuestActive) {
+    const guestEphemeralReadonly =
+      p2pModeRef.current === 'client' &&
+      p2pStatusRef.current === 'connected' &&
+      guestSessionModeRef.current === 'ephemeral';
+    if (guestEphemeralReadonly) {
       showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
       return;
     }
@@ -3397,7 +3908,7 @@ function App() {
               applied: true,
               fallbackLocal: true,
             });
-          }, 7000);
+          }, 2000);
         }
       }
     } else {
@@ -3507,6 +4018,8 @@ function App() {
     }
   };
 
+  handleDataLoadedRef.current = handleDataLoaded;
+
   // Sync selection between Original and Normalized data when toggling
   useEffect(() => {
       if (gedcomData && rootIndividual) {
@@ -3565,6 +4078,62 @@ function App() {
       setSelectedIdsFor2D(new Set([currentIndi.id]));
     }
   };
+
+  const handleCompareInspectLocal = useCallback(
+    (indi: Individual) => {
+      if (isCreating) setIsCreating(false);
+      const currentIndi = gedcomData?.individuals[indi.id] || indi;
+      setSelectedCompareLocalId(currentIndi.id);
+      setSelectedIndividual(currentIndi);
+      if (viewMode === '3D') {
+        setRootIndividual(currentIndi);
+        setAutoLayoutMode('all');
+        setSelectedIdsFor2D((prev) => new Set(prev).add(currentIndi.id));
+      } else if (selectedIdsFor2D.has('__NONE__')) {
+        setSelectedIdsFor2D(new Set([currentIndi.id]));
+      }
+    },
+    [gedcomData, isCreating, viewMode, selectedIdsFor2D],
+  );
+
+  const handleCompareInspectRemote = useCallback(
+    (indi: Individual) => {
+      if (!peerCompareGedcom?.individuals[indi.id]) return;
+      const currentIndi = peerCompareGedcom.individuals[indi.id];
+      setSelectedCompareRemoteId(currentIndi.id);
+    },
+    [peerCompareGedcom],
+  );
+
+  const handleMarkCompareSelectionProcessed = useCallback(() => {
+    if (selectedCompareLocalId) {
+      setCompareProcessedLocalIds((prev) =>
+        prev.includes(selectedCompareLocalId) ? prev : [...prev, selectedCompareLocalId],
+      );
+    }
+    if (selectedCompareRemoteId) {
+      setCompareProcessedRemoteIds((prev) =>
+        prev.includes(selectedCompareRemoteId) ? prev : [...prev, selectedCompareRemoteId],
+      );
+    }
+  }, [selectedCompareLocalId, selectedCompareRemoteId]);
+
+  useEffect(() => {
+    if (!compareDualViewActive || !gedcomData) return;
+    if (selectedCompareLocalId) return;
+    const tid = pendingInviteTargetIndividualId;
+    if (tid && gedcomData.individuals[tid]) {
+      const indi = gedcomData.individuals[tid];
+      setSelectedCompareLocalId(tid);
+      setSelectedIndividual(indi);
+      setRootIndividual(indi);
+    }
+  }, [
+    compareDualViewActive,
+    gedcomData,
+    pendingInviteTargetIndividualId,
+    selectedCompareLocalId,
+  ]);
 
   /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
   const handle3DRibbonOpen2DIndividual = (id: string) => {
@@ -4285,15 +4854,33 @@ function App() {
     setInviteOnboardingStage('syncing');
     logP2PActivity('invite.accept.sent', 'invite', inviteId, peerId || 'client');
     showTransientToast('success', 'Acceptation envoyée au généalogiste.', 1800);
+    window.setTimeout(() => {
+      if (p2pModeRef.current !== 'client' || p2pStatusRef.current !== 'connected') return;
+      p2pService.sendMessage('SYNC_GEDCOM_REQUEST', {
+        reason: 'invite_accept_followup',
+        requesterPeerId: peerId || 'client',
+        requestedAt: new Date().toISOString(),
+      });
+      logP2PActivity('sync.request.sent.invite_followup', 'session', peerId || 'client');
+    }, 450);
   };
 
   const handleInviteLandingAccept = () => {
-    if (!pendingInviteToken || !pendingInviteHostPeerId || !pendingInviteItem) {
+    const claimsFromToken = pendingInviteToken ? parseInviteClaimsUnsafe(pendingInviteToken) : null;
+    const effectiveRole =
+      pendingInviteRole ?? claimsFromToken?.role ?? null;
+    if (!pendingInviteToken || !pendingInviteHostPeerId || (!pendingInviteItem && !claimsFromToken)) {
       setInviteOnboardingStage('error');
       showTransientToast('error', 'Invitation incomplète ou invalide.', 2200);
       return;
     }
     inviteAcceptRequestedRef.current = true;
+    inviteSharedTreeImportActiveRef.current = true;
+    inviteSharedTreeSessionTokenRef.current = pendingInviteToken;
+    const landingUseCase: P2PSessionUseCase =
+      effectiveRole === 'comparator' ? 'compare' : 'share';
+    setP2PSessionUseCase(landingUseCase);
+    p2pSessionUseCaseRef.current = landingUseCase;
     setInviteRibbonFirstRenderDone(false);
     inviteReceivedDocumentScopesRef.current.clear();
     inviteMediaRecoveryRequestedRef.current = false;
@@ -4306,7 +4893,7 @@ function App() {
     incomingNormalizedChunksRef.current = {};
     incomingBundleChunksRef.current = {};
     normalizedSnapshotAppliedRef.current = false;
-    setInviteSceneDeferred(true);
+    setInviteSceneDeferred(effectiveRole !== 'comparator');
     setInviteGedcomProgress({
       receivedChunks: 0,
       totalChunks: 0,
@@ -4332,7 +4919,8 @@ function App() {
       return;
     }
     if (p2pStatus === 'connected' && p2pModeRef.current === 'client') {
-      handleAcceptInvite(pendingInviteItem.inviteId);
+      const inviteId = pendingInviteItem?.inviteId ?? claimsFromToken?.inviteId;
+      if (inviteId) handleAcceptInvite(inviteId);
       return;
     }
     setInviteOnboardingStage('connecting');
@@ -5990,6 +6578,14 @@ function App() {
         onProgramApplyUpdate={handleProgramApplyUpdate}
         documentsByIndividualId={renderedDocumentsByIndividualId}
         preferListTabWhenOpening={royalsDemoUiPrefs?.preferSidebarListOnOpen === true}
+        compareListMode={compareDualViewActive && viewMode === '2D'}
+        compareRemoteData={peerCompareGedcom}
+        compareRemoteDocumentsByIndividualId={peerCompareDocumentsByIndividualId}
+        selectedCompareRemoteId={selectedCompareRemoteId}
+        onCompareSelectLocal={handleCompareInspectLocal}
+        onCompareSelectRemote={handleCompareInspectRemote}
+        compareProcessedLocalIds={compareProcessedLocalIds}
+        compareProcessedRemoteIds={compareProcessedRemoteIds}
       />
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
@@ -6037,6 +6633,316 @@ function App() {
             onWebGLContextLost={handleWebGLContextLost}
           />
           </Suspense>
+        ) : compareDualViewActive && viewMode === '2D' ? (
+          <div className="absolute inset-0 flex flex-col min-h-0">
+            <p
+              className={`shrink-0 text-[10px] text-center px-3 py-1.5 leading-snug ${
+                isDarkMode ? 'text-slate-400 bg-slate-950/90' : 'text-slate-600 bg-white/85'
+              }`}
+            >
+              {t('app.compare.mergeHowItWorks')}
+            </p>
+            <p
+              className={`shrink-0 text-[10px] text-center px-3 pb-1.5 leading-snug ${
+                isDarkMode ? 'text-slate-500 bg-slate-950/90' : 'text-slate-500 bg-white/85'
+              }`}
+            >
+              {t('app.compare.photosSyncHint')}
+            </p>
+            <div
+              className={`flex flex-col flex-1 min-h-0 ${
+                isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'
+              }`}
+            >
+              <div
+                className={`text-[11px] px-2 py-1 shrink-0 font-semibold text-center ${
+                  isDarkMode ? 'bg-slate-900/90 text-slate-100' : 'bg-white/90 text-slate-800'
+                }`}
+              >
+                {compareLocalBannerTitle ?? t('app.compare.localBase')}
+              </div>
+              {compareLocalMatchSuggestions.length > 0 && (
+                <div
+                  className={`shrink-0 flex flex-col items-center gap-1 px-2 py-1 text-center ${
+                    isDarkMode ? 'bg-slate-900/50' : 'bg-white/70'
+                  }`}
+                  aria-label={t('app.compare.suggestedLocalMatches')}
+                >
+                  <span
+                    className={`block w-full text-center text-[10px] font-semibold uppercase tracking-wide ${
+                      isDarkMode ? 'text-slate-400' : 'text-slate-600'
+                    }`}
+                  >
+                    {t('app.compare.suggestedLocalMatches')}
+                  </span>
+                  <div className="flex flex-wrap items-center justify-center gap-1">
+                    {compareLocalMatchSuggestions.map(({ individual: indi, score }) => {
+                      const label =
+                        `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
+                      const isSel = selectedCompareLocalId === indi.id;
+                      return (
+                        <button
+                          key={indi.id}
+                          type="button"
+                          onClick={() => handleCompareInspectLocal(indi)}
+                          className={`text-[10px] px-1.5 py-0.5 rounded max-w-[130px] truncate text-center ${
+                            isDarkMode
+                              ? isSel
+                                ? 'bg-amber-800 text-amber-50 ring-2 ring-amber-400'
+                                : 'bg-amber-950/60 text-amber-100 hover:bg-amber-900/50'
+                              : isSel
+                                ? 'bg-amber-200 text-amber-950 ring-2 ring-amber-500'
+                                : 'bg-amber-50 text-amber-950 hover:bg-amber-100'
+                          }`}
+                          title={`${Math.round(score * 100)}%`}
+                        >
+                          {label}
+                          <span className="opacity-70"> · {Math.round(score * 100)}%</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="flex-1 min-h-0 relative">
+                {!gedcomData ? (
+                  <div
+                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
+                      isDarkMode ? 'bg-slate-950 text-slate-300' : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {t('app.compare.importLocalHint')}
+                  </div>
+                ) : is2dIndividual ? (
+                  <Scene2DIndividual
+                    key={`scene2d-compare-local-individual-${webglRecoveryKey}`}
+                    data={gedcomData}
+                    selectedId={selectedCompareLocalId ?? selectedIndividual?.id}
+                    selectedIds={selectedIdsFor2D}
+                    primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
+                    documentsByIndividualId={renderedDocumentsByIndividualId}
+                    onIndividualClick={handleCompareInspectLocal}
+                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
+                    onRequest2DModeSwitch={undefined}
+                    onOrthoZoomSample={handle2DOrthoZoomSample}
+                    orthoZoomHandoff={null}
+                    onOrthoZoomHandoffConsumed={undefined}
+                    isDarkMode={isDarkMode}
+                    relationshipRevealEnabled={relationshipRevealEnabled}
+                    sortMode={sortMode}
+                    activeFilters={activeFilters}
+                    leftPanelOpen={leftPanelOpen}
+                    rightPanelOpen={rightPanelOpen}
+                    onWebGLContextLost={handleWebGLContextLost}
+                    selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+                    showSelfIntroductionBadge={!!selfIdentity?.introduction}
+                    wheelOnlyOnCanvas
+                    compareSuggestionIds={compareLocalSuggestionIdSet}
+                  />
+                ) : (
+                  <Scene2DGrid
+                    key={`scene2d-compare-local-grid-${webglRecoveryKey}`}
+                    data={gedcomData}
+                    selectedId={selectedCompareLocalId ?? selectedIndividual?.id}
+                    selectedIds={selectedIdsFor2D}
+                    primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
+                    documentsByIndividualId={renderedDocumentsByIndividualId}
+                    onIndividualClick={handleCompareInspectLocal}
+                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
+                    onRequest2DModeSwitch={undefined}
+                    onOrthoZoomSample={handle2DOrthoZoomSample}
+                    orthoZoomHandoff={null}
+                    onOrthoZoomHandoffConsumed={undefined}
+                    isDarkMode={isDarkMode}
+                    relationshipRevealEnabled={relationshipRevealEnabled}
+                    sortMode={sortMode}
+                    activeFilters={activeFilters}
+                    leftPanelOpen={leftPanelOpen}
+                    rightPanelOpen={rightPanelOpen}
+                    singleIndividual={false}
+                    onWebGLContextLost={handleWebGLContextLost}
+                    selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+                    showSelfIntroductionBadge={!!selfIdentity?.introduction}
+                    wheelOnlyOnCanvas
+                    compareSuggestionIds={compareLocalSuggestionIdSet}
+                  />
+                )}
+              </div>
+              <div
+                className={`shrink-0 flex flex-wrap items-center justify-center gap-1 px-1 py-1 text-center ${
+                  isDarkMode ? 'bg-slate-950/80' : 'bg-white/90'
+                }`}
+                aria-label={t('app.compare.processedLocalAria')}
+              >
+                {compareProcessedLocalIds.map((id) => {
+                  const indi = gedcomData?.individuals[id];
+                  if (!indi) return null;
+                  const label =
+                    `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
+                  const isSel = selectedCompareLocalId === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => handleCompareInspectLocal(indi)}
+                      className={`text-[10px] px-1.5 py-0.5 rounded max-w-[140px] truncate text-center ${
+                        isDarkMode
+                          ? isSel
+                            ? 'bg-slate-700 text-slate-50 ring-2 ring-sky-400'
+                            : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                          : isSel
+                            ? 'bg-slate-200 text-slate-900 ring-2 ring-sky-500'
+                            : 'bg-white text-slate-800 hover:bg-slate-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={handleMarkCompareSelectionProcessed}
+                  disabled={!selectedCompareLocalId && !selectedCompareRemoteId}
+                  className={`text-[10px] px-2 py-0.5 rounded font-semibold disabled:opacity-40 ${
+                    isDarkMode
+                      ? 'bg-emerald-900/80 text-emerald-100 hover:bg-emerald-800'
+                      : 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  }`}
+                >
+                  {t('app.compare.markProcessed')}
+                </button>
+              </div>
+            </div>
+            <div
+              className={`flex flex-col flex-1 min-h-0 ${
+                isDarkMode ? 'bg-slate-800' : 'bg-slate-300'
+              }`}
+            >
+              <div
+                className={`text-[11px] px-2 py-1 shrink-0 font-semibold text-center ${
+                  isDarkMode ? 'text-slate-100 bg-slate-900/90' : 'text-slate-900 bg-slate-200/95'
+                }`}
+              >
+                {t('app.compare.peerBase')}
+              </div>
+              {compareRemoteMatchSuggestions.length > 0 && peerCompareGedcom && (
+                <div
+                  className={`shrink-0 flex flex-col items-center gap-1 px-2 py-1 text-center ${
+                    isDarkMode ? 'bg-slate-900/60' : 'bg-slate-200/90'
+                  }`}
+                  aria-label={t('app.compare.suggestedPeerMatches')}
+                >
+                  <span
+                    className={`block w-full text-center text-[10px] font-semibold uppercase tracking-wide ${
+                      isDarkMode ? 'text-slate-400' : 'text-slate-700'
+                    }`}
+                  >
+                    {t('app.compare.suggestedPeerMatches')}
+                  </span>
+                  <div className="flex flex-wrap items-center justify-center gap-1">
+                    {compareRemoteMatchSuggestions.map(({ individual: indi, score }) => {
+                      const label =
+                        `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
+                      const isSel = selectedCompareRemoteId === indi.id;
+                      return (
+                        <button
+                          key={indi.id}
+                          type="button"
+                          onClick={() => handleCompareInspectRemote(indi)}
+                          className={`text-[10px] px-1.5 py-0.5 rounded max-w-[130px] truncate text-center ${
+                            isDarkMode
+                              ? isSel
+                                ? 'bg-slate-800 text-sky-50 ring-2 ring-sky-400'
+                                : 'bg-slate-950/80 text-sky-100 hover:bg-slate-800'
+                              : isSel
+                                ? 'bg-sky-200 text-slate-900 ring-2 ring-sky-600'
+                                : 'bg-white text-slate-900 hover:bg-sky-50'
+                          }`}
+                          title={`${Math.round(score * 100)}%`}
+                        >
+                          {label}
+                          <span className="opacity-70"> · {Math.round(score * 100)}%</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {peerCompareGedcom && (
+                <div
+                  className={`shrink-0 flex flex-wrap items-center justify-center gap-1 px-1 py-1 text-center ${
+                    isDarkMode ? 'bg-slate-900/50' : 'bg-slate-200/80'
+                  }`}
+                  aria-label={t('app.compare.processedRemoteAria')}
+                >
+                  {compareProcessedRemoteIds.map((id) => {
+                    const indi = peerCompareGedcom.individuals[id];
+                    if (!indi) return null;
+                    const label =
+                      `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
+                    const isSel = selectedCompareRemoteId === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => handleCompareInspectRemote(indi)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded max-w-[140px] truncate text-center ${
+                          isDarkMode
+                            ? isSel
+                              ? 'bg-slate-700 text-slate-50 ring-2 ring-sky-400'
+                              : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
+                            : isSel
+                              ? 'bg-white text-slate-900 ring-2 ring-sky-600'
+                              : 'bg-slate-100 text-slate-900 hover:bg-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="flex-1 min-h-0 relative">
+                {!peerCompareGedcom ? (
+                  <div
+                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
+                      isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-300 text-slate-800'
+                    }`}
+                  >
+                    {t('app.compare.waitingPeerGedcom')}
+                  </div>
+                ) : (
+                  <Scene2DGrid
+                    key={`scene2d-compare-remote-grid-${webglRecoveryKey}`}
+                    data={peerCompareGedcom}
+                    selectedId={selectedCompareRemoteId}
+                    selectedIds={selectedIdsFor2D}
+                    primaryPhotoUrlById={peerComparePrimaryPhotoUrlById}
+                    documentsByIndividualId={peerCompareDocumentsByIndividualId}
+                    onIndividualClick={handleCompareInspectRemote}
+                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
+                    onRequest2DModeSwitch={undefined}
+                    onOrthoZoomSample={handle2DOrthoZoomSample}
+                    orthoZoomHandoff={null}
+                    onOrthoZoomHandoffConsumed={undefined}
+                    isDarkMode={isDarkMode}
+                    relationshipRevealEnabled={relationshipRevealEnabled}
+                    sortMode={sortMode}
+                    activeFilters={activeFilters}
+                    leftPanelOpen={leftPanelOpen}
+                    rightPanelOpen={rightPanelOpen}
+                    singleIndividual={false}
+                    onWebGLContextLost={handleWebGLContextLost}
+                    selfIndividualId={null}
+                    showSelfIntroductionBadge={false}
+                    sceneBackdropColor={isDarkMode ? '#1e293b' : '#cbd5e1'}
+                    wheelOnlyOnCanvas
+                    compareSuggestionIds={compareRemoteSuggestionIdSet}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
         ) : is2dIndividual ? (
           <Scene2DIndividual
             key={`scene2d-individual-${webglRecoveryKey}`}
@@ -6171,7 +7077,11 @@ function App() {
         )}
 
         {/* Central Home Screen / Info Pages */}
-        {!rootIndividual && !isLoading && !gedcomData && (
+        {!rootIndividual &&
+          !isLoading &&
+          !gedcomData &&
+          !compareDualViewActive &&
+          !peerCompareGedcom && (
           <>
             {activeInfoPage ? renderInfoPage() : (
               <div className={`absolute inset-0 overflow-y-auto z-0 ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'}`}>
@@ -6320,6 +7230,7 @@ function App() {
         onExportIdentityBackup={handleExportIdentityBackup}
         onImportIdentityBackup={handleImportIdentityBackup}
         onRenounceIdentity={handleRenounceIdentity}
+        comparePair={compareDualViewActive ? comparePairIndividuals : null}
       />
 
       {/* --- Top Panel (Share) --- */}
