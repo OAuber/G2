@@ -229,6 +229,8 @@ interface SidebarProps {
   compareListMode?: boolean;
   compareRemoteData?: GedcomData | null;
   selectedCompareRemoteId?: string | null;
+  /** Pour symétrie des filtres liste local/pair en comparaison. */
+  selectedCompareLocalId?: string | null;
   onCompareSelectLocal?: (indi: Individual) => void;
   onCompareSelectRemote?: (indi: Individual) => void;
   compareProcessedLocalIds?: readonly string[];
@@ -279,6 +281,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   compareListMode = false,
   compareRemoteData = null,
   selectedCompareRemoteId = null,
+  selectedCompareLocalId = null,
   onCompareSelectLocal,
   onCompareSelectRemote,
   compareProcessedLocalIds = [],
@@ -432,14 +435,27 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  /** En comparaison : mêmes règles que les grilles — filtres asc/desc seulement si les deux ancres sont choisies. */
+  const effectiveActiveFiltersLocal = useMemo(() => {
+    if (!compareListMode) return activeFilters;
+    if (!selectedCompareLocalId || !selectedCompareRemoteId) {
+      const next = new Set(activeFilters);
+      next.delete('selected-ancestors');
+      next.delete('selected-descendants');
+      return next;
+    }
+    return activeFilters;
+  }, [compareListMode, activeFilters, selectedCompareLocalId, selectedCompareRemoteId]);
+
   const filteredList = useMemo(() => {
     if (!data) return [];
     let list = Object.values(data.individuals) as Individual[];
     const lineageSets = computeLineageFilterSets(data, selectedId);
+    const filters = compareListMode ? effectiveActiveFiltersLocal : activeFilters;
 
-    if (activeFilters.size > 0) {
+    if (filters.size > 0) {
       list = list.filter(p =>
-        matchesFilters(p, activeFilters, { selectedId, lineageSets, documentsByIndividualId }),
+        matchesFilters(p, filters, { selectedId, lineageSets, documentsByIndividualId }),
       );
     }
 
@@ -455,18 +471,18 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
     
     return sorted.filter((p) => individualMatchesSearchQuery(p, searchTerm));
-  }, [data, searchTerm, sortMode, selectedId, activeFilters, documentsByIndividualId]);
+  }, [data, searchTerm, sortMode, selectedId, activeFilters, effectiveActiveFiltersLocal, compareListMode, documentsByIndividualId]);
 
-  /** Filtres liste pair : sans sélection distante, ignorer ancêtres/descendants (sinon liste vide). */
+  /** Filtres liste pair : symétrie avec la liste locale. */
   const activeFiltersRemote = useMemo(() => {
-    if (!selectedCompareRemoteId) {
+    if (!selectedCompareRemoteId || !selectedCompareLocalId) {
       const next = new Set(activeFilters);
       next.delete('selected-ancestors');
       next.delete('selected-descendants');
       return next;
     }
     return activeFilters;
-  }, [activeFilters, selectedCompareRemoteId]);
+  }, [activeFilters, selectedCompareRemoteId, selectedCompareLocalId]);
 
   const filteredListRemote = useMemo(() => {
     if (!compareListMode || !compareRemoteData) return [];
@@ -879,7 +895,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Scrollable List */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto custom-scrollbar flex flex-col isolate [overscroll-behavior-y:contain]"
+      >
         {activePane === 'program' ? (
           <div className="p-4 space-y-3">
             <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('sidebar.program.title')}</div>
@@ -1077,7 +1096,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                     <div
                       key={`remote-${indi.id}`}
                       id={`sidebar-item-remote-${indi.id}`}
-                      className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors border-l-4 ${
+                      className={`w-full flex items-center gap-1 rounded-md px-1 border-l-4 motion-reduce:transition-none ${
                         selectedCompareRemoteId === indi.id
                           ? isDarkMode
                             ? 'border-l-amber-400 bg-slate-700'

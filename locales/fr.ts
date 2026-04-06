@@ -99,6 +99,17 @@ const fr = {
         'Aucune fusion automatique : les propositions de fiches ou de changements arrivent dans le panneau Détails ; vous les acceptez ou les rejetez une par une. « Marquer comme traité » est un repère local pour votre suivi.',
       photosSyncHint:
         'Photos et documents du pair : envoyés après le GEDCOM (lots séparés), si la politique de session autorise les médias.',
+      absent: 'Absent',
+      traitCheckbox: 'Traité',
+      mergeBarTitle: 'Fusion des bases',
+      mergeModalTitle: 'Options de fusion',
+      mergeOptionAll: 'Toutes les données',
+      mergeOptionSelection: 'Sélection de données',
+      mergeValidate: 'Valider',
+      mergeCancel: 'Annuler',
+      mergeSelectionStub:
+        'Fusion sur sélection : branchement à venir (cochez les champs à importer dans le panneau Détails).',
+      mergeAllStub: 'Fusion complète : branchement à venir.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -558,6 +569,13 @@ const fr = {
     tabIdentity: 'Identité',
     compareLocalColumn: 'Fiche locale',
     compareRemoteColumn: 'Fiche du pair',
+    peerReadOnlyHint: 'Cette fiche provient de la base du pair : consultation seule.',
+    compareImportTitle: 'Import vers votre base',
+    compareImportHint:
+      'Cochez ce que vous souhaiterez importer (la fusion effective sera branchée dans une prochaine version).',
+    compareImportFields: 'État civil et notes',
+    compareImportDocuments: 'Documents et photos',
+    peerDocumentsReadOnly: 'Documents du pair en lecture seule.',
     noIndividualCreatedOrSelected: 'Aucun individu créé ou sélectionné',
     cancel: 'Annuler',
     edit: 'Modifier',

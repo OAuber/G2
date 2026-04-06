@@ -4,7 +4,9 @@ import Sidebar from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
-import Scene2DGrid, { WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
+import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
+import CompareDualView2D from './components/compare/CompareDualView2D';
+import CompareMergeModal, { type CompareMergeMode } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { AppLayout } from './components/AppLayout';
@@ -155,6 +157,7 @@ function App() {
   const [topPanelOpen, setTopPanelOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [documentsTabSignal, setDocumentsTabSignal] = useState(0);
+  const [recordsTabSignal, setRecordsTabSignal] = useState(0);
   /** Démo Rois : à l’ouverture manuelle des panneaux, onglet Liste (gauche) et Documents (droite). */
   const [royalsDemoUiPrefs, setRoyalsDemoUiPrefs] = useState<{
     preferSidebarListOnOpen: boolean;
@@ -422,8 +425,13 @@ function App() {
 
   const [selectedCompareLocalId, setSelectedCompareLocalId] = useState<string | null>(null);
   const [selectedCompareRemoteId, setSelectedCompareRemoteId] = useState<string | null>(null);
+  const prevRemoteAnchorForLocalSuggestionsRef = useRef<string | null>(null);
+  const prevLocalAnchorForRemoteSuggestionsRef = useRef<string | null>(null);
   const [compareProcessedLocalIds, setCompareProcessedLocalIds] = useState<string[]>([]);
   const [compareProcessedRemoteIds, setCompareProcessedRemoteIds] = useState<string[]>([]);
+  const [comparePanelFocus, setComparePanelFocus] = useState<'local' | 'peer'>('local');
+  const [compareMergeModalOpen, setCompareMergeModalOpen] = useState(false);
+  const [compareFusionCompleted, setCompareFusionCompleted] = useState(false);
   const pendingInviteRoleRef = useRef<P2PRole | null>(INVITE_BOOTSTRAP.role);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const originalGedcomDataRef = useRef<GedcomData | null>(null);
@@ -1732,10 +1740,6 @@ function App() {
     if (normalized === 'parse error') return t('topPanel.syncStatusParseError');
     return raw;
   }, [t]);
-  const selectedIndividualDocuments = useMemo(
-    () => (selectedIndividual ? (documentsByIndividualId[selectedIndividual.id] || []) : []),
-    [documentsByIndividualId, selectedIndividual]
-  );
   const primaryPhotoUrlById = useMemo(() => {
     const map: Record<string, string> = {};
     const visiblePhoto = (d: IndividualDocument) =>
@@ -1828,32 +1832,130 @@ function App() {
     () => new Set(compareLocalMatchSuggestions.map((s) => s.individual.id)),
     [compareLocalMatchSuggestions],
   );
+  const compareRemoteSuggestionScores = useMemo(
+    () => new Map(compareRemoteMatchSuggestions.map((s) => [s.individual.id, s.score] as const)),
+    [compareRemoteMatchSuggestions],
+  );
+  const compareLocalSuggestionScores = useMemo(
+    () => new Map(compareLocalMatchSuggestions.map((s) => [s.individual.id, s.score] as const)),
+    [compareLocalMatchSuggestions],
+  );
 
-  const comparePairIndividuals = useMemo(() => {
-    if (!compareDualViewActive) return null;
-    const local = selectedCompareLocalId && gedcomData?.individuals?.[selectedCompareLocalId]
-      ? gedcomData.individuals[selectedCompareLocalId] ?? null
-      : null;
-    const remote =
-      peerCompareGedcom && selectedCompareRemoteId
-        ? peerCompareGedcom.individuals[selectedCompareRemoteId] ?? null
-        : null;
-    if (!local && !remote) return null;
-    return { local, remote };
+  /** Grille locale : pistes + fiche locale ; sans ancre pair, afficher au moins la fiche locale (symétrique du volet pair). */
+  const compareLocalGridSelectedIds = useMemo(() => {
+    if (!compareDualViewActive) return selectedIdsFor2D;
+    if (!selectedCompareRemoteId) {
+      if (selectedCompareLocalId) {
+        return new Set<string>([selectedCompareLocalId]);
+      }
+      return selectedIdsFor2D;
+    }
+    const ids = new Set<string>(compareLocalSuggestionIdSet);
+    if (selectedCompareLocalId) ids.add(selectedCompareLocalId);
+    if (ids.size === 0) return new Set<string>(['__NONE__']);
+    return ids;
   }, [
     compareDualViewActive,
-    gedcomData,
-    peerCompareGedcom,
+    selectedCompareRemoteId,
+    selectedIdsFor2D,
+    compareLocalSuggestionIdSet,
     selectedCompareLocalId,
+  ]);
+
+  /** Grille pair : pistes + fiche pair courante. Sans ancre locale (ex. effacée après changement d’ancre pair), afficher au moins la fiche pair sélectionnée pour ne pas vider la grille au clic parent/enfant. */
+  const compareRemoteGridSelectedIds = useMemo(() => {
+    if (!compareDualViewActive) return undefined;
+    if (!selectedCompareLocalId) {
+      if (selectedCompareRemoteId) {
+        return new Set<string>([selectedCompareRemoteId]);
+      }
+      return new Set<string>(['__NONE__']);
+    }
+    const ids = new Set<string>(compareRemoteSuggestionIdSet);
+    if (selectedCompareRemoteId) ids.add(selectedCompareRemoteId);
+    if (ids.size === 0) return new Set<string>(['__NONE__']);
+    return ids;
+  }, [
+    compareDualViewActive,
+    selectedCompareLocalId,
+    compareRemoteSuggestionIdSet,
     selectedCompareRemoteId,
   ]);
 
-  const compareLocalBannerTitle = useMemo(() => {
-    if (!gedcomData || !selectedCompareLocalId) return null;
-    const indi = gedcomData.individuals[selectedCompareLocalId];
-    if (!indi) return null;
-    return `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id;
-  }, [gedcomData, selectedCompareLocalId]);
+  /** Surbrillance ruban locale : ancre pair requise pour le mode pistes, sinon comportement hors comparaison. */
+  const compareLocalRibbonSelectedId = useMemo(() => {
+    if (!compareDualViewActive || !selectedCompareRemoteId) {
+      return selectedCompareLocalId ?? selectedIndividual?.id ?? null;
+    }
+    return selectedCompareLocalId ?? null;
+  }, [compareDualViewActive, selectedCompareRemoteId, selectedCompareLocalId, selectedIndividual?.id]);
+
+  /** Surbrillance ruban pair : toujours la fiche pair affichée (y compris navigation hors pistes). */
+  const compareRemoteRibbonSelectedId = useMemo(() => {
+    if (!compareDualViewActive) return selectedCompareRemoteId;
+    if (!selectedCompareLocalId) return selectedCompareRemoteId;
+    return selectedCompareRemoteId ?? null;
+  }, [compareDualViewActive, selectedCompareLocalId, selectedCompareRemoteId]);
+
+  /** Symétrie : filtres ascendants/descendants seulement quand les deux ancres sont posées (évite grilles vides d’un côté). */
+  const activeFiltersCompareRemote = useMemo(() => {
+    if (!selectedCompareRemoteId || !selectedCompareLocalId) {
+      const next = new Set(activeFilters);
+      next.delete('selected-ancestors');
+      next.delete('selected-descendants');
+      return next;
+    }
+    return activeFilters;
+  }, [activeFilters, selectedCompareRemoteId, selectedCompareLocalId]);
+
+  const activeFiltersCompareLocal = useMemo(() => {
+    if (!selectedCompareLocalId || !selectedCompareRemoteId) {
+      const next = new Set(activeFilters);
+      next.delete('selected-ancestors');
+      next.delete('selected-descendants');
+      return next;
+    }
+    return activeFilters;
+  }, [activeFilters, selectedCompareLocalId, selectedCompareRemoteId]);
+
+  const detailsPanelIndividual = useMemo(() => {
+    if (!compareDualViewActive) return selectedIndividual;
+    if (
+      comparePanelFocus === 'peer' &&
+      selectedCompareRemoteId &&
+      peerCompareGedcom?.individuals[selectedCompareRemoteId]
+    ) {
+      return peerCompareGedcom.individuals[selectedCompareRemoteId];
+    }
+    return selectedIndividual;
+  }, [
+    compareDualViewActive,
+    comparePanelFocus,
+    selectedIndividual,
+    selectedCompareRemoteId,
+    peerCompareGedcom,
+  ]);
+
+  const detailsPanelData = useMemo(() => {
+    if (!compareDualViewActive) return gedcomData;
+    if (comparePanelFocus === 'peer') return peerCompareGedcom;
+    return gedcomData;
+  }, [compareDualViewActive, comparePanelFocus, gedcomData, peerCompareGedcom]);
+
+  const detailsPanelDocuments = useMemo(() => {
+    const indi = detailsPanelIndividual;
+    if (!indi) return [];
+    if (compareDualViewActive && comparePanelFocus === 'peer') {
+      return peerCompareDocumentsByIndividualId[indi.id] || [];
+    }
+    return documentsByIndividualId[indi.id] || [];
+  }, [
+    compareDualViewActive,
+    comparePanelFocus,
+    detailsPanelIndividual,
+    documentsByIndividualId,
+    peerCompareDocumentsByIndividualId,
+  ]);
 
   const peerComparePrimaryPhotoUrlById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -4083,8 +4185,13 @@ function App() {
     (indi: Individual) => {
       if (isCreating) setIsCreating(false);
       const currentIndi = gedcomData?.individuals[indi.id] || indi;
+      setComparePanelFocus('local');
       setSelectedCompareLocalId(currentIndi.id);
       setSelectedIndividual(currentIndi);
+      if (compareDualViewActive && viewMode === '2D') {
+        setRightPanelOpen(true);
+        setRecordsTabSignal((s) => s + 1);
+      }
       if (viewMode === '3D') {
         setRootIndividual(currentIndi);
         setAutoLayoutMode('all');
@@ -4093,30 +4200,56 @@ function App() {
         setSelectedIdsFor2D(new Set([currentIndi.id]));
       }
     },
-    [gedcomData, isCreating, viewMode, selectedIdsFor2D],
+    [gedcomData, isCreating, viewMode, selectedIdsFor2D, compareDualViewActive],
   );
 
   const handleCompareInspectRemote = useCallback(
     (indi: Individual) => {
       if (!peerCompareGedcom?.individuals[indi.id]) return;
       const currentIndi = peerCompareGedcom.individuals[indi.id];
+      setComparePanelFocus('peer');
       setSelectedCompareRemoteId(currentIndi.id);
     },
     [peerCompareGedcom],
   );
 
-  const handleMarkCompareSelectionProcessed = useCallback(() => {
-    if (selectedCompareLocalId) {
-      setCompareProcessedLocalIds((prev) =>
-        prev.includes(selectedCompareLocalId) ? prev : [...prev, selectedCompareLocalId],
-      );
+  const handleToggleCompareLocalProcessed = useCallback((individualId: string, processed: boolean) => {
+    if (processed) {
+      setCompareProcessedLocalIds((prev) => (prev.includes(individualId) ? prev : [...prev, individualId]));
+    } else {
+      setCompareProcessedLocalIds((prev) => prev.filter((id) => id !== individualId));
     }
-    if (selectedCompareRemoteId) {
-      setCompareProcessedRemoteIds((prev) =>
-        prev.includes(selectedCompareRemoteId) ? prev : [...prev, selectedCompareRemoteId],
-      );
+  }, []);
+
+  const handleToggleCompareRemoteProcessed = useCallback((individualId: string, processed: boolean) => {
+    if (processed) {
+      setCompareProcessedRemoteIds((prev) => (prev.includes(individualId) ? prev : [...prev, individualId]));
+    } else {
+      setCompareProcessedRemoteIds((prev) => prev.filter((id) => id !== individualId));
     }
-  }, [selectedCompareLocalId, selectedCompareRemoteId]);
+  }, []);
+
+  const handleCompareMergeConfirm = useCallback(
+    (mode: CompareMergeMode) => {
+      setCompareMergeModalOpen(false);
+      setCompareFusionCompleted(true);
+      if (mode === 'selection') {
+        showTransientToast('success', t('app.compare.mergeSelectionStub'), 3200);
+        return;
+      }
+      showTransientToast('success', t('app.compare.mergeAllStub'), 3200);
+    },
+    [showTransientToast, t],
+  );
+
+  useEffect(() => {
+    if (!compareDualViewActive) {
+      setComparePanelFocus('local');
+      setCompareFusionCompleted(false);
+      prevRemoteAnchorForLocalSuggestionsRef.current = null;
+      prevLocalAnchorForRemoteSuggestionsRef.current = null;
+    }
+  }, [compareDualViewActive]);
 
   useEffect(() => {
     if (!compareDualViewActive || !gedcomData) return;
@@ -4133,6 +4266,46 @@ function App() {
     gedcomData,
     pendingInviteTargetIndividualId,
     selectedCompareLocalId,
+  ]);
+
+  /** Uniquement quand l’ancre pair change (nouvelle fiche pair / navigation), pas à chaque clic parent-enfant sur le même côté. */
+  useEffect(() => {
+    if (!compareDualViewActive) return;
+    const anchor = selectedCompareRemoteId;
+    const prev = prevRemoteAnchorForLocalSuggestionsRef.current;
+    if (prev === anchor) return;
+    prevRemoteAnchorForLocalSuggestionsRef.current = anchor;
+    if (anchor == null) return;
+    if (prev === null) return;
+    if (compareLocalSuggestionIdSet.size === 0) return;
+    if (selectedCompareLocalId && !compareLocalSuggestionIdSet.has(selectedCompareLocalId)) {
+      setSelectedCompareLocalId(null);
+    }
+  }, [
+    compareDualViewActive,
+    selectedCompareRemoteId,
+    compareLocalSuggestionIdSet,
+    selectedCompareLocalId,
+  ]);
+
+  /** Uniquement quand l’ancre locale change — évite d’effacer la sélection pair au clic parent/enfant (hors liste de pistes). */
+  useEffect(() => {
+    if (!compareDualViewActive) return;
+    const anchor = selectedCompareLocalId;
+    const prev = prevLocalAnchorForRemoteSuggestionsRef.current;
+    if (prev === anchor) return;
+    prevLocalAnchorForRemoteSuggestionsRef.current = anchor;
+    if (anchor == null) return;
+    if (prev === null) return;
+    if (compareRemoteSuggestionIdSet.size === 0) return;
+    if (selectedCompareRemoteId && !compareRemoteSuggestionIdSet.has(selectedCompareRemoteId)) {
+      setSelectedCompareRemoteId(null);
+    }
+  }, [
+    compareDualViewActive,
+    selectedCompareLocalId,
+    compareRemoteSuggestionIdSet,
+    selectedCompareRemoteId,
   ]);
 
   /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
@@ -6582,6 +6755,7 @@ function App() {
         compareRemoteData={peerCompareGedcom}
         compareRemoteDocumentsByIndividualId={peerCompareDocumentsByIndividualId}
         selectedCompareRemoteId={selectedCompareRemoteId}
+        selectedCompareLocalId={selectedCompareLocalId}
         onCompareSelectLocal={handleCompareInspectLocal}
         onCompareSelectRemote={handleCompareInspectRemote}
         compareProcessedLocalIds={compareProcessedLocalIds}
@@ -6634,78 +6808,15 @@ function App() {
           />
           </Suspense>
         ) : compareDualViewActive && viewMode === '2D' ? (
-          <div className="absolute inset-0 flex flex-col min-h-0">
-            <p
-              className={`shrink-0 text-[10px] text-center px-3 py-1.5 leading-snug ${
-                isDarkMode ? 'text-slate-400 bg-slate-950/90' : 'text-slate-600 bg-white/85'
-              }`}
-            >
-              {t('app.compare.mergeHowItWorks')}
-            </p>
-            <p
-              className={`shrink-0 text-[10px] text-center px-3 pb-1.5 leading-snug ${
-                isDarkMode ? 'text-slate-500 bg-slate-950/90' : 'text-slate-500 bg-white/85'
-              }`}
-            >
-              {t('app.compare.photosSyncHint')}
-            </p>
-            <div
-              className={`flex flex-col flex-1 min-h-0 ${
-                isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'
-              }`}
-            >
-              <div
-                className={`text-[11px] px-2 py-1 shrink-0 font-semibold text-center ${
-                  isDarkMode ? 'bg-slate-900/90 text-slate-100' : 'bg-white/90 text-slate-800'
-                }`}
-              >
-                {compareLocalBannerTitle ?? t('app.compare.localBase')}
-              </div>
-              {compareLocalMatchSuggestions.length > 0 && (
-                <div
-                  className={`shrink-0 flex flex-col items-center gap-1 px-2 py-1 text-center ${
-                    isDarkMode ? 'bg-slate-900/50' : 'bg-white/70'
-                  }`}
-                  aria-label={t('app.compare.suggestedLocalMatches')}
-                >
-                  <span
-                    className={`block w-full text-center text-[10px] font-semibold uppercase tracking-wide ${
-                      isDarkMode ? 'text-slate-400' : 'text-slate-600'
-                    }`}
-                  >
-                    {t('app.compare.suggestedLocalMatches')}
-                  </span>
-                  <div className="flex flex-wrap items-center justify-center gap-1">
-                    {compareLocalMatchSuggestions.map(({ individual: indi, score }) => {
-                      const label =
-                        `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
-                      const isSel = selectedCompareLocalId === indi.id;
-                      return (
-                        <button
-                          key={indi.id}
-                          type="button"
-                          onClick={() => handleCompareInspectLocal(indi)}
-                          className={`text-[10px] px-1.5 py-0.5 rounded max-w-[130px] truncate text-center ${
-                            isDarkMode
-                              ? isSel
-                                ? 'bg-amber-800 text-amber-50 ring-2 ring-amber-400'
-                                : 'bg-amber-950/60 text-amber-100 hover:bg-amber-900/50'
-                              : isSel
-                                ? 'bg-amber-200 text-amber-950 ring-2 ring-amber-500'
-                                : 'bg-amber-50 text-amber-950 hover:bg-amber-100'
-                          }`}
-                          title={`${Math.round(score * 100)}%`}
-                        >
-                          {label}
-                          <span className="opacity-70"> · {Math.round(score * 100)}%</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              <div className="flex-1 min-h-0 relative">
-                {!gedcomData ? (
+          <>
+            <CompareDualView2D
+              isDarkMode={isDarkMode}
+              onLocalPaneActivate={() => setComparePanelFocus('local')}
+              onPeerPaneActivate={() => setComparePanelFocus('peer')}
+              mergeBarAriaLabel={t('app.compare.mergeBarTitle')}
+              onMergeBarClick={() => setCompareMergeModalOpen(true)}
+              localEmptyHint={
+                !gedcomData ? (
                   <div
                     className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
                       isDarkMode ? 'bg-slate-950 text-slate-300' : 'bg-slate-100 text-slate-700'
@@ -6713,38 +6824,26 @@ function App() {
                   >
                     {t('app.compare.importLocalHint')}
                   </div>
-                ) : is2dIndividual ? (
-                  <Scene2DIndividual
-                    key={`scene2d-compare-local-individual-${webglRecoveryKey}`}
-                    data={gedcomData}
-                    selectedId={selectedCompareLocalId ?? selectedIndividual?.id}
-                    selectedIds={selectedIdsFor2D}
-                    primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
-                    documentsByIndividualId={renderedDocumentsByIndividualId}
-                    onIndividualClick={handleCompareInspectLocal}
-                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
-                    onRequest2DModeSwitch={undefined}
-                    onOrthoZoomSample={handle2DOrthoZoomSample}
-                    orthoZoomHandoff={null}
-                    onOrthoZoomHandoffConsumed={undefined}
-                    isDarkMode={isDarkMode}
-                    relationshipRevealEnabled={relationshipRevealEnabled}
-                    sortMode={sortMode}
-                    activeFilters={activeFilters}
-                    leftPanelOpen={leftPanelOpen}
-                    rightPanelOpen={rightPanelOpen}
-                    onWebGLContextLost={handleWebGLContextLost}
-                    selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
-                    showSelfIntroductionBadge={!!selfIdentity?.introduction}
-                    wheelOnlyOnCanvas
-                    compareSuggestionIds={compareLocalSuggestionIdSet}
-                  />
-                ) : (
+                ) : null
+              }
+              peerEmptyHint={
+                !peerCompareGedcom ? (
+                  <div
+                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
+                      isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-300 text-slate-800'
+                    }`}
+                  >
+                    {t('app.compare.waitingPeerGedcom')}
+                  </div>
+                ) : null
+              }
+              localScene={
+                gedcomData ? (
                   <Scene2DGrid
                     key={`scene2d-compare-local-grid-${webglRecoveryKey}`}
                     data={gedcomData}
-                    selectedId={selectedCompareLocalId ?? selectedIndividual?.id}
-                    selectedIds={selectedIdsFor2D}
+                    selectedId={compareLocalRibbonSelectedId}
+                    selectedIds={compareLocalGridSelectedIds}
                     primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
                     documentsByIndividualId={renderedDocumentsByIndividualId}
                     onIndividualClick={handleCompareInspectLocal}
@@ -6756,7 +6855,7 @@ function App() {
                     isDarkMode={isDarkMode}
                     relationshipRevealEnabled={relationshipRevealEnabled}
                     sortMode={sortMode}
-                    activeFilters={activeFilters}
+                    activeFilters={activeFiltersCompareLocal}
                     leftPanelOpen={leftPanelOpen}
                     rightPanelOpen={rightPanelOpen}
                     singleIndividual={false}
@@ -6765,162 +6864,25 @@ function App() {
                     showSelfIntroductionBadge={!!selfIdentity?.introduction}
                     wheelOnlyOnCanvas
                     compareSuggestionIds={compareLocalSuggestionIdSet}
+                    compareSuggestionScores={compareLocalSuggestionScores}
+                    compareFusionCompleted={compareFusionCompleted}
+                    compareProcessedIds={new Set(compareProcessedLocalIds)}
+                    onCompareProcessedToggle={handleToggleCompareLocalProcessed}
+                    gridDefaultZoom={COMPARE_VIEW_GRID_DEFAULT_ZOOM}
                   />
-                )}
-              </div>
-              <div
-                className={`shrink-0 flex flex-wrap items-center justify-center gap-1 px-1 py-1 text-center ${
-                  isDarkMode ? 'bg-slate-950/80' : 'bg-white/90'
-                }`}
-                aria-label={t('app.compare.processedLocalAria')}
-              >
-                {compareProcessedLocalIds.map((id) => {
-                  const indi = gedcomData?.individuals[id];
-                  if (!indi) return null;
-                  const label =
-                    `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
-                  const isSel = selectedCompareLocalId === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => handleCompareInspectLocal(indi)}
-                      className={`text-[10px] px-1.5 py-0.5 rounded max-w-[140px] truncate text-center ${
-                        isDarkMode
-                          ? isSel
-                            ? 'bg-slate-700 text-slate-50 ring-2 ring-sky-400'
-                            : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
-                          : isSel
-                            ? 'bg-slate-200 text-slate-900 ring-2 ring-sky-500'
-                            : 'bg-white text-slate-800 hover:bg-slate-50'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={handleMarkCompareSelectionProcessed}
-                  disabled={!selectedCompareLocalId && !selectedCompareRemoteId}
-                  className={`text-[10px] px-2 py-0.5 rounded font-semibold disabled:opacity-40 ${
-                    isDarkMode
-                      ? 'bg-emerald-900/80 text-emerald-100 hover:bg-emerald-800'
-                      : 'bg-emerald-600 text-white hover:bg-emerald-500'
-                  }`}
-                >
-                  {t('app.compare.markProcessed')}
-                </button>
-              </div>
-            </div>
-            <div
-              className={`flex flex-col flex-1 min-h-0 ${
-                isDarkMode ? 'bg-slate-800' : 'bg-slate-300'
-              }`}
-            >
-              <div
-                className={`text-[11px] px-2 py-1 shrink-0 font-semibold text-center ${
-                  isDarkMode ? 'text-slate-100 bg-slate-900/90' : 'text-slate-900 bg-slate-200/95'
-                }`}
-              >
-                {t('app.compare.peerBase')}
-              </div>
-              {compareRemoteMatchSuggestions.length > 0 && peerCompareGedcom && (
-                <div
-                  className={`shrink-0 flex flex-col items-center gap-1 px-2 py-1 text-center ${
-                    isDarkMode ? 'bg-slate-900/60' : 'bg-slate-200/90'
-                  }`}
-                  aria-label={t('app.compare.suggestedPeerMatches')}
-                >
-                  <span
-                    className={`block w-full text-center text-[10px] font-semibold uppercase tracking-wide ${
-                      isDarkMode ? 'text-slate-400' : 'text-slate-700'
-                    }`}
-                  >
-                    {t('app.compare.suggestedPeerMatches')}
-                  </span>
-                  <div className="flex flex-wrap items-center justify-center gap-1">
-                    {compareRemoteMatchSuggestions.map(({ individual: indi, score }) => {
-                      const label =
-                        `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
-                      const isSel = selectedCompareRemoteId === indi.id;
-                      return (
-                        <button
-                          key={indi.id}
-                          type="button"
-                          onClick={() => handleCompareInspectRemote(indi)}
-                          className={`text-[10px] px-1.5 py-0.5 rounded max-w-[130px] truncate text-center ${
-                            isDarkMode
-                              ? isSel
-                                ? 'bg-slate-800 text-sky-50 ring-2 ring-sky-400'
-                                : 'bg-slate-950/80 text-sky-100 hover:bg-slate-800'
-                              : isSel
-                                ? 'bg-sky-200 text-slate-900 ring-2 ring-sky-600'
-                                : 'bg-white text-slate-900 hover:bg-sky-50'
-                          }`}
-                          title={`${Math.round(score * 100)}%`}
-                        >
-                          {label}
-                          <span className="opacity-70"> · {Math.round(score * 100)}%</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {peerCompareGedcom && (
-                <div
-                  className={`shrink-0 flex flex-wrap items-center justify-center gap-1 px-1 py-1 text-center ${
-                    isDarkMode ? 'bg-slate-900/50' : 'bg-slate-200/80'
-                  }`}
-                  aria-label={t('app.compare.processedRemoteAria')}
-                >
-                  {compareProcessedRemoteIds.map((id) => {
-                    const indi = peerCompareGedcom.individuals[id];
-                    if (!indi) return null;
-                    const label =
-                      `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.id;
-                    const isSel = selectedCompareRemoteId === id;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => handleCompareInspectRemote(indi)}
-                        className={`text-[10px] px-1.5 py-0.5 rounded max-w-[140px] truncate text-center ${
-                          isDarkMode
-                            ? isSel
-                              ? 'bg-slate-700 text-slate-50 ring-2 ring-sky-400'
-                              : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
-                            : isSel
-                              ? 'bg-white text-slate-900 ring-2 ring-sky-600'
-                              : 'bg-slate-100 text-slate-900 hover:bg-white'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="flex-1 min-h-0 relative">
-                {!peerCompareGedcom ? (
-                  <div
-                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
-                      isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-300 text-slate-800'
-                    }`}
-                  >
-                    {t('app.compare.waitingPeerGedcom')}
-                  </div>
-                ) : (
+                ) : null
+              }
+              remoteScene={
+                peerCompareGedcom ? (
                   <Scene2DGrid
                     key={`scene2d-compare-remote-grid-${webglRecoveryKey}`}
                     data={peerCompareGedcom}
-                    selectedId={selectedCompareRemoteId}
-                    selectedIds={selectedIdsFor2D}
+                    selectedId={compareRemoteRibbonSelectedId}
+                    selectedIds={compareRemoteGridSelectedIds}
                     primaryPhotoUrlById={peerComparePrimaryPhotoUrlById}
                     documentsByIndividualId={peerCompareDocumentsByIndividualId}
                     onIndividualClick={handleCompareInspectRemote}
-                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
+                    onExpandAndSwitch3D={undefined}
                     onRequest2DModeSwitch={undefined}
                     onOrthoZoomSample={handle2DOrthoZoomSample}
                     orthoZoomHandoff={null}
@@ -6928,7 +6890,7 @@ function App() {
                     isDarkMode={isDarkMode}
                     relationshipRevealEnabled={relationshipRevealEnabled}
                     sortMode={sortMode}
-                    activeFilters={activeFilters}
+                    activeFilters={activeFiltersCompareRemote}
                     leftPanelOpen={leftPanelOpen}
                     rightPanelOpen={rightPanelOpen}
                     singleIndividual={false}
@@ -6938,11 +6900,27 @@ function App() {
                     sceneBackdropColor={isDarkMode ? '#1e293b' : '#cbd5e1'}
                     wheelOnlyOnCanvas
                     compareSuggestionIds={compareRemoteSuggestionIdSet}
+                    compareSuggestionScores={compareRemoteSuggestionScores}
+                    compareFusionCompleted={compareFusionCompleted}
+                    compareProcessedIds={new Set(compareProcessedRemoteIds)}
+                    onCompareProcessedToggle={handleToggleCompareRemoteProcessed}
+                    gridDefaultZoom={COMPARE_VIEW_GRID_DEFAULT_ZOOM}
                   />
-                )}
-              </div>
-            </div>
-          </div>
+                ) : null
+              }
+            />
+            <CompareMergeModal
+              isOpen={compareMergeModalOpen}
+              isDarkMode={isDarkMode}
+              title={t('app.compare.mergeModalTitle')}
+              optionAll={t('app.compare.mergeOptionAll')}
+              optionSelection={t('app.compare.mergeOptionSelection')}
+              validateLabel={t('app.compare.mergeValidate')}
+              cancelLabel={t('app.compare.mergeCancel')}
+              onCancel={() => setCompareMergeModalOpen(false)}
+              onConfirm={handleCompareMergeConfirm}
+            />
+          </>
         ) : is2dIndividual ? (
           <Scene2DIndividual
             key={`scene2d-individual-${webglRecoveryKey}`}
@@ -7187,8 +7165,8 @@ function App() {
 
       {/* --- Right Panel (Individuals) --- */}
       <DetailsPanel 
-        individual={selectedIndividual}
-        data={gedcomData}
+        individual={detailsPanelIndividual}
+        data={detailsPanelData}
         isOpen={rightPanelOpen}
         onToggle={() => setRightPanelOpen(!rightPanelOpen)}
         isCreating={isCreating}
@@ -7208,7 +7186,7 @@ function App() {
         isDarkMode={isDarkMode}
         reviewProposal={activeReviewProposal}
         reviewProposals={p2pProposals}
-        documents={selectedIndividualDocuments}
+        documents={detailsPanelDocuments}
         onOpenReviewProposal={handleReviewProposal}
         onAddDocument={handleAddDocument}
         onUpdateDocument={handleUpdateDocument}
@@ -7219,6 +7197,7 @@ function App() {
         onReviewGlobalDecision={handleReviewGlobalDecision}
         reviewFocusSignal={reviewFocusSignal}
         documentsTabSignal={documentsTabSignal}
+        recordsTabSignal={recordsTabSignal}
         preferDocumentsTabWhenOpening={royalsDemoUiPrefs?.preferDocumentsOnRightOpen === true}
         selfIdentity={selfIdentity}
         isIdentifyingSelf={isIdentifyingSelf}
@@ -7230,7 +7209,7 @@ function App() {
         onExportIdentityBackup={handleExportIdentityBackup}
         onImportIdentityBackup={handleImportIdentityBackup}
         onRenounceIdentity={handleRenounceIdentity}
-        comparePair={compareDualViewActive ? comparePairIndividuals : null}
+        comparePeerReadOnly={compareDualViewActive && comparePanelFocus === 'peer'}
       />
 
       {/* --- Top Panel (Share) --- */}

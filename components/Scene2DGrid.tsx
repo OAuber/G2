@@ -40,6 +40,14 @@ interface Scene2DGridProps {
   wheelOnlyOnCanvas?: boolean;
   /** En mode comparaison : ids de fiches à mettre en avant comme pistes de fusion (rubans). */
   compareSuggestionIds?: Set<string>;
+  /** Scores 0–1 affichés en surimpression sur les rubans pistes. */
+  compareSuggestionScores?: ReadonlyMap<string, number> | null;
+  /** Après validation fusion : afficher « traité » sur les rubans. */
+  compareFusionCompleted?: boolean;
+  compareProcessedIds?: ReadonlySet<string> | null;
+  onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
+  /** Remplace le zoom grille par défaut (ex. volets comparaison plus bas). */
+  gridDefaultZoom?: number;
 }
 
 interface RibbonDocument {
@@ -79,6 +87,21 @@ function isOfflinePhotoUrl(url: string): boolean {
   return u.startsWith('data:') || u.startsWith('blob:');
 }
 
+/** Liste de pistes (scores connus) : ruban au meilleur % au centre de la rangée. */
+function orderBestScoreInCenter(
+  items: Individual[],
+  scores: ReadonlyMap<string, number>,
+): Individual[] {
+  if (items.length <= 1) return items;
+  if (!scores.size) return items;
+  const allHaveScore = items.every((i) => scores.has(i.id));
+  if (!allHaveScore) return items;
+  const sorted = [...items].sort((a, b) => scores.get(b.id)! - scores.get(a.id)!);
+  const [best, ...tail] = sorted;
+  const mid = Math.floor(tail.length / 2);
+  return [...tail.slice(0, mid), best, ...tail.slice(mid)];
+}
+
 const GRID_PHOTO_PLANES_MAX_ONLINE = 10;
 const GRID_PHOTO_PLANES_MAX_OFFLINE = 100;
 
@@ -105,6 +128,8 @@ const MARGIN    = 5 * YEAR;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
+/** Zoom initial grille dans les deux volets comparaison (hauteur réduite — éviter débordement vertical). */
+export const COMPARE_VIEW_GRID_DEFAULT_ZOOM = 320;
 /** Un cran de molette (aligné sur la rampe reveal) — handoff grille ↔ individuel. */
 export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
 /**
@@ -150,10 +175,6 @@ const FADE = 0.93;
 function defaultColor(g: Gender)  { return COLORS_DEFAULT[g] ?? COLORS_DEFAULT[Gender.Unknown]; }
 function hoverColor(g: Gender)    { return COLORS_HOVER[g]   ?? COLORS_HOVER[Gender.Unknown]; }
 function selectColor(g: Gender)   { return COLORS_SELECT[g]  ?? COLORS_SELECT[Gender.Unknown]; }
-/** Rubans « candidats fusion » en comparaison — teinte ambre sans confondre avec la sélection. */
-function suggestionRibbonColor(g: Gender) {
-  return defaultColor(g).clone().lerp(new THREE.Color('#f59e0b'), 0.58);
-}
 function dimColor(g: Gender, dark: boolean) { return defaultColor(g).clone().lerp(dark ? BG_DARK : BG_LIGHT, FADE); }
 
 /* ------------------------------------------------------------------ */
@@ -499,6 +520,11 @@ interface GridContentProps {
   selfIndividualId?: string | null;
   showSelfIntroductionBadge?: boolean;
   compareSuggestionIds?: Set<string>;
+  compareSuggestionScores?: ReadonlyMap<string, number> | null;
+  compareFusionCompleted?: boolean;
+  compareProcessedIds?: ReadonlySet<string> | null;
+  onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
+  gridDefaultZoom?: number;
 }
 
 interface PhotoOverlayLayerProps {
@@ -555,7 +581,13 @@ const GridContent: React.FC<GridContentProps> = ({
   selfIndividualId = null,
   showSelfIntroductionBadge = false,
   compareSuggestionIds,
+  compareSuggestionScores = null,
+  compareFusionCompleted = false,
+  compareProcessedIds = null,
+  onCompareProcessedToggle,
+  gridDefaultZoom,
 }) => {
+  const effectiveGridDefaultZoom = gridDefaultZoom ?? GRID_DEFAULT_ZOOM;
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -567,6 +599,8 @@ const GridContent: React.FC<GridContentProps> = ({
   const rel2dTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const REL2D_CACHE_MAX = 120;
   const colsRef = useRef(0);
+  /** Sync layoutCols dès que cols change, même si le bloc reflow matrice est sauté (sinon overlays Text / layout grille désynchronisés). */
+  const lastLayoutColsSyncedRef = useRef(-1);
   const [layoutCols, setLayoutCols] = useState(1);
   const initializedRef = useRef(false);
   const prevZoomRef = useRef<number | null>(null);
@@ -989,12 +1023,9 @@ const GridContent: React.FC<GridContentProps> = ({
       const rd = ribbonData[i];
       const isSelected = rd.individual.id === selectedId;
       const isHovered = i === hoveredRef.current;
-      const isSuggestion =
-        !!compareSuggestionIds?.has(rd.individual.id) && rd.individual.id !== selectedId;
 
       let c: THREE.Color;
       if (isSelected)      c = selectColor(rd.individual.gender);
-      else if (isSuggestion) c = suggestionRibbonColor(rd.individual.gender);
       else if (isHovered)  c = hoverColor(rd.individual.gender);
       else                 c = defaultColor(rd.individual.gender);
       mesh.setColorAt(i, c);
@@ -1017,7 +1048,7 @@ const GridContent: React.FC<GridContentProps> = ({
     revealOpacityDataRef.current = revealOpacityData;
     revealOpacityAttrRef.current = revealAttr;
     prevRevealIndicesRef.current = new Set();
-  }, [ribbonData, selectedId, ribbonGeometry, compareSuggestionIds]);
+  }, [ribbonData, selectedId, ribbonGeometry]);
 
   /* ---- Layout: responsive grid (runs every frame) ---- */
 
@@ -1045,6 +1076,11 @@ const GridContent: React.FC<GridContentProps> = ({
     const cols = Math.max(1, Math.floor(visW / STEP_X));
     const needsReflow = cols !== colsRef.current;
 
+    if (!singleIndividual && ribbonData.length > 0 && cols !== lastLayoutColsSyncedRef.current) {
+      lastLayoutColsSyncedRef.current = cols;
+      setLayoutCols(cols);
+    }
+
     const applyGridDefaultZoomIfNeeded = () => {
       if (!singleIndividual && shouldApplyGridDefaultZoomRef.current) {
         const pending = pendingGridZoomFromIndividualRef.current;
@@ -1057,7 +1093,7 @@ const GridContent: React.FC<GridContentProps> = ({
           pendingGridZoomFromIndividualRef.current = null;
           onOrthoZoomHandoffConsumed?.();
         } else {
-          const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, GRID_DEFAULT_ZOOM));
+          const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, effectiveGridDefaultZoom));
           if (Math.abs(nextZoom - ortho.zoom) > 1e-6) {
             ortho.zoom = nextZoom;
             ortho.updateProjectionMatrix();
@@ -1104,12 +1140,6 @@ const GridContent: React.FC<GridContentProps> = ({
     anchorIndexRef.current = anchorIndex;
 
     colsRef.current = cols;
-    // En vue un seul ruban, éviter le lag de startTransition sur layoutCols (labels / Html).
-    if (singleIndividual && ribbonData.length === 1) {
-      setLayoutCols(cols);
-    } else {
-      startTransition(() => setLayoutCols(cols));
-    }
 
     const dummy = new THREE.Object3D();
     let traitIdx = 0;
@@ -1487,10 +1517,9 @@ const GridContent: React.FC<GridContentProps> = ({
   const ribbonIdleColor = useCallback(
     (indi: Individual) => {
       if (indi.id === selectedId) return selectColor(indi.gender);
-      if (compareSuggestionIds?.has(indi.id)) return suggestionRibbonColor(indi.gender);
       return defaultColor(indi.gender);
     },
-    [selectedId, compareSuggestionIds],
+    [selectedId],
   );
 
   const clearPathHighlight = useCallback((mesh: THREE.InstancedMesh) => {
@@ -1613,7 +1642,7 @@ const GridContent: React.FC<GridContentProps> = ({
     setHovered3DAction(null);
     document.body.style.cursor = 'default';
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId, clearPathHighlight, ribbonIdleColor]);
+  }, [ribbonData, clearPathHighlight, ribbonIdleColor]);
 
   const handleClick = useCallback((e: SceneMouseEvent) => {
     const id = e.instanceId;
@@ -2410,6 +2439,96 @@ const GridContent: React.FC<GridContentProps> = ({
         {hoveredIdx >= 0 && hoveredIdx !== selectedIdx && (
           <RibbonLabel index={hoveredIdx} isHover={true} />
         )}
+        {ribbonData.map((rd, index) => {
+          const indi = rd.individual;
+          const id = indi.id;
+          const cols = layoutCols;
+          if (cols <= 0) return null;
+          const col = index % cols;
+          const row = Math.floor(index / cols);
+          const cx = col * STEP_X;
+          const cy = -row * STEP_Y;
+          const rH = (rd.lifespan / maxLifespan) * CELL_H;
+          /** Haut du ruban (ancrage overlay — évite le centre de la fenêtre / superposition sur la sélection). */
+          const overlayAnchorY = cy + rH / 2 + 0.12 * YEAR;
+          const isSuggestion = !!compareSuggestionIds?.has(id);
+          const score = compareSuggestionScores?.get(id);
+          const anySuggestionRibbonSelected = !!(selectedId && compareSuggestionIds?.has(selectedId));
+          const showPct = isSuggestion && score !== undefined && !anySuggestionRibbonSelected;
+          const isSelected = selectedId === id;
+          const isProcessed = !!compareProcessedIds?.has(id);
+          /** Pas de case « traitée » sur chaque piste : uniquement sur la sélection (cocher) ou pastille si déjà traité ailleurs. */
+          const showTraitCheckbox =
+            !!compareFusionCompleted && !!onCompareProcessedToggle && isSelected;
+          const showTraitDoneDot =
+            !!compareFusionCompleted && !!onCompareProcessedToggle && isProcessed && !isSelected;
+          if (!showPct && !showTraitCheckbox && !showTraitDoneDot) return null;
+          const traitLabel =
+            showTraitCheckbox || showTraitDoneDot ? t('app.compare.traitCheckbox') : '';
+          const pctY = showTraitCheckbox || showTraitDoneDot ? 0.14 * YEAR : 0;
+          const traitDoneY = showPct ? -0.12 * YEAR : 0;
+          const traitCheckboxY = showPct ? -0.16 * YEAR : 0;
+          return (
+            <group key={`ribbon-cmp-overlay-${id}`} position={[cx, overlayAnchorY, 0.35]}>
+              {showPct && (
+                <Text
+                  position={[0, pctY, 0]}
+                  fontSize={3 * YEAR}
+                  color={isDarkMode ? '#fde68a' : '#a16207'}
+                  outlineWidth={isDarkMode ? 0.05 * YEAR : 0.02 * YEAR}
+                  outlineColor={isDarkMode ? '#000000' : '#ffffff'}
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  {`${Math.round((score as number) * 100)}%`}
+                </Text>
+              )}
+              {showTraitDoneDot && (
+                <Text
+                  position={[0, traitDoneY, 0]}
+                  fontSize={2.55 * YEAR}
+                  letterSpacing={0.025}
+                  color={isDarkMode ? '#6ee7b7' : '#047857'}
+                  outlineWidth={isDarkMode ? 0.028 * YEAR : 0.018 * YEAR}
+                  outlineColor={isDarkMode ? '#0f172a' : '#ecfdf5'}
+                  anchorX="center"
+                  anchorY="middle"
+                  characters={traitLabel}
+                >
+                  {traitLabel}
+                </Text>
+              )}
+              {showTraitCheckbox && (
+                <Text
+                  position={[0, traitCheckboxY, 0]}
+                  fontSize={2.5 * YEAR}
+                  letterSpacing={0.03}
+                  color={isDarkMode ? '#f1f5f9' : '#475569'}
+                  outlineWidth={isDarkMode ? 0.025 * YEAR : 0.016 * YEAR}
+                  outlineColor={isDarkMode ? '#0f172a' : '#f8fafc'}
+                  anchorX="center"
+                  anchorY="middle"
+                  characters={`☑☐ ${traitLabel}`}
+                  onPointerDown={(e: SceneMouseEvent) => {
+                    e.stopPropagation();
+                  }}
+                  onClick={(e: SceneMouseEvent) => {
+                    e.stopPropagation();
+                    onCompareProcessedToggle?.(id, !isProcessed);
+                  }}
+                  onPointerOver={() => {
+                    document.body.style.cursor = 'pointer';
+                  }}
+                  onPointerOut={() => {
+                    document.body.style.cursor = 'default';
+                  }}
+                >
+                  {`${isProcessed ? '☑ ' : '☐ '}${traitLabel}`}
+                </Text>
+              )}
+            </group>
+          );
+        })}
       </group>
     </>
   );
@@ -2441,6 +2560,11 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   sceneBackdropColor,
   wheelOnlyOnCanvas = false,
   compareSuggestionIds,
+  compareSuggestionScores = null,
+  compareFusionCompleted = false,
+  compareProcessedIds = null,
+  onCompareProcessedToggle,
+  gridDefaultZoom,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -2543,8 +2667,24 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
         matchesFilters(i, activeFilters, { selectedId, lineageSets, documentsByIndividualId }),
       );
     }
-    return applySortMode(list, sortMode);
-  }, [data, sortMode, selectedIds, activeFilters, singleIndividual, selectedId, documentsByIndividualId]);
+    let ordered = applySortMode(list, sortMode);
+    if (compareSuggestionScores && compareSuggestionScores.size > 0 && ordered.length > 1) {
+      const allScored = ordered.every((i) => compareSuggestionScores.has(i.id));
+      if (allScored) {
+        ordered = orderBestScoreInCenter(ordered, compareSuggestionScores);
+      }
+    }
+    return ordered;
+  }, [
+    data,
+    sortMode,
+    selectedIds,
+    activeFilters,
+    singleIndividual,
+    selectedId,
+    documentsByIndividualId,
+    compareSuggestionScores,
+  ]);
 
   if (!data) return null;
 
@@ -2612,6 +2752,11 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           selfIndividualId={selfIndividualId}
           showSelfIntroductionBadge={showSelfIntroductionBadge}
           compareSuggestionIds={compareSuggestionIds}
+          compareSuggestionScores={compareSuggestionScores}
+          compareFusionCompleted={compareFusionCompleted}
+          compareProcessedIds={compareProcessedIds}
+          onCompareProcessedToggle={onCompareProcessedToggle}
+          gridDefaultZoom={gridDefaultZoom}
         />
       </Canvas>
 

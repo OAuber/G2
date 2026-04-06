@@ -151,6 +151,8 @@ interface DetailsPanelProps {
   reviewFocusSignal?: number;
   /** Incrémenter pour forcer l’onglet Documents (ex. démo Rois d’Europe au chargement). */
   documentsTabSignal?: number;
+  /** Incrémenter pour forcer l’onglet Fiches (ex. clic ruban local en comparaison). */
+  recordsTabSignal?: number;
   /** Démo Rois : à l’ouverture du panneau, afficher l’onglet Documents (ex. mobile). */
   preferDocumentsTabWhenOpening?: boolean;
   selfIdentity: SelfIdentityPublic | null;
@@ -164,8 +166,8 @@ interface DetailsPanelProps {
   onExportIdentityBackup: (password: string) => Promise<void> | void;
   onImportIdentityBackup: (file: File, password: string) => Promise<void> | void;
   onRenounceIdentity: () => void;
-  /** Mode comparaison deux bases : fiches locale et distante sélectionnées dans les bandes 2D. */
-  comparePair?: { local: Individual | null; remote: Individual | null } | null;
+  /** Fiche du pair en lecture seule (détail plein panneau, fond gris). */
+  comparePeerReadOnly?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -430,6 +432,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onReviewGlobalDecision,
   reviewFocusSignal = 0,
   documentsTabSignal = 0,
+  recordsTabSignal = 0,
   preferDocumentsTabWhenOpening = false,
   selfIdentity,
   isIdentifyingSelf,
@@ -441,7 +444,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onExportIdentityBackup,
   onImportIdentityBackup,
   onRenounceIdentity,
-  comparePair = null,
+  comparePeerReadOnly = false,
 }) => {
   const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
@@ -500,6 +503,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [showExportPassword, setShowExportPassword] = useState(false);
   const [showImportPassword, setShowImportPassword] = useState(false);
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
+  const [peerImportFields, setPeerImportFields] = useState(true);
+  const [peerImportDocs, setPeerImportDocs] = useState(true);
   const prevRightPanelOpenRef = useRef(false);
 
   useEffect(() => {
@@ -563,6 +568,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   }, [isCreating, isEditing]);
 
   useEffect(() => {
+    if (recordsTabSignal > 0) setActiveTab('records');
+  }, [recordsTabSignal]);
+
+  useEffect(() => {
     if (identityTabSignal > 0) setActiveTab('identity');
   }, [identityTabSignal]);
 
@@ -591,8 +600,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const handleSaveEdit = () => {
      if(!individual) return;
-     if (!canModifyRecords) {
-       explainIdentityRequiredForEdit();
+     if (!canEditRecords) {
+       explainEditBlocked();
        return;
      }
      const updated: Individual = {
@@ -610,7 +619,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
      setIsEditing(false);
   };
 
-  const bgClass = isDarkMode ? 'bg-black border-slate-800' : 'bg-slate-50 border-slate-300';
+  const bgClass = comparePeerReadOnly
+    ? isDarkMode
+      ? 'bg-slate-800 border-slate-600'
+      : 'bg-slate-200 border-slate-400'
+    : isDarkMode
+      ? 'bg-black border-slate-800'
+      : 'bg-slate-50 border-slate-300';
   const textClass = isDarkMode ? 'text-slate-200' : 'text-slate-800';
   const subTextClass = isDarkMode ? 'text-slate-400' : 'text-slate-500';
   const inputBg = isDarkMode ? 'bg-neutral-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800';
@@ -761,6 +776,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const selectedIndividualId = individual?.id || null;
 
   const renderDocumentRow = (doc: (typeof documents)[number]) => {
+    const allowDocMutation = canModifyRecords && !comparePeerReadOnly;
     const isPhotoDoc = doc.kind === 'photo' || doc.url.startsWith('data:image/');
     const isMirror = doc.groupPhotoIsMirror === true;
     const originLabel =
@@ -792,6 +808,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             ) : null}
           </div>
+          {allowDocMutation ? (
           <div className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]">
             {!isMirror && (
               <button
@@ -876,8 +893,9 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </button>
             )}
           </div>
+          ) : null}
         </div>
-        {!isMirror && editingDocId === doc.id && (
+        {!isMirror && editingDocId === doc.id && allowDocMutation && (
           <div
             className={`mt-1.5 pt-1.5 space-y-1.5 border-t ${
               isDarkMode ? 'border-slate-700' : 'border-slate-200'
@@ -1012,9 +1030,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const selectedRemoteIdentityClaim = selectedIndividualId ? remoteIdentityClaimsByIndividualId?.[selectedIndividualId] : undefined;
   /** Solo / base vide : pas d’identité requise pour créer ou éditer. Avec identité revendiquée, on continue d’exiger le statut « claimed ». */
   const canModifyRecords = !selfIdentity || selfIdentity.status === 'claimed';
+  const canEditRecords = canModifyRecords && !comparePeerReadOnly;
   const explainIdentityRequiredForEdit = useCallback(() => {
     window.alert(t('details.claimIdentityRequiredToEdit'));
   }, [t]);
+  const explainEditBlocked = useCallback(() => {
+    if (comparePeerReadOnly) {
+      window.alert(t('details.peerReadOnlyHint'));
+      return;
+    }
+    explainIdentityRequiredForEdit();
+  }, [comparePeerReadOnly, explainIdentityRequiredForEdit, t]);
 
   const activeCropDoc = useMemo(
     () => (activeCropDocId ? documents.find((d) => d.id === activeCropDocId) : undefined),
@@ -1153,14 +1179,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         {!isCreating && (
             <button
               onClick={() => {
-                if (!canModifyRecords) {
-                  explainIdentityRequiredForEdit();
+                if (!canEditRecords) {
+                  explainEditBlocked();
                   return;
                 }
                 onCreateNew();
               }}
-              className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg} ${!canModifyRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
-              aria-disabled={!canModifyRecords}
+              className={`w-full flex items-center justify-center px-4 py-2 border rounded-md transition-colors ${inputBg} ${!canEditRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
+              aria-disabled={!canEditRecords}
             >
                 <Plus className="w-4 h-4 mr-2" />
                 <span className={`text-sm font-medium ${textClass}`}>{t('details.createNew')}</span>
@@ -1244,66 +1270,40 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </button>
         </div>
 
-        {comparePair && (comparePair.local || comparePair.remote) && (
+        {comparePeerReadOnly && individual && (
           <div
-            className={`grid grid-cols-2 gap-1 rounded border p-2 text-[11px] ${
-              isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-300 bg-slate-50'
+            className={`rounded border p-2.5 text-[11px] space-y-2 ${
+              isDarkMode ? 'border-slate-600 bg-slate-900/50' : 'border-slate-300 bg-slate-100/80'
             }`}
           >
-            <div
-              className={`rounded px-2 py-1.5 min-h-[3rem] ${
-                isDarkMode ? 'bg-slate-950/80 text-slate-100' : 'bg-white text-slate-900'
-              }`}
-            >
-              <div className={`font-semibold uppercase tracking-wide mb-1 ${subTextClass}`}>
-                {t('details.compareLocalColumn')}
-              </div>
-              {comparePair.local ? (
-                <div>
-                  <div className="font-medium">
-                    {`${comparePair.local.givenName || ''} ${comparePair.local.surname || ''}`.trim() ||
-                      comparePair.local.name ||
-                      comparePair.local.id}
-                  </div>
-                  <div className={subTextClass}>
-                    {comparePair.local.birthDate?.year ?? '?'} — {comparePair.local.deathDate?.year ?? '?'}
-                  </div>
-                </div>
-              ) : (
-                <span className={subTextClass}>—</span>
-              )}
-            </div>
-            <div
-              className={`rounded px-2 py-1.5 min-h-[3rem] ${
-                isDarkMode ? 'bg-slate-800 text-slate-100' : 'bg-slate-200/90 text-slate-900'
-              }`}
-            >
-              <div className={`font-semibold uppercase tracking-wide mb-1 ${subTextClass}`}>
-                {t('details.compareRemoteColumn')}
-              </div>
-              {comparePair.remote ? (
-                <div>
-                  <div className="font-medium">
-                    {`${comparePair.remote.givenName || ''} ${comparePair.remote.surname || ''}`.trim() ||
-                      comparePair.remote.name ||
-                      comparePair.remote.id}
-                  </div>
-                  <div className={subTextClass}>
-                    {comparePair.remote.birthDate?.year ?? '?'} — {comparePair.remote.deathDate?.year ?? '?'}
-                  </div>
-                </div>
-              ) : (
-                <span className={subTextClass}>—</span>
-              )}
-            </div>
+            <div className={`font-semibold ${textClass}`}>{t('details.compareImportTitle')}</div>
+            <p className={`${subTextClass} leading-snug`}>{t('details.compareImportHint')}</p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={peerImportFields}
+                onChange={(e) => setPeerImportFields(e.target.checked)}
+                className="h-3.5 w-3.5 shrink-0"
+              />
+              <span className={textClass}>{t('details.compareImportFields')}</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={peerImportDocs}
+                onChange={(e) => setPeerImportDocs(e.target.checked)}
+                className="h-3.5 w-3.5 shrink-0"
+              />
+              <span className={textClass}>{t('details.compareImportDocuments')}</span>
+            </label>
           </div>
         )}
 
         {(isCreating || isEditing) ? (
           <form onSubmit={(e) => {
             e.preventDefault();
-            if (!canModifyRecords) {
-              explainIdentityRequiredForEdit();
+            if (!canEditRecords) {
+              explainEditBlocked();
               return;
             }
             if (isCreating) {
@@ -1483,6 +1483,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 </div>
               )}
 
+              {comparePeerReadOnly ? (
+                <p
+                  className={`text-xs mb-2 leading-snug ${
+                    isDarkMode ? 'text-amber-200/90' : 'text-amber-800'
+                  }`}
+                >
+                  {t('details.peerDocumentsReadOnly')}
+                </p>
+              ) : (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
                 <button
                   type="button"
@@ -1715,6 +1724,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 </>
                 )}
               </div>
+              )}
 
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.documentList')}</div>
@@ -2183,14 +2193,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!canModifyRecords) {
-                    explainIdentityRequiredForEdit();
+                  if (!canEditRecords) {
+                    explainEditBlocked();
                     return;
                   }
                   setIsEditing(true);
                 }}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold ${inputBg} hover:text-blue-500 ${!canModifyRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
-                aria-disabled={!canModifyRecords}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-semibold ${inputBg} hover:text-blue-500 ${!canEditRecords ? 'opacity-50 cursor-not-allowed' : ''}`}
+                aria-disabled={!canEditRecords}
               >
                  <Edit className="w-3.5 h-3.5" />
                  {t('details.edit')}
@@ -2299,14 +2309,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   <div className="flex gap-2">
                     <button
                       onClick={() => {
-                        if (!canModifyRecords) {
-                          explainIdentityRequiredForEdit();
+                        if (!canEditRecords) {
+                          explainEditBlocked();
                           return;
                         }
                         onDeleteIndividual(individual.id);
                         setShowDeleteConfirm(false);
                       }}
-                      className={`flex-1 py-1 rounded text-xs ${canModifyRecords ? 'bg-red-600 text-white' : 'bg-slate-500/50 text-slate-200 cursor-not-allowed'}`}
+                      className={`flex-1 py-1 rounded text-xs ${canEditRecords ? 'bg-red-600 text-white' : 'bg-slate-500/50 text-slate-200 cursor-not-allowed'}`}
                     >
                       {t('details.yes')}
                     </button>
@@ -2316,13 +2326,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               ) : (
                 <button
                   onClick={() => {
-                    if (!canModifyRecords) {
-                      explainIdentityRequiredForEdit();
+                    if (!canEditRecords) {
+                      explainEditBlocked();
                       return;
                     }
                     setShowDeleteConfirm(true);
                   }}
-                  className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded transition-colors text-sm font-bold ${canModifyRecords ? 'bg-red-500/10 border border-red-500/30 text-red-500 hover:bg-red-500/20' : 'bg-slate-500/20 border border-slate-500/30 text-slate-400 cursor-not-allowed'}`}
+                  className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded transition-colors text-sm font-bold ${canEditRecords ? 'bg-red-500/10 border border-red-500/30 text-red-500 hover:bg-red-500/20' : 'bg-slate-500/20 border border-slate-500/30 text-slate-400 cursor-not-allowed'}`}
                 >
                   <Trash2 className="w-4 h-4" /> {t('details.deleteIndividual')}
                 </button>

@@ -99,6 +99,17 @@ const en = {
         'Nothing merges by itself: proposals for people or edits appear in the Details panel; accept or reject each one. « Mark processed » is only a local reminder for your workflow.',
       photosSyncHint:
         'Peer photos and documents are sent after the GEDCOM (in separate batches), when the session policy allows media.',
+      absent: 'Absent',
+      traitCheckbox: 'Processed',
+      mergeBarTitle: 'Merge databases',
+      mergeModalTitle: 'Merge options',
+      mergeOptionAll: 'All data',
+      mergeOptionSelection: 'Selected data',
+      mergeValidate: 'Confirm',
+      mergeCancel: 'Cancel',
+      mergeSelectionStub:
+        'Selection merge: wiring pending (tick fields to import in the Details panel).',
+      mergeAllStub: 'Full merge: wiring pending.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -558,6 +569,13 @@ const en = {
     tabIdentity: 'Identity',
     compareLocalColumn: 'Local person',
     compareRemoteColumn: 'Peer person',
+    peerReadOnlyHint: 'This record is from the peer tree: view only.',
+    compareImportTitle: 'Import into your tree',
+    compareImportHint:
+      'Choose what you plan to import (actual merge wiring will come in a later version).',
+    compareImportFields: 'Vital info and notes',
+    compareImportDocuments: 'Documents and photos',
+    peerDocumentsReadOnly: 'Peer documents are read-only here.',
     noIndividualCreatedOrSelected: 'No individual created nor selected',
     cancel: 'Cancel',
     edit: 'Edit',
