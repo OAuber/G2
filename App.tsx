@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from 'react';
 import { Loader2, X, HelpCircle, Sun, Moon } from 'lucide-react';
-import Sidebar from './components/Sidebar';
+import Sidebar, { applySortMode, computeLineageFilterSets, matchesFilters } from './components/Sidebar';
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
-import CompareDualView2D from './components/compare/CompareDualView2D';
 import CompareMergeModal, { type CompareMergeMode } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
@@ -78,12 +77,19 @@ import {
 } from './app/p2pSyncConstants';
 import { isImageLikeUrl, normalizeDocumentsByIndividual } from './app/normalizeDocuments';
 import {
+  mergeCompareGedcomView,
   namespacePeerCompareGedcom,
   normalizePeerCompareDocumentsFromWire,
+  PEER_COMPARE_ID_PREFIX,
   remapWireMediaDocForPeerCompare,
   wireIndividualIdToPeerCompareId,
 } from './app/peerCompareIdNamespace';
 import { buildPeerCompareSnapshot, peerCompareInboundAllowDocuments } from './app/peerCompareInbound';
+import {
+  clonePeerDocumentsForLocalMerge,
+  mergePeerIndividualIntoLocal,
+  resolveComparePairLocalAndPeer,
+} from './app/comparePairMerge';
 import { useSelfIdentity } from './hooks/useSelfIdentity';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGedcomCore } from './hooks/useGedcomCore';
@@ -423,13 +429,11 @@ function App() {
     }, 500);
   }, [sendP2PSnapshot, peerId]);
 
-  const [selectedCompareLocalId, setSelectedCompareLocalId] = useState<string | null>(null);
-  const [selectedCompareRemoteId, setSelectedCompareRemoteId] = useState<string | null>(null);
-  const prevRemoteAnchorForLocalSuggestionsRef = useRef<string | null>(null);
-  const prevLocalAnchorForRemoteSuggestionsRef = useRef<string | null>(null);
+  /** Ancre de pistes (id local ou `pc:`) ; le candidat retenu sur l’autre base. */
+  const [compareMatchAnchorId, setCompareMatchAnchorId] = useState<string | null>(null);
+  const [compareMatchPairId, setCompareMatchPairId] = useState<string | null>(null);
   const [compareProcessedLocalIds, setCompareProcessedLocalIds] = useState<string[]>([]);
   const [compareProcessedRemoteIds, setCompareProcessedRemoteIds] = useState<string[]>([]);
-  const [comparePanelFocus, setComparePanelFocus] = useState<'local' | 'peer'>('local');
   const [compareMergeModalOpen, setCompareMergeModalOpen] = useState(false);
   const [compareFusionCompleted, setCompareFusionCompleted] = useState(false);
   const pendingInviteRoleRef = useRef<P2PRole | null>(INVITE_BOOTSTRAP.role);
@@ -1803,159 +1807,85 @@ function App() {
     maybeSendGuestLocalTreeToHostAfterCompareReceive,
   ]);
 
-  /** Suggestions de fiches côté pair quand une sélection locale existe (et réciproque). */
-  const compareRemoteMatchSuggestions = useMemo(() => {
-    if (!gedcomData || !peerCompareGedcom || !selectedCompareLocalId) return [];
-    const local = gedcomData.individuals[selectedCompareLocalId];
+  const mergedCompareGedcom = useMemo(
+    () => mergeCompareGedcomView(gedcomData, peerCompareGedcom),
+    [gedcomData, peerCompareGedcom],
+  );
+
+  /** Pistes depuis l’ancre courante (local ou `pc:`) vers l’autre base. */
+  const compareUnifiedMatchSuggestions = useMemo(() => {
+    if (!gedcomData || !peerCompareGedcom || !compareMatchAnchorId) return [];
+    if (compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX)) {
+      const remote = peerCompareGedcom.individuals[compareMatchAnchorId];
+      if (!remote) return [];
+      return rankPeerMatchesForIndividual(remote, Object.values(gedcomData.individuals), {
+        minScore: 0.2,
+        limit: 8,
+      });
+    }
+    const local = gedcomData.individuals[compareMatchAnchorId];
     if (!local) return [];
     return rankPeerMatchesForIndividual(local, Object.values(peerCompareGedcom.individuals), {
-      minScore: 0.35,
+      minScore: 0.2,
       limit: 8,
     });
-  }, [gedcomData, peerCompareGedcom, selectedCompareLocalId]);
+  }, [gedcomData, peerCompareGedcom, compareMatchAnchorId]);
 
-  const compareLocalMatchSuggestions = useMemo(() => {
-    if (!gedcomData || !peerCompareGedcom || !selectedCompareRemoteId) return [];
-    const remote = peerCompareGedcom.individuals[selectedCompareRemoteId];
-    if (!remote) return [];
-    return rankPeerMatchesForIndividual(remote, Object.values(gedcomData.individuals), {
-      minScore: 0.35,
-      limit: 8,
-    });
-  }, [gedcomData, peerCompareGedcom, selectedCompareRemoteId]);
-
-  const compareRemoteSuggestionIdSet = useMemo(
-    () => new Set(compareRemoteMatchSuggestions.map((s) => s.individual.id)),
-    [compareRemoteMatchSuggestions],
-  );
-  const compareLocalSuggestionIdSet = useMemo(
-    () => new Set(compareLocalMatchSuggestions.map((s) => s.individual.id)),
-    [compareLocalMatchSuggestions],
-  );
-  const compareRemoteSuggestionScores = useMemo(
-    () => new Map(compareRemoteMatchSuggestions.map((s) => [s.individual.id, s.score] as const)),
-    [compareRemoteMatchSuggestions],
-  );
-  const compareLocalSuggestionScores = useMemo(
-    () => new Map(compareLocalMatchSuggestions.map((s) => [s.individual.id, s.score] as const)),
-    [compareLocalMatchSuggestions],
+  const compareUnifiedSuggestionIdSet = useMemo(
+    () => new Set(compareUnifiedMatchSuggestions.map((s) => s.individual.id)),
+    [compareUnifiedMatchSuggestions],
   );
 
-  /** Grille locale : pistes + fiche locale ; sans ancre pair, afficher au moins la fiche locale (symétrique du volet pair). */
-  const compareLocalGridSelectedIds = useMemo(() => {
+  const compareUnifiedSuggestionScores = useMemo(
+    () => new Map(compareUnifiedMatchSuggestions.map((s) => [s.individual.id, s.score] as const)),
+    [compareUnifiedMatchSuggestions],
+  );
+
+  /** Grille unifiée : exploration complète sans ancre ; pistes + ancre ; puis uniquement la paire retenue. */
+  const compareUnifiedGridSelectedIds = useMemo(() => {
     if (!compareDualViewActive) return selectedIdsFor2D;
-    if (!selectedCompareRemoteId) {
-      if (selectedCompareLocalId) {
-        return new Set<string>([selectedCompareLocalId]);
-      }
-      return selectedIdsFor2D;
+    if (compareMatchPairId && compareMatchAnchorId) {
+      return new Set<string>([compareMatchAnchorId, compareMatchPairId]);
     }
-    const ids = new Set<string>(compareLocalSuggestionIdSet);
-    if (selectedCompareLocalId) ids.add(selectedCompareLocalId);
-    if (ids.size === 0) return new Set<string>(['__NONE__']);
-    return ids;
+    if (compareMatchAnchorId) {
+      const ids = new Set<string>([compareMatchAnchorId]);
+      for (const s of compareUnifiedMatchSuggestions) ids.add(s.individual.id);
+      return ids;
+    }
+    return undefined;
   }, [
     compareDualViewActive,
-    selectedCompareRemoteId,
     selectedIdsFor2D,
-    compareLocalSuggestionIdSet,
-    selectedCompareLocalId,
+    compareMatchPairId,
+    compareMatchAnchorId,
+    compareUnifiedMatchSuggestions,
   ]);
 
-  /** Grille pair : pistes + fiche pair courante. Sans ancre locale (ex. effacée après changement d’ancre pair), afficher au moins la fiche pair sélectionnée pour ne pas vider la grille au clic parent/enfant. */
-  const compareRemoteGridSelectedIds = useMemo(() => {
-    if (!compareDualViewActive) return undefined;
-    if (!selectedCompareLocalId) {
-      if (selectedCompareRemoteId) {
-        return new Set<string>([selectedCompareRemoteId]);
-      }
-      return new Set<string>(['__NONE__']);
-    }
-    const ids = new Set<string>(compareRemoteSuggestionIdSet);
-    if (selectedCompareRemoteId) ids.add(selectedCompareRemoteId);
-    if (ids.size === 0) return new Set<string>(['__NONE__']);
-    return ids;
-  }, [
-    compareDualViewActive,
-    selectedCompareLocalId,
-    compareRemoteSuggestionIdSet,
-    selectedCompareRemoteId,
-  ]);
+  /** En comparaison, local + pair forment deux composantes connexes : ascendants/descendants par rapport à la sélection excluent les pistes de l’autre base. */
+  const activeFiltersCompareUnified = useMemo(() => {
+    if (!compareDualViewActive) return activeFilters;
+    const next = new Set(activeFilters);
+    next.delete('selected-ancestors');
+    next.delete('selected-descendants');
+    return next;
+  }, [compareDualViewActive, activeFilters]);
 
-  /** Surbrillance ruban locale : ancre pair requise pour le mode pistes, sinon comportement hors comparaison. */
-  const compareLocalRibbonSelectedId = useMemo(() => {
-    if (!compareDualViewActive || !selectedCompareRemoteId) {
-      return selectedCompareLocalId ?? selectedIndividual?.id ?? null;
-    }
-    return selectedCompareLocalId ?? null;
-  }, [compareDualViewActive, selectedCompareRemoteId, selectedCompareLocalId, selectedIndividual?.id]);
-
-  /** Surbrillance ruban pair : toujours la fiche pair affichée (y compris navigation hors pistes). */
-  const compareRemoteRibbonSelectedId = useMemo(() => {
-    if (!compareDualViewActive) return selectedCompareRemoteId;
-    if (!selectedCompareLocalId) return selectedCompareRemoteId;
-    return selectedCompareRemoteId ?? null;
-  }, [compareDualViewActive, selectedCompareLocalId, selectedCompareRemoteId]);
-
-  /** Symétrie : filtres ascendants/descendants seulement quand les deux ancres sont posées (évite grilles vides d’un côté). */
-  const activeFiltersCompareRemote = useMemo(() => {
-    if (!selectedCompareRemoteId || !selectedCompareLocalId) {
-      const next = new Set(activeFilters);
-      next.delete('selected-ancestors');
-      next.delete('selected-descendants');
-      return next;
-    }
-    return activeFilters;
-  }, [activeFilters, selectedCompareRemoteId, selectedCompareLocalId]);
-
-  const activeFiltersCompareLocal = useMemo(() => {
-    if (!selectedCompareLocalId || !selectedCompareRemoteId) {
-      const next = new Set(activeFilters);
-      next.delete('selected-ancestors');
-      next.delete('selected-descendants');
-      return next;
-    }
-    return activeFilters;
-  }, [activeFilters, selectedCompareLocalId, selectedCompareRemoteId]);
-
-  const detailsPanelIndividual = useMemo(() => {
-    if (!compareDualViewActive) return selectedIndividual;
-    if (
-      comparePanelFocus === 'peer' &&
-      selectedCompareRemoteId &&
-      peerCompareGedcom?.individuals[selectedCompareRemoteId]
-    ) {
-      return peerCompareGedcom.individuals[selectedCompareRemoteId];
-    }
-    return selectedIndividual;
-  }, [
-    compareDualViewActive,
-    comparePanelFocus,
-    selectedIndividual,
-    selectedCompareRemoteId,
-    peerCompareGedcom,
-  ]);
+  const detailsPanelIndividual = useMemo(() => selectedIndividual, [selectedIndividual]);
 
   const detailsPanelData = useMemo(() => {
-    if (!compareDualViewActive) return gedcomData;
-    if (comparePanelFocus === 'peer') return peerCompareGedcom;
+    if (!compareDualViewActive || !selectedIndividual) return gedcomData;
+    if (selectedIndividual.id.startsWith(PEER_COMPARE_ID_PREFIX)) return peerCompareGedcom;
     return gedcomData;
-  }, [compareDualViewActive, comparePanelFocus, gedcomData, peerCompareGedcom]);
+  }, [compareDualViewActive, selectedIndividual, gedcomData, peerCompareGedcom]);
 
   const detailsPanelDocuments = useMemo(() => {
     const indi = detailsPanelIndividual;
     if (!indi) return [];
-    if (compareDualViewActive && comparePanelFocus === 'peer') {
+    if (indi.id.startsWith(PEER_COMPARE_ID_PREFIX)) {
       return peerCompareDocumentsByIndividualId[indi.id] || [];
     }
     return documentsByIndividualId[indi.id] || [];
-  }, [
-    compareDualViewActive,
-    comparePanelFocus,
-    detailsPanelIndividual,
-    documentsByIndividualId,
-    peerCompareDocumentsByIndividualId,
-  ]);
+  }, [detailsPanelIndividual, documentsByIndividualId, peerCompareDocumentsByIndividualId]);
 
   const peerComparePrimaryPhotoUrlById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -1974,6 +1904,64 @@ function App() {
 
   const renderedPrimaryPhotoUrlById = shouldDeferInviteMediaRendering ? {} : primaryPhotoUrlById;
   const renderedDocumentsByIndividualId = shouldDeferInviteMediaRendering ? {} : documentsByIndividualId;
+
+  const mergedDocumentsForCompareUi = useMemo(() => {
+    if (!compareDualViewActive) return renderedDocumentsByIndividualId;
+    return { ...renderedDocumentsByIndividualId, ...peerCompareDocumentsByIndividualId };
+  }, [compareDualViewActive, renderedDocumentsByIndividualId, peerCompareDocumentsByIndividualId]);
+
+  const mergedPrimaryPhotoUrlByIdForCompareGrid = useMemo(() => {
+    if (!compareDualViewActive) return renderedPrimaryPhotoUrlById;
+    return { ...renderedPrimaryPhotoUrlById, ...peerComparePrimaryPhotoUrlById };
+  }, [compareDualViewActive, renderedPrimaryPhotoUrlById, peerComparePrimaryPhotoUrlById]);
+
+  const compareMergedSidebarIndividuals = useMemo(() => {
+    if (!compareDualViewActive || !mergedCompareGedcom) return [];
+    let list = Object.values(mergedCompareGedcom.individuals) as Individual[];
+    const lineageSets = computeLineageFilterSets(mergedCompareGedcom, selectedIndividual?.id);
+    const filters = activeFiltersCompareUnified;
+    if (filters.size > 0) {
+      list = list.filter((i) =>
+        matchesFilters(i, filters, {
+          selectedId: selectedIndividual?.id,
+          lineageSets,
+          documentsByIndividualId: mergedDocumentsForCompareUi,
+        }),
+      );
+    }
+    return applySortMode(list, sortMode);
+  }, [
+    compareDualViewActive,
+    mergedCompareGedcom,
+    sortMode,
+    selectedIndividual?.id,
+    activeFiltersCompareUnified,
+    mergedDocumentsForCompareUi,
+  ]);
+
+  const compareProcessedIdsMerged = useMemo(
+    () => new Set([...compareProcessedLocalIds, ...compareProcessedRemoteIds]),
+    [compareProcessedLocalIds, compareProcessedRemoteIds],
+  );
+
+  /** Vue 3D : une seule base à la fois — celle de l’individu sélectionné (local ou pair). */
+  const scene3dGedcomData = useMemo(() => {
+    if (!compareDualViewActive) return gedcomData;
+    if (selectedIndividual?.id.startsWith(PEER_COMPARE_ID_PREFIX)) return peerCompareGedcom;
+    return gedcomData;
+  }, [compareDualViewActive, selectedIndividual?.id, gedcomData, peerCompareGedcom]);
+
+  const scene3dPrimaryPhotoUrlById = useMemo(() => {
+    if (!compareDualViewActive) return renderedPrimaryPhotoUrlById;
+    if (selectedIndividual?.id.startsWith(PEER_COMPARE_ID_PREFIX)) return peerComparePrimaryPhotoUrlById;
+    return renderedPrimaryPhotoUrlById;
+  }, [compareDualViewActive, selectedIndividual?.id, renderedPrimaryPhotoUrlById, peerComparePrimaryPhotoUrlById]);
+
+  const scene3dDocumentsByIndividualId = useMemo(() => {
+    if (!compareDualViewActive) return renderedDocumentsByIndividualId;
+    if (selectedIndividual?.id.startsWith(PEER_COMPARE_ID_PREFIX)) return peerCompareDocumentsByIndividualId;
+    return renderedDocumentsByIndividualId;
+  }, [compareDualViewActive, selectedIndividual?.id, renderedDocumentsByIndividualId, peerCompareDocumentsByIndividualId]);
 
   const withPrimaryPhotosApplied = useCallback((data: GedcomData | null) => {
     if (!data) return data;
@@ -2346,8 +2334,8 @@ function App() {
     inviteSharedTreeSessionTokenRef.current = null;
     setPeerCompareGedcom(null);
     setPeerCompareDocumentsByIndividualId({});
-    setSelectedCompareLocalId(null);
-    setSelectedCompareRemoteId(null);
+    setCompareMatchAnchorId(null);
+    setCompareMatchPairId(null);
     setCompareProcessedLocalIds([]);
     setCompareProcessedRemoteIds([]);
     inviteIntroductionContextRef.current = null;
@@ -2398,8 +2386,8 @@ function App() {
                 compareGuestReciprocalSentRef.current = false;
                 setPeerCompareGedcom(null);
                 setPeerCompareDocumentsByIndividualId({});
-                setSelectedCompareLocalId(null);
-                setSelectedCompareRemoteId(null);
+                setCompareMatchAnchorId(null);
+                setCompareMatchPairId(null);
                 setCompareProcessedLocalIds([]);
                 setCompareProcessedRemoteIds([]);
                 remoteHostSelfIdentityRef.current = null;
@@ -4181,37 +4169,73 @@ function App() {
     }
   };
 
-  const handleCompareInspectLocal = useCallback(
+  const handleCompareInspectUnified = useCallback(
     (indi: Individual) => {
       if (isCreating) setIsCreating(false);
-      const currentIndi = gedcomData?.individuals[indi.id] || indi;
-      setComparePanelFocus('local');
-      setSelectedCompareLocalId(currentIndi.id);
+      const id = indi.id;
+      const inLocal = !!gedcomData?.individuals[id];
+      const inPeer = !!peerCompareGedcom?.individuals[id];
+      if (!inLocal && !inPeer) return;
+      const currentIndi = (inLocal ? gedcomData!.individuals[id] : peerCompareGedcom!.individuals[id]) as Individual;
       setSelectedIndividual(currentIndi);
       if (compareDualViewActive && viewMode === '2D') {
         setRightPanelOpen(true);
         setRecordsTabSignal((s) => s + 1);
       }
       if (viewMode === '3D') {
-        setRootIndividual(currentIndi);
-        setAutoLayoutMode('all');
-        setSelectedIdsFor2D((prev) => new Set(prev).add(currentIndi.id));
+        const dataFor3d = id.startsWith(PEER_COMPARE_ID_PREFIX) ? peerCompareGedcom : gedcomData;
+        const ind = dataFor3d?.individuals[id];
+        if (ind) {
+          setRootIndividual(ind);
+          setAutoLayoutMode('all');
+          setSelectedIdsFor2D((prev) => new Set(prev).add(id));
+        }
       } else if (selectedIdsFor2D.has('__NONE__')) {
-        setSelectedIdsFor2D(new Set([currentIndi.id]));
+        setSelectedIdsFor2D(new Set([id]));
       }
+
+      if (!compareDualViewActive || viewMode !== '2D') return;
+
+      if (compareMatchPairId && compareMatchAnchorId) {
+        if (id === compareMatchAnchorId || id === compareMatchPairId) return;
+        setCompareMatchPairId(null);
+        setCompareMatchAnchorId(id);
+        return;
+      }
+
+      if (!compareMatchAnchorId) {
+        setCompareMatchAnchorId(id);
+        setCompareMatchPairId(null);
+        return;
+      }
+
+      if (id === compareMatchAnchorId) return;
+
+      if (compareUnifiedSuggestionIdSet.has(id)) {
+        setCompareMatchPairId(id);
+        return;
+      }
+
+      setCompareMatchAnchorId(id);
+      setCompareMatchPairId(null);
     },
-    [gedcomData, isCreating, viewMode, selectedIdsFor2D, compareDualViewActive],
+    [
+      isCreating,
+      gedcomData,
+      peerCompareGedcom,
+      compareDualViewActive,
+      viewMode,
+      selectedIdsFor2D,
+      compareMatchPairId,
+      compareMatchAnchorId,
+      compareUnifiedSuggestionIdSet,
+    ],
   );
 
-  const handleCompareInspectRemote = useCallback(
-    (indi: Individual) => {
-      if (!peerCompareGedcom?.individuals[indi.id]) return;
-      const currentIndi = peerCompareGedcom.individuals[indi.id];
-      setComparePanelFocus('peer');
-      setSelectedCompareRemoteId(currentIndi.id);
-    },
-    [peerCompareGedcom],
-  );
+  const handleCompareIgnorePair = useCallback(() => {
+    setCompareMatchPairId(null);
+    setCompareMatchAnchorId(null);
+  }, []);
 
   const handleToggleCompareLocalProcessed = useCallback((individualId: string, processed: boolean) => {
     if (processed) {
@@ -4229,89 +4253,122 @@ function App() {
     }
   }, []);
 
+  const handleToggleCompareProcessedUnified = useCallback(
+    (individualId: string, processed: boolean) => {
+      if (individualId.startsWith(PEER_COMPARE_ID_PREFIX)) {
+        handleToggleCompareRemoteProcessed(individualId, processed);
+      } else {
+        handleToggleCompareLocalProcessed(individualId, processed);
+      }
+    },
+    [handleToggleCompareRemoteProcessed, handleToggleCompareLocalProcessed],
+  );
+
   const handleCompareMergeConfirm = useCallback(
     (mode: CompareMergeMode) => {
       setCompareMergeModalOpen(false);
-      setCompareFusionCompleted(true);
-      if (mode === 'selection') {
-        showTransientToast('success', t('app.compare.mergeSelectionStub'), 3200);
+      if (ephemeralGuestActive) {
+        showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
         return;
       }
-      showTransientToast('success', t('app.compare.mergeAllStub'), 3200);
+      if (mode === 'all') {
+        showTransientToast('success', t('app.compare.mergeAllStub'), 4200);
+        return;
+      }
+      if (!originalGedcomData || !peerCompareGedcom) {
+        showTransientToast('error', t('app.compare.mergeNeedsTwoBases'), 3600);
+        return;
+      }
+      if (!compareMatchAnchorId || !compareMatchPairId) {
+        showTransientToast('error', t('app.compare.mergeMissingPair'), 3200);
+        return;
+      }
+      const resolved = resolveComparePairLocalAndPeer(compareMatchAnchorId, compareMatchPairId);
+      if (!resolved) {
+        showTransientToast('error', t('app.compare.mergeInvalidPair'), 3200);
+        return;
+      }
+      const { localId, peerPcId } = resolved;
+      const localInd = originalGedcomData.individuals[localId];
+      const peerInd = peerCompareGedcom.individuals[peerPcId];
+      if (!localInd || !peerInd) {
+        showTransientToast('error', t('app.compare.mergeMissingPair'), 3200);
+        return;
+      }
+
+      const mergedInd = mergePeerIndividualIntoLocal(localInd, peerInd);
+      const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
+      newData.individuals[localId] = mergedInd;
+      setOriginalGedcomData(newData);
+      setTimeout(() => {
+        setNormalizedGedcomData(normalizeGedcom(newData));
+      }, 10);
+
+      const localDocs = documentsByIndividualId[localId] ?? [];
+      const peerDocs = peerCompareDocumentsByIndividualId[peerPcId] ?? [];
+      const imported = clonePeerDocumentsForLocalMerge(peerDocs, peerPcId, localId, localDocs);
+      if (imported.length > 0) {
+        setDocumentsByIndividualId((prev) => ({
+          ...prev,
+          [localId]: [...localDocs, ...imported],
+        }));
+      }
+
+      handleToggleCompareLocalProcessed(localId, true);
+      handleToggleCompareRemoteProcessed(peerPcId, true);
+      setCompareFusionCompleted(true);
+      setCompareMatchAnchorId(null);
+      setCompareMatchPairId(null);
+      setSelectedIndividual(mergedInd);
+      setRootIndividual(mergedInd);
+      setSelectedIdsFor2D(new Set([localId]));
+      setRightPanelOpen(true);
+      handleSetDisplayMode('2d-individual');
+      showTransientToast('success', t('app.compare.mergeSelectionDone'), 4800);
     },
-    [showTransientToast, t],
+    [
+      ephemeralGuestActive,
+      showTransientToast,
+      t,
+      originalGedcomData,
+      peerCompareGedcom,
+      compareMatchAnchorId,
+      compareMatchPairId,
+      documentsByIndividualId,
+      peerCompareDocumentsByIndividualId,
+      setOriginalGedcomData,
+      setNormalizedGedcomData,
+      setDocumentsByIndividualId,
+      handleToggleCompareLocalProcessed,
+      handleToggleCompareRemoteProcessed,
+      handleSetDisplayMode,
+    ],
   );
 
   useEffect(() => {
     if (!compareDualViewActive) {
-      setComparePanelFocus('local');
       setCompareFusionCompleted(false);
-      prevRemoteAnchorForLocalSuggestionsRef.current = null;
-      prevLocalAnchorForRemoteSuggestionsRef.current = null;
+      setCompareMatchAnchorId(null);
+      setCompareMatchPairId(null);
     }
   }, [compareDualViewActive]);
 
   useEffect(() => {
     if (!compareDualViewActive || !gedcomData) return;
-    if (selectedCompareLocalId) return;
+    if (compareMatchAnchorId) return;
     const tid = pendingInviteTargetIndividualId;
     if (tid && gedcomData.individuals[tid]) {
       const indi = gedcomData.individuals[tid];
-      setSelectedCompareLocalId(tid);
+      setCompareMatchAnchorId(tid);
       setSelectedIndividual(indi);
       setRootIndividual(indi);
     }
-  }, [
-    compareDualViewActive,
-    gedcomData,
-    pendingInviteTargetIndividualId,
-    selectedCompareLocalId,
-  ]);
-
-  /** Uniquement quand l’ancre pair change (nouvelle fiche pair / navigation), pas à chaque clic parent-enfant sur le même côté. */
-  useEffect(() => {
-    if (!compareDualViewActive) return;
-    const anchor = selectedCompareRemoteId;
-    const prev = prevRemoteAnchorForLocalSuggestionsRef.current;
-    if (prev === anchor) return;
-    prevRemoteAnchorForLocalSuggestionsRef.current = anchor;
-    if (anchor == null) return;
-    if (prev === null) return;
-    if (compareLocalSuggestionIdSet.size === 0) return;
-    if (selectedCompareLocalId && !compareLocalSuggestionIdSet.has(selectedCompareLocalId)) {
-      setSelectedCompareLocalId(null);
-    }
-  }, [
-    compareDualViewActive,
-    selectedCompareRemoteId,
-    compareLocalSuggestionIdSet,
-    selectedCompareLocalId,
-  ]);
-
-  /** Uniquement quand l’ancre locale change — évite d’effacer la sélection pair au clic parent/enfant (hors liste de pistes). */
-  useEffect(() => {
-    if (!compareDualViewActive) return;
-    const anchor = selectedCompareLocalId;
-    const prev = prevLocalAnchorForRemoteSuggestionsRef.current;
-    if (prev === anchor) return;
-    prevLocalAnchorForRemoteSuggestionsRef.current = anchor;
-    if (anchor == null) return;
-    if (prev === null) return;
-    if (compareRemoteSuggestionIdSet.size === 0) return;
-    if (selectedCompareRemoteId && !compareRemoteSuggestionIdSet.has(selectedCompareRemoteId)) {
-      setSelectedCompareRemoteId(null);
-    }
-  }, [
-    compareDualViewActive,
-    selectedCompareLocalId,
-    compareRemoteSuggestionIdSet,
-    selectedCompareRemoteId,
-  ]);
+  }, [compareDualViewActive, gedcomData, pendingInviteTargetIndividualId, compareMatchAnchorId]);
 
   /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
   const handle3DRibbonOpen2DIndividual = (id: string) => {
     if (isCreating) setIsCreating(false);
-    const currentIndi = gedcomData?.individuals[id];
+    const currentIndi = gedcomData?.individuals[id] ?? peerCompareGedcom?.individuals[id];
     if (!currentIndi) return;
     setSelectedIndividual(currentIndi);
     setRootIndividual(currentIndi);
@@ -6754,10 +6811,14 @@ function App() {
         compareListMode={compareDualViewActive && viewMode === '2D'}
         compareRemoteData={peerCompareGedcom}
         compareRemoteDocumentsByIndividualId={peerCompareDocumentsByIndividualId}
-        selectedCompareRemoteId={selectedCompareRemoteId}
-        selectedCompareLocalId={selectedCompareLocalId}
-        onCompareSelectLocal={handleCompareInspectLocal}
-        onCompareSelectRemote={handleCompareInspectRemote}
+        selectedCompareRemoteId={null}
+        selectedCompareLocalId={null}
+        onCompareSelectLocal={handleCompareInspectUnified}
+        onCompareSelectRemote={handleCompareInspectUnified}
+        compareMergedIndividuals={
+          compareDualViewActive && viewMode === '2D' ? compareMergedSidebarIndividuals : null
+        }
+        onCompareSelectUnified={handleCompareInspectUnified}
         compareProcessedLocalIds={compareProcessedLocalIds}
         compareProcessedRemoteIds={compareProcessedRemoteIds}
       />
@@ -6778,9 +6839,9 @@ function App() {
             key={`scene3d-${webglRecoveryKey}`}
             rootIndividual={rootIndividual} 
             selectedId={selectedIndividual?.id}
-            data={gedcomData} 
-            primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
-            documentsByIndividualId={renderedDocumentsByIndividualId}
+            data={scene3dGedcomData} 
+            primaryPhotoUrlById={scene3dPrimaryPhotoUrlById}
+            documentsByIndividualId={scene3dDocumentsByIndividualId}
             showBoxes={showBoxes}
             showAxes={showAxes}
             onIndividualClick={handleInspectIndividual}
@@ -6807,108 +6868,69 @@ function App() {
             onWebGLContextLost={handleWebGLContextLost}
           />
           </Suspense>
-        ) : compareDualViewActive && viewMode === '2D' ? (
+        ) : compareDualViewActive && viewMode === '2D' && !is2dIndividual ? (
           <>
-            <CompareDualView2D
-              isDarkMode={isDarkMode}
-              onLocalPaneActivate={() => setComparePanelFocus('local')}
-              onPeerPaneActivate={() => setComparePanelFocus('peer')}
-              mergeBarAriaLabel={t('app.compare.mergeBarTitle')}
-              onMergeBarClick={() => setCompareMergeModalOpen(true)}
-              localEmptyHint={
-                !gedcomData ? (
-                  <div
-                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
-                      isDarkMode ? 'bg-slate-950 text-slate-300' : 'bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    {t('app.compare.importLocalHint')}
+            {mergedCompareGedcom && Object.keys(mergedCompareGedcom.individuals).length > 0 ? (
+              <div className="absolute inset-0 min-h-0">
+                {compareMatchAnchorId && compareMatchPairId && (
+                  <div className="pointer-events-auto fixed top-14 left-1/2 z-[115] flex max-w-[min(100%,24rem)] -translate-x-1/2 flex-col items-center gap-1 px-2">
+                    <button
+                      type="button"
+                      onClick={() => setCompareMergeModalOpen(true)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-md ${
+                        isDarkMode
+                          ? 'border-sky-700 bg-slate-900/95 text-sky-200 hover:bg-slate-800'
+                          : 'border-sky-400 bg-white/95 text-sky-800 hover:bg-sky-50'
+                      }`}
+                    >
+                      {t('app.compare.mergeBarOpen')}
+                    </button>
+                    <span className={`text-[10px] text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                      {t('app.compare.mergeBarHint')}
+                    </span>
                   </div>
-                ) : null
-              }
-              peerEmptyHint={
-                !peerCompareGedcom ? (
-                  <div
-                    className={`absolute inset-0 flex items-center justify-center p-4 text-center text-sm ${
-                      isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-300 text-slate-800'
-                    }`}
-                  >
-                    {t('app.compare.waitingPeerGedcom')}
-                  </div>
-                ) : null
-              }
-              localScene={
-                gedcomData ? (
-                  <Scene2DGrid
-                    key={`scene2d-compare-local-grid-${webglRecoveryKey}`}
-                    data={gedcomData}
-                    selectedId={compareLocalRibbonSelectedId}
-                    selectedIds={compareLocalGridSelectedIds}
-                    primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
-                    documentsByIndividualId={renderedDocumentsByIndividualId}
-                    onIndividualClick={handleCompareInspectLocal}
-                    onExpandAndSwitch3D={handleExpandAndSwitch3D}
-                    onRequest2DModeSwitch={undefined}
-                    onOrthoZoomSample={handle2DOrthoZoomSample}
-                    orthoZoomHandoff={null}
-                    onOrthoZoomHandoffConsumed={undefined}
-                    isDarkMode={isDarkMode}
-                    relationshipRevealEnabled={relationshipRevealEnabled}
-                    sortMode={sortMode}
-                    activeFilters={activeFiltersCompareLocal}
-                    leftPanelOpen={leftPanelOpen}
-                    rightPanelOpen={rightPanelOpen}
-                    singleIndividual={false}
-                    onWebGLContextLost={handleWebGLContextLost}
-                    selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
-                    showSelfIntroductionBadge={!!selfIdentity?.introduction}
-                    wheelOnlyOnCanvas
-                    compareSuggestionIds={compareLocalSuggestionIdSet}
-                    compareSuggestionScores={compareLocalSuggestionScores}
-                    compareFusionCompleted={compareFusionCompleted}
-                    compareProcessedIds={new Set(compareProcessedLocalIds)}
-                    onCompareProcessedToggle={handleToggleCompareLocalProcessed}
-                    gridDefaultZoom={COMPARE_VIEW_GRID_DEFAULT_ZOOM}
-                  />
-                ) : null
-              }
-              remoteScene={
-                peerCompareGedcom ? (
-                  <Scene2DGrid
-                    key={`scene2d-compare-remote-grid-${webglRecoveryKey}`}
-                    data={peerCompareGedcom}
-                    selectedId={compareRemoteRibbonSelectedId}
-                    selectedIds={compareRemoteGridSelectedIds}
-                    primaryPhotoUrlById={peerComparePrimaryPhotoUrlById}
-                    documentsByIndividualId={peerCompareDocumentsByIndividualId}
-                    onIndividualClick={handleCompareInspectRemote}
-                    onExpandAndSwitch3D={undefined}
-                    onRequest2DModeSwitch={undefined}
-                    onOrthoZoomSample={handle2DOrthoZoomSample}
-                    orthoZoomHandoff={null}
-                    onOrthoZoomHandoffConsumed={undefined}
-                    isDarkMode={isDarkMode}
-                    relationshipRevealEnabled={relationshipRevealEnabled}
-                    sortMode={sortMode}
-                    activeFilters={activeFiltersCompareRemote}
-                    leftPanelOpen={leftPanelOpen}
-                    rightPanelOpen={rightPanelOpen}
-                    singleIndividual={false}
-                    onWebGLContextLost={handleWebGLContextLost}
-                    selfIndividualId={null}
-                    showSelfIntroductionBadge={false}
-                    sceneBackdropColor={isDarkMode ? '#1e293b' : '#cbd5e1'}
-                    wheelOnlyOnCanvas
-                    compareSuggestionIds={compareRemoteSuggestionIdSet}
-                    compareSuggestionScores={compareRemoteSuggestionScores}
-                    compareFusionCompleted={compareFusionCompleted}
-                    compareProcessedIds={new Set(compareProcessedRemoteIds)}
-                    onCompareProcessedToggle={handleToggleCompareRemoteProcessed}
-                    gridDefaultZoom={COMPARE_VIEW_GRID_DEFAULT_ZOOM}
-                  />
-                ) : null
-              }
-            />
+                )}
+                <Scene2DGrid
+                  key={`scene2d-compare-unified-${webglRecoveryKey}`}
+                  data={mergedCompareGedcom}
+                  selectedId={selectedIndividual?.id ?? null}
+                  selectedIds={compareUnifiedGridSelectedIds}
+                  primaryPhotoUrlById={mergedPrimaryPhotoUrlByIdForCompareGrid}
+                  documentsByIndividualId={mergedDocumentsForCompareUi}
+                  onIndividualClick={handleCompareInspectUnified}
+                  onExpandAndSwitch3D={handleExpandAndSwitch3D}
+                  onRequest2DModeSwitch={undefined}
+                  onOrthoZoomSample={handle2DOrthoZoomSample}
+                  orthoZoomHandoff={null}
+                  onOrthoZoomHandoffConsumed={undefined}
+                  isDarkMode={isDarkMode}
+                  relationshipRevealEnabled={relationshipRevealEnabled}
+                  sortMode={sortMode}
+                  activeFilters={activeFiltersCompareUnified}
+                  leftPanelOpen={leftPanelOpen}
+                  rightPanelOpen={rightPanelOpen}
+                  singleIndividual={false}
+                  onWebGLContextLost={handleWebGLContextLost}
+                  selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
+                  showSelfIntroductionBadge={!!selfIdentity?.introduction}
+                  compareSuggestionIds={compareUnifiedSuggestionIdSet}
+                  compareSuggestionScores={compareUnifiedSuggestionScores}
+                  compareFusionCompleted={compareFusionCompleted}
+                  compareProcessedIds={compareProcessedIdsMerged}
+                  onCompareProcessedToggle={handleToggleCompareProcessedUnified}
+                  gridDefaultZoom={COMPARE_VIEW_GRID_DEFAULT_ZOOM}
+                  comparePeerRibbonBackdrop
+                />
+              </div>
+            ) : (
+              <div
+                className={`absolute inset-0 flex items-center justify-center p-6 text-center text-sm ${
+                  isDarkMode ? 'bg-black text-slate-300' : 'bg-slate-100 text-slate-800'
+                }`}
+              >
+                {!gedcomData ? t('app.compare.importLocalHint') : t('app.compare.waitingPeerGedcom')}
+              </div>
+            )}
             <CompareMergeModal
               isOpen={compareMergeModalOpen}
               isDarkMode={isDarkMode}
@@ -6917,8 +6939,10 @@ function App() {
               optionSelection={t('app.compare.mergeOptionSelection')}
               validateLabel={t('app.compare.mergeValidate')}
               cancelLabel={t('app.compare.mergeCancel')}
+              ignoreLabel={t('app.compare.mergeIgnorePair')}
               onCancel={() => setCompareMergeModalOpen(false)}
               onConfirm={handleCompareMergeConfirm}
+              onIgnorePair={handleCompareIgnorePair}
             />
           </>
         ) : is2dIndividual ? (
@@ -7209,7 +7233,10 @@ function App() {
         onExportIdentityBackup={handleExportIdentityBackup}
         onImportIdentityBackup={handleImportIdentityBackup}
         onRenounceIdentity={handleRenounceIdentity}
-        comparePeerReadOnly={compareDualViewActive && comparePanelFocus === 'peer'}
+        comparePeerReadOnly={
+          compareDualViewActive &&
+          (selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ?? false)
+        }
       />
 
       {/* --- Top Panel (Share) --- */}
@@ -7281,7 +7308,7 @@ function App() {
         onSetDisplayMode={handleSetDisplayMode}
         isDarkMode={isDarkMode}
         onOpenHelp={() => setIsHelpOpen(true)}
-        hasData={!!gedcomData}
+        hasData={!!gedcomData || !!peerCompareGedcom}
         onMouseEnter={handleUIEnter}
         onMouseLeave={handleUILeave}
         autoLayoutMode={autoLayoutMode}

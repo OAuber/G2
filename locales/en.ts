@@ -107,9 +107,18 @@ const en = {
       mergeOptionSelection: 'Selected data',
       mergeValidate: 'Confirm',
       mergeCancel: 'Cancel',
+      mergeIgnorePair: 'Ignore this match',
+      mergeBarOpen: 'Merge the two selected individuals',
+      mergeBarHint: 'Two individuals are selected — open merge options.',
+      mergeUnifiedListHint: 'Merged list (local and peer) — same sort and filters as the grid.',
       mergeSelectionStub:
         'Selection merge: wiring pending (tick fields to import in the Details panel).',
-      mergeAllStub: 'Full merge: wiring pending.',
+      mergeSelectionDone:
+        'Merge saved to your local tree: empty fields filled from the peer; documents imported. Switched to 2D individual view.',
+      mergeNeedsTwoBases: 'Load a local GEDCOM to save the merge.',
+      mergeMissingPair: 'Pair not found — pick an anchor and a candidate again.',
+      mergeInvalidPair: 'Merge requires one local individual and one peer individual (pc: prefix).',
+      mergeAllStub: 'Full merge of all suggestions is not available yet; use merge for the current selection.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',

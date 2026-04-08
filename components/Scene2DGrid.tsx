@@ -6,6 +6,7 @@ import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { findRelationshipPath } from '../services/relationshipPath';
 import { matchesFilters, applySortMode, computeLineageFilterSets } from './Sidebar';
 import { useI18n } from '../i18n';
+import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
 
 type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
 
@@ -48,6 +49,8 @@ interface Scene2DGridProps {
   onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
   /** Remplace le zoom grille par défaut (ex. volets comparaison plus bas). */
   gridDefaultZoom?: number;
+  /** Comparaison unifiée : rectangle gris derrière chaque ruban issu de la base pair (`pc:`). */
+  comparePeerRibbonBackdrop?: boolean;
 }
 
 interface RibbonDocument {
@@ -525,6 +528,7 @@ interface GridContentProps {
   compareProcessedIds?: ReadonlySet<string> | null;
   onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
   gridDefaultZoom?: number;
+  comparePeerRibbonBackdrop?: boolean;
 }
 
 interface PhotoOverlayLayerProps {
@@ -586,10 +590,12 @@ const GridContent: React.FC<GridContentProps> = ({
   compareProcessedIds = null,
   onCompareProcessedToggle,
   gridDefaultZoom,
+  comparePeerRibbonBackdrop = false,
 }) => {
   const effectiveGridDefaultZoom = gridDefaultZoom ?? GRID_DEFAULT_ZOOM;
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
+  const ribbonBackdropMeshRef = useRef<THREE.InstancedMesh>(null);
   const traitsMeshRef = useRef<THREE.InstancedMesh>(null);
   const hoveredRef = useRef<number>(-1);
   const [hoveredIdx, setHoveredIdx] = useState(-1);
@@ -894,7 +900,24 @@ const GridContent: React.FC<GridContentProps> = ({
     return g;
   }, []);
 
+  const ribbonBackdropGeometry = useMemo(() => {
+    const g = new THREE.PlaneGeometry(1, 1);
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
+    return g;
+  }, []);
+
   /* ---- Materials ---- */
+
+  const ribbonBackdropMaterial = useMemo(
+    () =>
+      new THREE.MeshBasicMaterial({
+        color: isDarkMode ? 0x334155 : 0x94a3b8,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+      }),
+    [isDarkMode],
+  );
 
   const ribbonMaterial = useMemo(() => {
     const mat = new THREE.MeshBasicMaterial({
@@ -1160,6 +1183,21 @@ const GridContent: React.FC<GridContentProps> = ({
       dummy.updateMatrix();
       ribbonMesh.setMatrixAt(i, dummy.matrix);
 
+      const backdropMesh = ribbonBackdropMeshRef.current;
+      if (backdropMesh) {
+        if (comparePeerRibbonBackdrop && rd.individual.id.startsWith(PEER_COMPARE_ID_PREFIX)) {
+          dummy.position.set(cx, cy, -0.06);
+          dummy.scale.set(RIBBON_W + 0.4 * YEAR, rH + 0.28 * YEAR, 1);
+          dummy.rotation.set(0, 0, 0);
+          dummy.updateMatrix();
+          backdropMesh.setMatrixAt(i, dummy.matrix);
+        } else {
+          dummy.scale.set(0, 0, 0);
+          dummy.updateMatrix();
+          backdropMesh.setMatrixAt(i, dummy.matrix);
+        }
+      }
+
       // Traits for this individual
       for (const trait of rd.traits) {
         if (singleIndividual && isAtZoomLimit && trait.type === 'child') {
@@ -1210,6 +1248,9 @@ const GridContent: React.FC<GridContentProps> = ({
     }
 
     ribbonMesh.instanceMatrix.needsUpdate = true;
+    if (ribbonBackdropMeshRef.current) {
+      ribbonBackdropMeshRef.current.instanceMatrix.needsUpdate = true;
+    }
 
     traitsMesh.count = traitIdx;
     traitsMesh.instanceMatrix.needsUpdate = true;
@@ -2417,6 +2458,12 @@ const GridContent: React.FC<GridContentProps> = ({
           />
         ))}
         <instancedMesh
+          ref={ribbonBackdropMeshRef}
+          args={[ribbonBackdropGeometry, ribbonBackdropMaterial, ribbonData.length]}
+          frustumCulled={false}
+          renderOrder={-1}
+        />
+        <instancedMesh
           ref={ribbonMeshRef}
           args={[ribbonGeometry, ribbonMaterial, ribbonData.length]}
           frustumCulled={false}
@@ -2565,6 +2612,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   compareProcessedIds = null,
   onCompareProcessedToggle,
   gridDefaultZoom,
+  comparePeerRibbonBackdrop = false,
 }) => {
   const photoLayerRef = useRef<HTMLDivElement>(null);
   const photoImgRef = useRef<HTMLImageElement>(null);
@@ -2757,6 +2805,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
           compareProcessedIds={compareProcessedIds}
           onCompareProcessedToggle={onCompareProcessedToggle}
           gridDefaultZoom={gridDefaultZoom}
+          comparePeerRibbonBackdrop={comparePeerRibbonBackdrop}
         />
       </Canvas>
 

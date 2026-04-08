@@ -49,6 +49,19 @@ export function namespacePeerCompareGedcom(data: GedcomData): GedcomData {
   return { individuals, families };
 }
 
+/**
+ * Vue grille comparaison unifiée : concatène local + pair (ids `pc:` déjà disjoints des ids locaux).
+ */
+export function mergeCompareGedcomView(local: GedcomData | null, peer: GedcomData | null): GedcomData | null {
+  if (!local && !peer) return null;
+  if (!local) return peer;
+  if (!peer) return local;
+  return {
+    individuals: { ...local.individuals, ...peer.individuals },
+    families: { ...local.families, ...peer.families },
+  };
+}
+
 /** Remappe les champs d'un doc média entrant (ids de groupe / xrefs) avant fusion dans peerCompareDocuments. */
 export function remapWireMediaDocForPeerCompare(doc: unknown): unknown {
   if (!doc || typeof doc !== 'object') return doc;

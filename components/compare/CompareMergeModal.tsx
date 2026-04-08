@@ -10,8 +10,11 @@ type Props = {
   optionSelection: string;
   validateLabel: string;
   cancelLabel: string;
+  ignoreLabel?: string;
   onCancel: () => void;
   onConfirm: (mode: CompareMergeMode) => void;
+  /** Retour grille complète sans fusionner la paire courante. */
+  onIgnorePair?: () => void;
 };
 
 const CompareMergeModal: React.FC<Props> = ({
@@ -22,8 +25,10 @@ const CompareMergeModal: React.FC<Props> = ({
   optionSelection,
   validateLabel,
   cancelLabel,
+  ignoreLabel,
   onCancel,
   onConfirm,
+  onIgnorePair,
 }) => {
   const [mode, setMode] = useState<CompareMergeMode>('selection');
 
@@ -69,7 +74,21 @@ const CompareMergeModal: React.FC<Props> = ({
             <span>{optionSelection}</span>
           </label>
         </div>
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          {onIgnorePair && ignoreLabel && (
+            <button
+              type="button"
+              onClick={() => {
+                onIgnorePair();
+                onCancel();
+              }}
+              className={`text-xs px-3 py-1.5 rounded border mr-auto ${
+                isDarkMode ? 'border-amber-700 text-amber-200 hover:bg-slate-800' : 'border-amber-400 text-amber-900 hover:bg-amber-50'
+              }`}
+            >
+              {ignoreLabel}
+            </button>
+          )}
           <button
             type="button"
             onClick={onCancel}

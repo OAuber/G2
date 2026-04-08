@@ -107,9 +107,18 @@ const fr = {
       mergeOptionSelection: 'Sélection de données',
       mergeValidate: 'Valider',
       mergeCancel: 'Annuler',
+      mergeIgnorePair: 'Ignorer cette proposition',
+      mergeBarOpen: 'Fusionner les deux fiches sélectionnées',
+      mergeBarHint: 'Deux fiches sont sélectionnées — ouvrez les options de fusion.',
+      mergeUnifiedListHint: 'Liste fusionnée (local et pair) — même tri et filtres que la grille.',
       mergeSelectionStub:
         'Fusion sur sélection : branchement à venir (cochez les champs à importer dans le panneau Détails).',
-      mergeAllStub: 'Fusion complète : branchement à venir.',
+      mergeSelectionDone:
+        'Fusion enregistrée sur votre base locale : champs vides complétés depuis le pair, documents importés. Vue 2D individuelle.',
+      mergeNeedsTwoBases: 'Importez ou chargez un GEDCOM local pour enregistrer la fusion.',
+      mergeMissingPair: 'Paire de fiches introuvable — sélectionnez à nouveau une ancre et un candidat.',
+      mergeInvalidPair: 'La fusion nécessite une fiche locale et une fiche pair (préfixe pc:).',
+      mergeAllStub: 'Fusion complète de toutes les pistes : non disponible pour l’instant ; utilisez la fusion sur la sélection courante.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",

@@ -4,6 +4,7 @@ import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { logGedcomImportDiagnostics, parseGedcom } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { useI18n } from '../i18n';
+import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
 
 /* ------------------------------------------------------------------ */
 /*  Sort & Filter definitions                                          */
@@ -237,6 +238,9 @@ interface SidebarProps {
   compareProcessedRemoteIds?: readonly string[];
   /** Médias du pair (même clés que `compareRemoteData.individuals`) pour les filtres doc en ligne/hors ligne. */
   compareRemoteDocumentsByIndividualId?: Record<string, SortDocumentRef[]>;
+  /** Liste fusionnée (local + pair) — même tri/filtres que la grille 2D unifiée. */
+  compareMergedIndividuals?: Individual[] | null;
+  onCompareSelectUnified?: (indi: Individual) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -287,6 +291,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   compareProcessedLocalIds = [],
   compareProcessedRemoteIds = [],
   compareRemoteDocumentsByIndividualId,
+  compareMergedIndividuals = null,
+  onCompareSelectUnified,
 }) => {
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
@@ -320,6 +326,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         return true;
       };
       if (compareListMode) {
+        if (compareMergedIndividuals && selectedId && scrollToId(`sidebar-item-unified-${selectedId}`)) return;
         if (selectedId && scrollToId(`sidebar-item-local-${selectedId}`)) return;
         if (selectedCompareRemoteId && scrollToId(`sidebar-item-remote-${selectedCompareRemoteId}`)) return;
       } else if (selectedId) {
@@ -330,6 +337,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     selectedId,
     selectedCompareRemoteId,
     compareListMode,
+    compareMergedIndividuals,
     isOpen,
     sortMode,
     searchTerm,
@@ -523,6 +531,12 @@ const Sidebar: React.FC<SidebarProps> = ({
     compareRemoteDocumentsByIndividualId,
   ]);
 
+  const compareMergedDisplayed = useMemo(() => {
+    if (!compareMergedIndividuals || compareMergedIndividuals.length === 0) return [];
+    if (!searchTerm) return compareMergedIndividuals.slice(0, 400);
+    return compareMergedIndividuals.filter((p) => individualMatchesSearchQuery(p, searchTerm));
+  }, [compareMergedIndividuals, searchTerm]);
+
   // Styles
   const bgClass = isDarkMode ? 'bg-black border-slate-800' : 'bg-slate-50 border-slate-300';
   const textClass = isDarkMode ? 'text-slate-200' : 'text-slate-800';
@@ -606,6 +620,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div 
+      data-no-canvas-wheel-zoom
       className={`absolute left-0 top-0 bottom-0 w-80 ${bgClass} border-r flex flex-col shadow-xl ${isOpen ? 'z-[130]' : 'z-[120]'} transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}
       style={{ touchAction: 'pan-y' }}
       onMouseEnter={onMouseEnter}
@@ -951,7 +966,12 @@ const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
           )
-        ) : !data && !(compareListMode && onCompareSelectLocal && onCompareSelectRemote) ? (
+        ) : !data &&
+          !(
+            compareListMode &&
+            ((compareMergedIndividuals != null && onCompareSelectUnified) ||
+              (onCompareSelectLocal && onCompareSelectRemote))
+          ) ? (
           <div className={`p-4 text-sm ${subTextClass}`}>
             <p>{t('sidebar.labels.noDatabaseLoaded')}</p>
             <div className="mt-2 flex flex-col gap-1">
@@ -972,7 +992,129 @@ const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ) : (
           <div className="p-2 space-y-1">
-            {compareListMode && onCompareSelectLocal && onCompareSelectRemote ? (
+            {compareListMode && compareMergedIndividuals != null && onCompareSelectUnified ? (
+              <>
+                <div
+                  className={`sticky top-0 z-[1] -mx-1 px-2 py-1.5 mb-0.5 text-[10px] font-bold uppercase tracking-wider border-b ${
+                    isDarkMode
+                      ? 'bg-black/95 border-slate-700 text-slate-300'
+                      : 'bg-white/95 border-slate-200 text-slate-600'
+                  }`}
+                >
+                  {t('sidebar.labels.records')} ({compareMergedIndividuals.length}) — {t('app.compare.mergeUnifiedListHint')}
+                </div>
+                {compareMergedDisplayed.map((indi) => {
+                  const isPeer = indi.id.startsWith(PEER_COMPARE_ID_PREFIX);
+                  const isNoneMode = selectedIdsFor2D?.has('__NONE__');
+                  const isAllMode = !selectedIdsFor2D || selectedIdsFor2D.size === 0;
+                  const isSelected2D = isNoneMode
+                    ? false
+                    : isAllMode
+                      ? true
+                      : selectedIdsFor2D.has(indi.id);
+                  const isCal =
+                    indi.birthDate?.isCalculated || indi.deathDate?.isCalculated;
+                  const isProcessed =
+                    compareProcessedLocalIds.includes(indi.id) ||
+                    compareProcessedRemoteIds.includes(indi.id);
+                  return (
+                    <div
+                      key={`merged-${indi.id}`}
+                      id={`sidebar-item-unified-${indi.id}`}
+                      className={`w-full flex items-center gap-1 rounded-md px-1 transition-colors border-l-4 ${
+                        selectedId === indi.id
+                          ? isDarkMode
+                            ? 'border-l-violet-400 bg-slate-800'
+                            : 'border-l-violet-600 bg-violet-100'
+                          : isPeer
+                            ? isDarkMode
+                              ? 'border-l-slate-500 bg-slate-900/70'
+                              : 'border-l-slate-400 bg-slate-200/90'
+                            : isDarkMode
+                              ? 'border-l-sky-600/80 bg-slate-950/60'
+                              : 'border-l-sky-500 bg-sky-50/95'
+                      } ${isDarkMode ? 'hover:bg-neutral-900/90' : 'hover:bg-sky-100'}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onCompareSelectUnified(indi)}
+                        className="flex-1 text-left py-2 flex items-center gap-2 overflow-hidden"
+                      >
+                        <span
+                          className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase ${
+                            isPeer
+                              ? isDarkMode
+                                ? 'bg-slate-600 text-slate-100'
+                                : 'bg-slate-400 text-white'
+                              : isDarkMode
+                                ? 'bg-sky-800 text-sky-100'
+                                : 'bg-sky-500 text-white'
+                          }`}
+                        >
+                          {isPeer ? t('app.compare.sidebarRemote') : t('app.compare.sidebarLocal')}
+                        </span>
+                        <div
+                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
+                            indi.gender === 'F'
+                              ? 'bg-pink-500 text-pink-500'
+                              : 'bg-blue-500 text-blue-500'
+                          }`}
+                        >
+                          {indi.givenName?.[0]}
+                          {indi.surname?.[0]}
+                          {isCal && (
+                            <div
+                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
+                              title={t('sidebar.labels.containsCalculatedDates')}
+                            />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`text-sm font-medium truncate flex-1 ${textClass}`}
+                            >
+                              {indi.givenName}{' '}
+                              <span className="font-bold">{indi.surname}</span>
+                            </div>
+                            {isProcessed && (
+                              <Check
+                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
+                                aria-hidden
+                              />
+                            )}
+                            <div className="opacity-70">{getSourceIcon(indi.source)}</div>
+                          </div>
+                          <div className={`text-xs truncate ${subTextClass}`}>
+                            {safeYear(indi.birthDate?.year)} -{' '}
+                            {safeYear(indi.deathDate?.year)}
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggle2DSelection?.(indi.id);
+                        }}
+                        className={`p-2 rounded hover:bg-slate-500/10 ${isSelected2D ? 'text-blue-500' : 'text-slate-600'}`}
+                        title={
+                          isSelected2D
+                            ? t('sidebar.labels.hideAll')
+                            : t('sidebar.labels.showAll')
+                        }
+                      >
+                        {isSelected2D ? (
+                          <Eye className="w-4 h-4" />
+                        ) : (
+                          <EyeOff className="w-4 h-4 opacity-30" />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </>
+            ) : compareListMode && onCompareSelectLocal && onCompareSelectRemote ? (
               <>
                 {data && (
                   <>
