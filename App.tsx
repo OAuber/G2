@@ -5,7 +5,7 @@ import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
-import CompareMergeModal, { type CompareMergeMode } from './components/compare/CompareMergeModal';
+import CompareMergeModal, { type CompareImportMode } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { AppLayout } from './components/AppLayout';
@@ -436,6 +436,9 @@ function App() {
   const [compareProcessedRemoteIds, setCompareProcessedRemoteIds] = useState<string[]>([]);
   const [compareMergeModalOpen, setCompareMergeModalOpen] = useState(false);
   const [compareFusionCompleted, setCompareFusionCompleted] = useState(false);
+  /** Coches panneau Détails (fiche pair) — import partiel depuis la modal. */
+  const [comparePeerImportFields, setComparePeerImportFields] = useState(true);
+  const [comparePeerImportDocs, setComparePeerImportDocs] = useState(true);
   const pendingInviteRoleRef = useRef<P2PRole | null>(INVITE_BOOTSTRAP.role);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const originalGedcomDataRef = useRef<GedcomData | null>(null);
@@ -1607,11 +1610,13 @@ function App() {
   );
   const ephemeralNoPersist = useMemo(() => {
     if (p2pMode !== 'client') return false;
+    /** Session comparaison : autosauvegarde de la base locale (imports) pour l’invité comme pour l’hôte. */
+    if (p2pSessionUseCase === 'compare') return false;
     if (guestSessionMode === 'ephemeral') return true;
     if (!pendingInviteToken) return false;
     const inv = p2pInvites.find((i) => i.token === pendingInviteToken);
     return resolveLinkKind(inv ?? undefined) === 'ephemeral_free';
-  }, [p2pMode, guestSessionMode, pendingInviteToken, p2pInvites]);
+  }, [p2pMode, p2pSessionUseCase, guestSessionMode, pendingInviteToken, p2pInvites]);
 
   const {
     autoSaveEnabled,
@@ -1795,6 +1800,18 @@ function App() {
     return p2pMode === 'host' || p2pMode === 'client';
   }, [p2pMode, p2pSessionUseCase, peerCompareGedcom, shouldSuspendSceneForInvite]);
 
+  /** Message centré (vue compare) : jusqu’à ce que l’invité ait chargé son GEDCOM (hôte) ou l’invité son propre fichier (client). */
+  const compareViewportCenterHint = useMemo(() => {
+    if (p2pSessionUseCase !== 'compare' || p2pStatus !== 'connected') return null;
+    const peerEmpty =
+      !peerCompareGedcom || Object.keys(peerCompareGedcom.individuals).length === 0;
+    if (p2pMode === 'host' && peerEmpty) return t('app.compare.invitePeerOpenGedcom');
+    if (p2pMode === 'client' && !gedcomData) return t('app.compare.inviteGuestOpenLocalGedcom');
+    return null;
+  }, [p2pSessionUseCase, p2pStatus, p2pMode, peerCompareGedcom, gedcomData, t]);
+
+  const [compareNoMatchFlash, setCompareNoMatchFlash] = useState<string | null>(null);
+
   /** Import local après coup : pousser l’arbre vers l’hôte dès que GEDCOM + snapshot pair sont prêts. */
   useEffect(() => {
     maybeSendGuestLocalTreeToHostAfterCompareReceive();
@@ -1841,7 +1858,32 @@ function App() {
     [compareUnifiedMatchSuggestions],
   );
 
-  /** Grille unifiée : exploration complète sans ancre ; pistes + ancre ; puis uniquement la paire retenue. */
+  useEffect(() => {
+    if (!compareDualViewActive || is2dIndividual) {
+      setCompareNoMatchFlash(null);
+      return;
+    }
+    if (!compareMatchAnchorId || compareMatchPairId) {
+      setCompareNoMatchFlash(null);
+      return;
+    }
+    if (compareUnifiedMatchSuggestions.length > 0) {
+      setCompareNoMatchFlash(null);
+      return;
+    }
+    setCompareNoMatchFlash(t('app.compare.noMatchesFound'));
+    const h = window.setTimeout(() => setCompareNoMatchFlash(null), 4200);
+    return () => window.clearTimeout(h);
+  }, [
+    compareDualViewActive,
+    is2dIndividual,
+    compareMatchAnchorId,
+    compareMatchPairId,
+    compareUnifiedMatchSuggestions.length,
+    t,
+  ]);
+
+  /** Grille unifiée : exploration complète sans ancre ; pistes + ancre ; puis uniquement la paire retenue. Sans ancre : même filtre 2D que la barre latérale (ex. après fusion : fiche locale seule). */
   const compareUnifiedGridSelectedIds = useMemo(() => {
     if (!compareDualViewActive) return selectedIdsFor2D;
     if (compareMatchPairId && compareMatchAnchorId) {
@@ -1852,7 +1894,7 @@ function App() {
       for (const s of compareUnifiedMatchSuggestions) ids.add(s.individual.id);
       return ids;
     }
-    return undefined;
+    return selectedIdsFor2D;
   }, [
     compareDualViewActive,
     selectedIdsFor2D,
@@ -4265,38 +4307,43 @@ function App() {
   );
 
   const handleCompareMergeConfirm = useCallback(
-    (mode: CompareMergeMode) => {
+    (mode: CompareImportMode) => {
       setCompareMergeModalOpen(false);
       if (ephemeralGuestActive) {
         showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
         return;
       }
-      if (mode === 'all') {
-        showTransientToast('success', t('app.compare.mergeAllStub'), 4200);
-        return;
-      }
       if (!originalGedcomData || !peerCompareGedcom) {
-        showTransientToast('error', t('app.compare.mergeNeedsTwoBases'), 3600);
+        showTransientToast('error', t('app.compare.importPairNeedsTwoBases'), 3600);
         return;
       }
+
       if (!compareMatchAnchorId || !compareMatchPairId) {
-        showTransientToast('error', t('app.compare.mergeMissingPair'), 3200);
+        showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
         return;
       }
       const resolved = resolveComparePairLocalAndPeer(compareMatchAnchorId, compareMatchPairId);
       if (!resolved) {
-        showTransientToast('error', t('app.compare.mergeInvalidPair'), 3200);
+        showTransientToast('error', t('app.compare.importPairInvalidPair'), 3200);
         return;
       }
       const { localId, peerPcId } = resolved;
       const localInd = originalGedcomData.individuals[localId];
       const peerInd = peerCompareGedcom.individuals[peerPcId];
       if (!localInd || !peerInd) {
-        showTransientToast('error', t('app.compare.mergeMissingPair'), 3200);
+        showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
         return;
       }
 
-      const mergedInd = mergePeerIndividualIntoLocal(localInd, peerInd);
+      const mergeFields =
+        mode === 'full' || (mode === 'partial' && comparePeerImportFields);
+      const mergeDocuments =
+        mode === 'full' || (mode === 'partial' && comparePeerImportDocs);
+
+      let mergedInd: Individual = localInd;
+      if (mergeFields) {
+        mergedInd = mergePeerIndividualIntoLocal(localInd, peerInd);
+      }
       const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
       newData.individuals[localId] = mergedInd;
       setOriginalGedcomData(newData);
@@ -4306,12 +4353,14 @@ function App() {
 
       const localDocs = documentsByIndividualId[localId] ?? [];
       const peerDocs = peerCompareDocumentsByIndividualId[peerPcId] ?? [];
-      const imported = clonePeerDocumentsForLocalMerge(peerDocs, peerPcId, localId, localDocs);
-      if (imported.length > 0) {
-        setDocumentsByIndividualId((prev) => ({
-          ...prev,
-          [localId]: [...localDocs, ...imported],
-        }));
+      if (mergeDocuments) {
+        const imported = clonePeerDocumentsForLocalMerge(peerDocs, peerPcId, localId, localDocs);
+        if (imported.length > 0) {
+          setDocumentsByIndividualId((prev) => ({
+            ...prev,
+            [localId]: [...localDocs, ...imported],
+          }));
+        }
       }
 
       handleToggleCompareLocalProcessed(localId, true);
@@ -4324,7 +4373,11 @@ function App() {
       setSelectedIdsFor2D(new Set([localId]));
       setRightPanelOpen(true);
       handleSetDisplayMode('2d-individual');
-      showTransientToast('success', t('app.compare.mergeSelectionDone'), 4800);
+      const toastKey =
+        mode === 'partial'
+          ? 'app.compare.importPairPartialDone'
+          : 'app.compare.importPairSelectionDone';
+      showTransientToast('success', t(toastKey), 4800);
     },
     [
       ephemeralGuestActive,
@@ -4334,6 +4387,8 @@ function App() {
       peerCompareGedcom,
       compareMatchAnchorId,
       compareMatchPairId,
+      comparePeerImportFields,
+      comparePeerImportDocs,
       documentsByIndividualId,
       peerCompareDocumentsByIndividualId,
       setOriginalGedcomData,
@@ -4356,6 +4411,8 @@ function App() {
   useEffect(() => {
     if (!compareDualViewActive || !gedcomData) return;
     if (compareMatchAnchorId) return;
+    /** Après une fusion, l’ancre est vidée volontairement : ne pas réinjecter l’id cible d’invitation (souvent ≠ fiche locale fusionnée). */
+    if (compareFusionCompleted) return;
     const tid = pendingInviteTargetIndividualId;
     if (tid && gedcomData.individuals[tid]) {
       const indi = gedcomData.individuals[tid];
@@ -4363,7 +4420,13 @@ function App() {
       setSelectedIndividual(indi);
       setRootIndividual(indi);
     }
-  }, [compareDualViewActive, gedcomData, pendingInviteTargetIndividualId, compareMatchAnchorId]);
+  }, [
+    compareDualViewActive,
+    gedcomData,
+    pendingInviteTargetIndividualId,
+    compareMatchAnchorId,
+    compareFusionCompleted,
+  ]);
 
   /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
   const handle3DRibbonOpen2DIndividual = (id: string) => {
@@ -4646,9 +4709,11 @@ function App() {
   const handleDownloadGedcom = () => {
     if (!gedcomData) return;
     const effectiveAllowDownload =
-      p2pModeRef.current === 'client'
-        ? (remoteAccessPolicy?.allowDownload ?? true)
-        : p2pVisibilitySettings.allowDownload;
+      p2pModeRef.current === 'client' && p2pSessionUseCaseRef.current === 'compare'
+        ? true
+        : p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowDownload ?? true)
+          : p2pVisibilitySettings.allowDownload;
     if (!effectiveAllowDownload) {
       alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
@@ -4690,9 +4755,11 @@ function App() {
   const handleDownloadBundle = async () => {
     if (!gedcomData) return;
     const effectiveAllowDownload =
-      p2pModeRef.current === 'client'
-        ? (remoteAccessPolicy?.allowDownload ?? true)
-        : p2pVisibilitySettings.allowDownload;
+      p2pModeRef.current === 'client' && p2pSessionUseCaseRef.current === 'compare'
+        ? true
+        : p2pModeRef.current === 'client'
+          ? (remoteAccessPolicy?.allowDownload ?? true)
+          : p2pVisibilitySettings.allowDownload;
     if (!effectiveAllowDownload) {
       alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
@@ -6866,12 +6933,44 @@ function App() {
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
             onWebGLContextLost={handleWebGLContextLost}
+            peerTreeVisualContext={
+              !!(
+                selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ||
+                rootIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX)
+              )
+            }
           />
           </Suspense>
         ) : compareDualViewActive && viewMode === '2D' && !is2dIndividual ? (
           <>
             {mergedCompareGedcom && Object.keys(mergedCompareGedcom.individuals).length > 0 ? (
               <div className="absolute inset-0 min-h-0">
+                {compareViewportCenterHint && (
+                  <div className="pointer-events-none absolute inset-0 z-[88] flex items-center justify-center px-5">
+                    <div
+                      className={`max-w-lg rounded-xl border px-4 py-3 text-center text-sm leading-relaxed shadow-xl ${
+                        isDarkMode
+                          ? 'border-slate-600 bg-slate-950/94 text-slate-100'
+                          : 'border-slate-300 bg-white/96 text-slate-900'
+                      }`}
+                    >
+                      {compareViewportCenterHint}
+                    </div>
+                  </div>
+                )}
+                {compareNoMatchFlash && (
+                  <div className="pointer-events-none absolute inset-0 z-[89] flex items-center justify-center px-5">
+                    <div
+                      className={`rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg ${
+                        isDarkMode
+                          ? 'border-amber-700/80 bg-black/80 text-amber-50'
+                          : 'border-amber-400 bg-amber-50 text-amber-950'
+                      }`}
+                    >
+                      {compareNoMatchFlash}
+                    </div>
+                  </div>
+                )}
                 {compareMatchAnchorId && compareMatchPairId && (
                   <div className="pointer-events-auto fixed top-14 left-1/2 z-[115] flex max-w-[min(100%,24rem)] -translate-x-1/2 flex-col items-center gap-1 px-2">
                     <button
@@ -6883,10 +6982,10 @@ function App() {
                           : 'border-sky-400 bg-white/95 text-sky-800 hover:bg-sky-50'
                       }`}
                     >
-                      {t('app.compare.mergeBarOpen')}
+                      {t('app.compare.importPairBarOpen')}
                     </button>
                     <span className={`text-[10px] text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      {t('app.compare.mergeBarHint')}
+                      {t('app.compare.importPairBarHint')}
                     </span>
                   </div>
                 )}
@@ -6928,18 +7027,26 @@ function App() {
                   isDarkMode ? 'bg-black text-slate-300' : 'bg-slate-100 text-slate-800'
                 }`}
               >
-                {!gedcomData ? t('app.compare.importLocalHint') : t('app.compare.waitingPeerGedcom')}
+                {compareViewportCenterHint ? (
+                  <div className="max-w-lg text-base leading-relaxed font-medium">
+                    {compareViewportCenterHint}
+                  </div>
+                ) : !gedcomData ? (
+                  t('app.compare.importLocalHint')
+                ) : (
+                  <p>{t('app.compare.waitingPeerGedcom')}</p>
+                )}
               </div>
             )}
             <CompareMergeModal
               isOpen={compareMergeModalOpen}
               isDarkMode={isDarkMode}
-              title={t('app.compare.mergeModalTitle')}
-              optionAll={t('app.compare.mergeOptionAll')}
-              optionSelection={t('app.compare.mergeOptionSelection')}
-              validateLabel={t('app.compare.mergeValidate')}
-              cancelLabel={t('app.compare.mergeCancel')}
-              ignoreLabel={t('app.compare.mergeIgnorePair')}
+              title={t('app.compare.importPairModalTitle')}
+              optionFull={t('app.compare.importPairOptionFull')}
+              optionPartial={t('app.compare.importPairOptionPartial')}
+              validateLabel={t('app.compare.importPairConfirm')}
+              cancelLabel={t('app.compare.importPairCancel')}
+              ignoreLabel={t('app.compare.importPairDecline')}
               onCancel={() => setCompareMergeModalOpen(false)}
               onConfirm={handleCompareMergeConfirm}
               onIgnorePair={handleCompareIgnorePair}
@@ -6948,12 +7055,26 @@ function App() {
         ) : is2dIndividual ? (
           <Scene2DIndividual
             key={`scene2d-individual-${webglRecoveryKey}`}
-            data={gedcomData}
+            data={
+              compareDualViewActive && mergedCompareGedcom ? mergedCompareGedcom : gedcomData
+            }
             selectedId={selectedIndividual?.id}
-            selectedIds={selectedIdsFor2D}
-            primaryPhotoUrlById={renderedPrimaryPhotoUrlById}
-            documentsByIndividualId={renderedDocumentsByIndividualId}
-            onIndividualClick={handleInspectIndividual}
+            selectedIds={
+              compareDualViewActive && mergedCompareGedcom
+                ? compareUnifiedGridSelectedIds
+                : selectedIdsFor2D
+            }
+            primaryPhotoUrlById={
+              compareDualViewActive
+                ? mergedPrimaryPhotoUrlByIdForCompareGrid
+                : renderedPrimaryPhotoUrlById
+            }
+            documentsByIndividualId={
+              compareDualViewActive ? mergedDocumentsForCompareUi : renderedDocumentsByIndividualId
+            }
+            onIndividualClick={
+              compareDualViewActive ? handleCompareInspectUnified : handleInspectIndividual
+            }
             onExpandAndSwitch3D={handleExpandAndSwitch3D}
             onRequest2DModeSwitch={handle2DViewModeSwitch}
             onOrthoZoomSample={handle2DOrthoZoomSample}
@@ -6962,12 +7083,31 @@ function App() {
             isDarkMode={isDarkMode}
             relationshipRevealEnabled={relationshipRevealEnabled}
             sortMode={sortMode}
-            activeFilters={activeFilters}
+            activeFilters={
+              compareDualViewActive ? activeFiltersCompareUnified : activeFilters
+            }
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
             onWebGLContextLost={handleWebGLContextLost}
             selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
             showSelfIntroductionBadge={!!selfIdentity?.introduction}
+            compareSuggestionIds={
+              compareDualViewActive ? compareUnifiedSuggestionIdSet : undefined
+            }
+            compareSuggestionScores={
+              compareDualViewActive ? compareUnifiedSuggestionScores : undefined
+            }
+            compareFusionCompleted={compareDualViewActive ? compareFusionCompleted : false}
+            compareProcessedIds={
+              compareDualViewActive ? compareProcessedIdsMerged : undefined
+            }
+            onCompareProcessedToggle={
+              compareDualViewActive ? handleToggleCompareProcessedUnified : undefined
+            }
+            comparePeerRibbonBackdrop={compareDualViewActive}
+            gridDefaultZoom={
+              compareDualViewActive ? COMPARE_VIEW_GRID_DEFAULT_ZOOM : undefined
+            }
           />
         ) : (
           <Scene2DGrid
@@ -7237,6 +7377,10 @@ function App() {
           compareDualViewActive &&
           (selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ?? false)
         }
+        comparePeerImportFields={compareDualViewActive ? comparePeerImportFields : undefined}
+        comparePeerImportDocs={compareDualViewActive ? comparePeerImportDocs : undefined}
+        onComparePeerImportFieldsChange={compareDualViewActive ? setComparePeerImportFields : undefined}
+        onComparePeerImportDocsChange={compareDualViewActive ? setComparePeerImportDocs : undefined}
       />
 
       {/* --- Top Panel (Share) --- */}

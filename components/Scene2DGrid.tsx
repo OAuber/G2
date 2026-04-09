@@ -49,7 +49,7 @@ interface Scene2DGridProps {
   onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
   /** Remplace le zoom grille par défaut (ex. volets comparaison plus bas). */
   gridDefaultZoom?: number;
-  /** Comparaison unifiée : rectangle gris derrière chaque ruban issu de la base pair (`pc:`). */
+  /** Comparaison unifiée : pulsation sinusoïdale des rubans / traits issus de la base pair (`pc:`). */
   comparePeerRibbonBackdrop?: boolean;
 }
 
@@ -133,6 +133,11 @@ const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
 /** Zoom initial grille dans les deux volets comparaison (hauteur réduite — éviter débordement vertical). */
 export const COMPARE_VIEW_GRID_DEFAULT_ZOOM = 320;
+
+/** Comparaison pair : pulsation sinusoïdale globale (même phase pour tous les rubans `pc:`). */
+const PEER_PULSE_RAD_PER_S = 2.35;
+const PEER_PULSE_ALPHA_MIN = 0.34;
+const PEER_PULSE_ALPHA_MAX = 1;
 /** Un cran de molette (aligné sur la rampe reveal) — handoff grille ↔ individuel. */
 export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
 /**
@@ -890,15 +895,22 @@ const GridContent: React.FC<GridContentProps> = ({
       'aRevealOpacity',
       new THREE.InstancedBufferAttribute(revealOpacityData, 1),
     );
+    const peerPulseData = new Float32Array(count);
+    peerPulseData.fill(1);
+    g.setAttribute('aPeerPulse', new THREE.InstancedBufferAttribute(peerPulseData, 1));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
     return g;
   }, [individuals.length]);
 
   const traitGeometry = useMemo(() => {
     const g = new THREE.PlaneGeometry(1, 1);
+    const n = Math.max(1, totalTraits);
+    const peerPulse = new Float32Array(n);
+    peerPulse.fill(1);
+    g.setAttribute('aPeerPulse', new THREE.InstancedBufferAttribute(peerPulse, 1));
     g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e8);
     return g;
-  }, []);
+  }, [totalTraits]);
 
   const ribbonBackdropGeometry = useMemo(() => {
     const g = new THREE.PlaneGeometry(1, 1);
@@ -911,12 +923,12 @@ const GridContent: React.FC<GridContentProps> = ({
   const ribbonBackdropMaterial = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
-        color: isDarkMode ? 0x334155 : 0x94a3b8,
+        color: isDarkMode ? 0x475569 : 0xb0becd,
         transparent: true,
-        opacity: 0.45,
+        opacity: comparePeerRibbonBackdrop ? 0.62 : 0.45,
         depthWrite: false,
       }),
-    [isDarkMode],
+    [isDarkMode, comparePeerRibbonBackdrop],
   );
 
   const ribbonMaterial = useMemo(() => {
@@ -931,8 +943,10 @@ const GridContent: React.FC<GridContentProps> = ({
       shader.vertexShader =
         `attribute float aFadingMode;
          attribute float aRevealOpacity;
+         attribute float aPeerPulse;
          varying float vFadingMode;
          varying float vRevealOpacity;
+         varying float vPeerPulse;
          varying vec2 vUvCustom;\n` +
         shader.vertexShader
           .replace(
@@ -944,12 +958,14 @@ const GridContent: React.FC<GridContentProps> = ({
             '#include <begin_vertex>',
             `#include <begin_vertex>
              vFadingMode = aFadingMode;
-             vRevealOpacity = aRevealOpacity;`,
+             vRevealOpacity = aRevealOpacity;
+             vPeerPulse = aPeerPulse;`,
           );
 
       shader.fragmentShader =
         `varying float vFadingMode;
          varying float vRevealOpacity;
+         varying float vPeerPulse;
          varying vec2 vUvCustom;\n` +
         shader.fragmentShader.replace(
           '#include <color_fragment>',
@@ -965,7 +981,7 @@ const GridContent: React.FC<GridContentProps> = ({
            } else if (vFadingMode > 2.5) {
              fade = smoothstep(0.0, 0.4, vUvCustom.y) * smoothstep(1.0, 0.6, vUvCustom.y);
            }
-           diffuseColor.a *= fade * vRevealOpacity;`,
+           diffuseColor.a *= fade * vRevealOpacity * vPeerPulse;`,
         );
     };
 
@@ -973,7 +989,31 @@ const GridContent: React.FC<GridContentProps> = ({
   }, []);
 
   const traitMaterial = useMemo(
-    () => new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+    () => {
+      const mat = new THREE.MeshBasicMaterial({
+        side: THREE.DoubleSide,
+        transparent: true,
+        depthWrite: false,
+      });
+      mat.onBeforeCompile = (shader) => {
+        shader.vertexShader =
+          `attribute float aPeerPulse;
+           varying float vTraitPeerPulse;\n` +
+          shader.vertexShader.replace(
+            '#include <begin_vertex>',
+            `#include <begin_vertex>
+             vTraitPeerPulse = aPeerPulse;`,
+          );
+        shader.fragmentShader =
+          `varying float vTraitPeerPulse;\n` +
+          shader.fragmentShader.replace(
+            '#include <color_fragment>',
+            `#include <color_fragment>
+             diffuseColor.a *= vTraitPeerPulse;`,
+          );
+      };
+      return mat;
+    },
     [],
   );
 
@@ -1036,6 +1076,30 @@ const GridContent: React.FC<GridContentProps> = ({
     }
   }, [orthoZoomHandoff, singleIndividual, onOrthoZoomHandoffConsumed]);
 
+  /** Avant : teintage gris ; la distinction pair repose sur la pulsation globale (`aPeerPulse`). */
+  const applyPeerRibbonSurfaceTint = useCallback((base: THREE.Color, _indi: Individual): THREE.Color => base, []);
+
+  const hasPeerCompareRibbon = useMemo(
+    () =>
+      !!comparePeerRibbonBackdrop &&
+      ribbonData.some((rd) => rd.individual.id.startsWith(PEER_COMPARE_ID_PREFIX)),
+    [comparePeerRibbonBackdrop, ribbonData],
+  );
+
+  useEffect(() => {
+    if (comparePeerRibbonBackdrop) return;
+    const pa = ribbonGeometry.getAttribute('aPeerPulse') as THREE.InstancedBufferAttribute | undefined;
+    if (pa?.array) {
+      (pa.array as Float32Array).fill(1);
+      pa.needsUpdate = true;
+    }
+    const ta = traitGeometry.getAttribute('aPeerPulse') as THREE.InstancedBufferAttribute | undefined;
+    if (ta?.array) {
+      (ta.array as Float32Array).fill(1);
+      ta.needsUpdate = true;
+    }
+  }, [comparePeerRibbonBackdrop, ribbonGeometry, traitGeometry]);
+
   useLayoutEffect(() => {
     const mesh = ribbonMeshRef.current;
     if (!mesh || ribbonData.length === 0) return;
@@ -1051,6 +1115,7 @@ const GridContent: React.FC<GridContentProps> = ({
       if (isSelected)      c = selectColor(rd.individual.gender);
       else if (isHovered)  c = hoverColor(rd.individual.gender);
       else                 c = defaultColor(rd.individual.gender);
+      c = applyPeerRibbonSurfaceTint(c, rd.individual);
       mesh.setColorAt(i, c);
 
       let mode = 0;
@@ -1071,14 +1136,46 @@ const GridContent: React.FC<GridContentProps> = ({
     revealOpacityDataRef.current = revealOpacityData;
     revealOpacityAttrRef.current = revealAttr;
     prevRevealIndicesRef.current = new Set();
-  }, [ribbonData, selectedId, ribbonGeometry]);
+  }, [ribbonData, selectedId, ribbonGeometry, applyPeerRibbonSurfaceTint]);
 
   /* ---- Layout: responsive grid (runs every frame) ---- */
 
-  useFrame(() => {
+  useFrame((state) => {
     const ribbonMesh = ribbonMeshRef.current;
     const traitsMesh = traitsMeshRef.current;
     if (!ribbonMesh || !traitsMesh || ribbonData.length === 0) return;
+
+    if (hasPeerCompareRibbon) {
+      const t = state.clock.elapsedTime;
+      const wave =
+        PEER_PULSE_ALPHA_MIN +
+        (PEER_PULSE_ALPHA_MAX - PEER_PULSE_ALPHA_MIN) *
+          (0.5 + 0.5 * Math.sin(t * PEER_PULSE_RAD_PER_S));
+      const hovered = hoveredRef.current;
+      const pulseAttr = ribbonGeometry.getAttribute('aPeerPulse') as THREE.InstancedBufferAttribute | null;
+      if (pulseAttr?.array) {
+        const arr = pulseAttr.array as Float32Array;
+        for (let i = 0; i < ribbonData.length; i++) {
+          const peer = ribbonData[i].individual.id.startsWith(PEER_COMPARE_ID_PREFIX);
+          arr[i] = peer && i !== hovered ? wave : 1;
+        }
+        pulseAttr.needsUpdate = true;
+      }
+      const traitPulseAttr = traitGeometry.getAttribute('aPeerPulse') as THREE.InstancedBufferAttribute | null;
+      if (traitPulseAttr?.array && pulseAttr?.array) {
+        const tarr = traitPulseAttr.array as Float32Array;
+        const arr = pulseAttr.array as Float32Array;
+        let ti = 0;
+        for (let i = 0; i < ribbonData.length; i++) {
+          const pulse = arr[i];
+          for (const tr of ribbonData[i].traits) {
+            if (singleIndividual && isAtZoomLimit && tr.type === 'child') continue;
+            tarr[ti++] = pulse;
+          }
+        }
+        traitPulseAttr.needsUpdate = true;
+      }
+    }
 
     const ortho = camera as THREE.OrthographicCamera;
     const prevZoom = prevZoomRef.current ?? ortho.zoom;
@@ -1185,17 +1282,9 @@ const GridContent: React.FC<GridContentProps> = ({
 
       const backdropMesh = ribbonBackdropMeshRef.current;
       if (backdropMesh) {
-        if (comparePeerRibbonBackdrop && rd.individual.id.startsWith(PEER_COMPARE_ID_PREFIX)) {
-          dummy.position.set(cx, cy, -0.06);
-          dummy.scale.set(RIBBON_W + 0.4 * YEAR, rH + 0.28 * YEAR, 1);
-          dummy.rotation.set(0, 0, 0);
-          dummy.updateMatrix();
-          backdropMesh.setMatrixAt(i, dummy.matrix);
-        } else {
-          dummy.scale.set(0, 0, 0);
-          dummy.updateMatrix();
-          backdropMesh.setMatrixAt(i, dummy.matrix);
-        }
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        backdropMesh.setMatrixAt(i, dummy.matrix);
       }
 
       // Traits for this individual
@@ -1557,10 +1646,11 @@ const GridContent: React.FC<GridContentProps> = ({
 
   const ribbonIdleColor = useCallback(
     (indi: Individual) => {
-      if (indi.id === selectedId) return selectColor(indi.gender);
-      return defaultColor(indi.gender);
+      const c =
+        indi.id === selectedId ? selectColor(indi.gender) : defaultColor(indi.gender);
+      return applyPeerRibbonSurfaceTint(c, indi);
     },
-    [selectedId],
+    [selectedId, applyPeerRibbonSurfaceTint],
   );
 
   const clearPathHighlight = useCallback((mesh: THREE.InstancedMesh) => {
@@ -1577,10 +1667,13 @@ const GridContent: React.FC<GridContentProps> = ({
     for (let i = 0; i < ribbonData.length; i++) {
       const indi = ribbonData[i].individual;
       if (indi.id === selectedId || pathIds.has(indi.id) || i === hoveredRef.current) continue;
-      mesh.setColorAt(i, dimColor(indi.gender, isDarkMode));
+      mesh.setColorAt(
+        i,
+        applyPeerRibbonSurfaceTint(dimColor(indi.gender, isDarkMode), indi),
+      );
     }
     pathSetRef.current = pathIds;
-  }, [ribbonData, selectedId, isDarkMode]);
+  }, [ribbonData, selectedId, isDarkMode, applyPeerRibbonSurfaceTint]);
 
   useEffect(() => {
     if (relationshipRevealEnabled) return;
@@ -1615,7 +1708,7 @@ const GridContent: React.FC<GridContentProps> = ({
     if (id < ribbonData.length) {
       const indi = ribbonData[id].individual;
       const c = indi.id === selectedId ? selectColor(indi.gender) : hoverColor(indi.gender);
-      mesh.setColorAt(id, c);
+      mesh.setColorAt(id, applyPeerRibbonSurfaceTint(c, indi));
       let cursor = 'pointer';
 
       if (singleIndividual && id === selectedIdx) {
@@ -1665,7 +1758,7 @@ const GridContent: React.FC<GridContentProps> = ({
     hoveredRef.current = id;
     setHoveredIdx(id);
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled, singleIndividual, selectedIdx, ribbonIdleColor]);
+  }, [ribbonData, selectedId, data, clearPathHighlight, applyPathHighlight, relationshipRevealEnabled, singleIndividual, selectedIdx, ribbonIdleColor, applyPeerRibbonSurfaceTint]);
 
   const handlePointerLeave = useCallback(() => {
     const mesh = ribbonMeshRef.current;
@@ -2496,8 +2589,8 @@ const GridContent: React.FC<GridContentProps> = ({
           const cx = col * STEP_X;
           const cy = -row * STEP_Y;
           const rH = (rd.lifespan / maxLifespan) * CELL_H;
-          /** Haut du ruban (ancrage overlay — évite le centre de la fenêtre / superposition sur la sélection). */
-          const overlayAnchorY = cy + rH / 2 + 0.12 * YEAR;
+          /** Haut du ruban — remonté pour ne pas chevaucher le trait de décès en projection. */
+          const overlayAnchorY = cy + rH / 2 + 0.34 * YEAR;
           const isSuggestion = !!compareSuggestionIds?.has(id);
           const score = compareSuggestionScores?.get(id);
           const anySuggestionRibbonSelected = !!(selectedId && compareSuggestionIds?.has(selectedId));
@@ -2512,9 +2605,9 @@ const GridContent: React.FC<GridContentProps> = ({
           if (!showPct && !showTraitCheckbox && !showTraitDoneDot) return null;
           const traitLabel =
             showTraitCheckbox || showTraitDoneDot ? t('app.compare.traitCheckbox') : '';
-          const pctY = showTraitCheckbox || showTraitDoneDot ? 0.14 * YEAR : 0;
-          const traitDoneY = showPct ? -0.12 * YEAR : 0;
-          const traitCheckboxY = showPct ? -0.16 * YEAR : 0;
+          const pctY = showTraitCheckbox || showTraitDoneDot ? 0.2 * YEAR : 0;
+          const traitDoneY = showPct ? -0.2 * YEAR : 0.12 * YEAR;
+          const traitCheckboxY = showPct ? -0.26 * YEAR : 0.18 * YEAR;
           return (
             <group key={`ribbon-cmp-overlay-${id}`} position={[cx, overlayAnchorY, 0.35]}>
               {showPct && (

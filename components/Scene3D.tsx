@@ -813,6 +813,8 @@ interface Scene3DProps {
   /** Bascule depuis la vue 2D individuelle : lance l'intro zoom ruban → arbre en vue top. */
   topViewEntryFrom2D?: { orthoZoom2d?: number } | null;
   onTopViewEntryFrom2DComplete?: () => void;
+  /** Arbre affiché = copie pair (comparaison) : fond de scène légèrement différent. */
+  peerTreeVisualContext?: boolean;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -845,6 +847,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   onWebGLContextLost,
   topViewEntryFrom2D = null,
   onTopViewEntryFrom2DComplete,
+  peerTreeVisualContext = false,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const contextLostNotifiedRef = useRef(false);
@@ -1301,7 +1304,18 @@ const Scene3D: React.FC<Scene3DProps> = ({
       }}
     >
         {/* IMPORTANT: Restore background color to make sure the scene reacts to theme changes (fixes Light Mode) */}
-        <color attach="background" args={[isDarkMode ? '#000000' : '#f0f9ff']} />
+        <color
+          attach="background"
+          args={[
+            peerTreeVisualContext
+              ? isDarkMode
+                ? '#121a28'
+                : '#d8e0ea'
+              : isDarkMode
+                ? '#000000'
+                : '#f0f9ff',
+          ]}
+        />
 
         {isOrtho ? (
             <OrthographicCamera 

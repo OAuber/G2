@@ -93,32 +93,40 @@ const en = {
         'No local GEDCOM: import a file or archive from the Data tab to show your tree here. The lower pane shows the host’s tree.',
       waitingPeerGedcom:
         'Waiting for the peer’s GEDCOM… Connection and initial exchange may take a few seconds.',
+      invitePeerOpenGedcom:
+        'To compare both trees, ask your peer to open or import their GEDCOM or archive (.g2 / Lifethread) in the Data tab. Without a tree on their side, only yours is shown.',
+      inviteGuestOpenLocalGedcom:
+        'Import your GEDCOM or archive (Data tab) to keep your own copy on this device and save peer imports into your local tree.',
       suggestedPeerMatches: 'Hints on peer tree',
       suggestedLocalMatches: 'Hints on local tree',
       mergeHowItWorks:
-        'Nothing merges by itself: proposals for people or edits appear in the Details panel; accept or reject each one. « Mark processed » is only a local reminder for your workflow.',
+        'Import from the peer fills empty fields on your local person and adds attachments. Detailed proposals may still appear in the Details panel. « Processed » is a local reminder.',
       photosSyncHint:
         'Peer photos and documents are sent after the GEDCOM (in separate batches), when the session policy allows media.',
       absent: 'Absent',
       traitCheckbox: 'Processed',
-      mergeBarTitle: 'Merge databases',
-      mergeModalTitle: 'Merge options',
-      mergeOptionAll: 'All data',
-      mergeOptionSelection: 'Selected data',
-      mergeValidate: 'Confirm',
-      mergeCancel: 'Cancel',
-      mergeIgnorePair: 'Ignore this match',
-      mergeBarOpen: 'Merge the two selected individuals',
-      mergeBarHint: 'Two individuals are selected — open merge options.',
-      mergeUnifiedListHint: 'Merged list (local and peer) — same sort and filters as the grid.',
-      mergeSelectionStub:
-        'Selection merge: wiring pending (tick fields to import in the Details panel).',
-      mergeSelectionDone:
-        'Merge saved to your local tree: empty fields filled from the peer; documents imported. Switched to 2D individual view.',
-      mergeNeedsTwoBases: 'Load a local GEDCOM to save the merge.',
-      mergeMissingPair: 'Pair not found — pick an anchor and a candidate again.',
-      mergeInvalidPair: 'Merge requires one local individual and one peer individual (pc: prefix).',
-      mergeAllStub: 'Full merge of all suggestions is not available yet; use merge for the current selection.',
+      importPairBarTitle: 'Import from peer',
+      importPairModalTitle: 'Import peer data',
+      importPairOptionFull:
+        'Import everything for the selected peer person (with your pair: anchor + candidate): vital events, notes, documents and photos — into your local person.',
+      importPairOptionPartial:
+        'Import only what is checked in the Details panel (vital info/notes and/or documents).',
+      importPairPartialDone:
+        'Partial import saved. Showing your merged local person (2D individual view).',
+      listProcessedMarkTitle:
+        'Marked as done for this comparison session (local reminder only; does not change files).',
+      noMatchesFound: 'No match found.',
+      importPairConfirm: 'Confirm',
+      importPairCancel: 'Cancel',
+      importPairDecline: 'Skip this pair',
+      importPairBarOpen: 'Import peer data into the local person',
+      importPairBarHint: 'Two persons are selected — choose how to import.',
+      importPairUnifiedListHint: 'Local + peer list — same sort and filters as the grid.',
+      importPairSelectionDone:
+        'Import saved to your tree: empty fields filled from the peer; documents added. Switched to 2D individual view.',
+      importPairNeedsTwoBases: 'Load a local GEDCOM to save to this device.',
+      importPairMissingPair: 'Pair not found — pick an anchor and a candidate again.',
+      importPairInvalidPair: 'You need one local person and one peer person (pc: prefix).',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -581,7 +589,7 @@ const en = {
     peerReadOnlyHint: 'This record is from the peer tree: view only.',
     compareImportTitle: 'Import into your tree',
     compareImportHint:
-      'Choose what you plan to import (actual merge wiring will come in a later version).',
+      'Choose what to include for a partial import from the import bar (modal). Full import includes everything.',
     compareImportFields: 'Vital info and notes',
     compareImportDocuments: 'Documents and photos',
     peerDocumentsReadOnly: 'Peer documents are read-only here.',

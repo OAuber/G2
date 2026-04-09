@@ -93,32 +93,40 @@ const fr = {
         'Aucun GEDCOM local : importez un fichier ou une archive depuis l’onglet Données pour afficher votre arbre ici. La zone du bas montre la base de l’hôte.',
       waitingPeerGedcom:
         'En attente du GEDCOM du pair… La connexion et l’échange initial peuvent prendre quelques secondes.',
+      invitePeerOpenGedcom:
+        'Pour comparer les deux bases, votre pair doit ouvrir ou importer son fichier GEDCOM ou son archive (.g2 / Lifethread) dans l’onglet Données. Sans arbre côté pair, seule votre base s’affiche.',
+      inviteGuestOpenLocalGedcom:
+        'Importez votre GEDCOM ou votre archive (onglet Données) pour avoir votre propre base et enregistrer les imports du pair sur votre machine.',
       suggestedPeerMatches: 'Pistes côté pair',
       suggestedLocalMatches: 'Pistes côté local',
       mergeHowItWorks:
-        'Aucune fusion automatique : les propositions de fiches ou de changements arrivent dans le panneau Détails ; vous les acceptez ou les rejetez une par une. « Marquer comme traité » est un repère local pour votre suivi.',
+        'Importer depuis le pair complète votre fiche locale (champs vides et pièces). Les propositions détaillées restent aussi dans le panneau Détails. « Traité » est un repère local.',
       photosSyncHint:
         'Photos et documents du pair : envoyés après le GEDCOM (lots séparés), si la politique de session autorise les médias.',
       absent: 'Absent',
       traitCheckbox: 'Traité',
-      mergeBarTitle: 'Fusion des bases',
-      mergeModalTitle: 'Options de fusion',
-      mergeOptionAll: 'Toutes les données',
-      mergeOptionSelection: 'Sélection de données',
-      mergeValidate: 'Valider',
-      mergeCancel: 'Annuler',
-      mergeIgnorePair: 'Ignorer cette proposition',
-      mergeBarOpen: 'Fusionner les deux fiches sélectionnées',
-      mergeBarHint: 'Deux fiches sont sélectionnées — ouvrez les options de fusion.',
-      mergeUnifiedListHint: 'Liste fusionnée (local et pair) — même tri et filtres que la grille.',
-      mergeSelectionStub:
-        'Fusion sur sélection : branchement à venir (cochez les champs à importer dans le panneau Détails).',
-      mergeSelectionDone:
-        'Fusion enregistrée sur votre base locale : champs vides complétés depuis le pair, documents importés. Vue 2D individuelle.',
-      mergeNeedsTwoBases: 'Importez ou chargez un GEDCOM local pour enregistrer la fusion.',
-      mergeMissingPair: 'Paire de fiches introuvable — sélectionnez à nouveau une ancre et un candidat.',
-      mergeInvalidPair: 'La fusion nécessite une fiche locale et une fiche pair (préfixe pc:).',
-      mergeAllStub: 'Fusion complète de toutes les pistes : non disponible pour l’instant ; utilisez la fusion sur la sélection courante.',
+      importPairBarTitle: 'Importer depuis le pair',
+      importPairModalTitle: 'Importer des données du pair',
+      importPairOptionFull:
+        'Tout importer pour la fiche pair sélectionnée (avec la paire : ancre + candidat) : état civil, notes, documents et photos — dans votre fiche locale.',
+      importPairOptionPartial:
+        'Importer uniquement ce qui est coché dans le panneau Détails (état civil / notes et/ou documents).',
+      importPairPartialDone:
+        'Import partiel enregistré. Affichage sur la fiche locale fusionnée (vue 2D individuelle).',
+      listProcessedMarkTitle:
+        'Marquée comme traitée pour cette session de comparaison (repère local, sans modifier les fichiers).',
+      noMatchesFound: 'Aucune correspondance trouvée.',
+      importPairConfirm: 'Confirmer',
+      importPairCancel: 'Annuler',
+      importPairDecline: 'Ne pas importer cette paire',
+      importPairBarOpen: 'Importer les données du pair vers la fiche locale',
+      importPairBarHint: 'Deux fiches sont sélectionnées — choisissez comment importer.',
+      importPairUnifiedListHint: 'Liste locale + pair — même tri et filtres que la grille.',
+      importPairSelectionDone:
+        'Import enregistré dans votre base : champs vides complétés depuis le pair, documents ajoutés. Affichage en vue 2D individuelle.',
+      importPairNeedsTwoBases: 'Importez ou chargez un GEDCOM local pour enregistrer sur votre machine.',
+      importPairMissingPair: 'Paire introuvable — sélectionnez à nouveau une ancre et un candidat.',
+      importPairInvalidPair: 'Il faut une fiche locale et une fiche pair (préfixe pc:).',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -581,7 +589,7 @@ const fr = {
     peerReadOnlyHint: 'Cette fiche provient de la base du pair : consultation seule.',
     compareImportTitle: 'Import vers votre base',
     compareImportHint:
-      'Cochez ce que vous souhaiterez importer (la fusion effective sera branchée dans une prochaine version).',
+      'Cochez ce qui doit être repris lors d’un import partiel depuis la barre d’import (modal). L’import total reprend tout.',
     compareImportFields: 'État civil et notes',
     compareImportDocuments: 'Documents et photos',
     peerDocumentsReadOnly: 'Documents du pair en lecture seule.',

@@ -853,7 +853,16 @@ const Sidebar: React.FC<SidebarProps> = ({
             {/* Header for Records & Selection */}
             <div className={`px-4 py-2 bg-opacity-50 ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'} flex justify-between items-center text-xs font-semibold uppercase tracking-wider ${subTextClass} border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-200'}`}>
                 <span className="leading-tight">
-                  {compareListMode ? (
+                  {compareListMode &&
+                  compareMergedIndividuals != null &&
+                  onCompareSelectUnified ? (
+                    <>
+                      {t('app.compare.sidebarLocal')} ({data ? Object.keys(data.individuals).length : 0})
+                      <span className="mx-1">·</span>
+                      {t('app.compare.sidebarRemote')} (
+                      {compareRemoteData ? Object.keys(compareRemoteData.individuals).length : '—'})
+                    </>
+                  ) : compareListMode ? (
                     <>
                       {t('sidebar.labels.records')}: {t('app.compare.sidebarLocal')} ({data ? Object.keys(data.individuals).length : 0})
                       <span className="mx-1">·</span>
@@ -866,13 +875,40 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </span>
                 <div className="flex items-center gap-2">
                   <span title={t('sidebar.labels.visibleIn2D')}>
-                    2D: {!data
+                    2D:{' '}
+                    {!data &&
+                    !(
+                      compareListMode &&
+                      compareMergedIndividuals != null &&
+                      onCompareSelectUnified
+                    )
                       ? '—'
-                      : selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__') 
-                      ? `${selectedIdsFor2D.size}/${Object.keys(data.individuals).length}` 
-                      : selectedIdsFor2D?.has('__NONE__') 
-                        ? `0/${Object.keys(data.individuals).length}`
-                        : `${t('sidebar.labels.all')} (${Object.keys(data.individuals).length})`}
+                      : (() => {
+                          const merged =
+                            compareListMode &&
+                            compareMergedIndividuals != null &&
+                            onCompareSelectUnified;
+                          const total = merged
+                            ? compareMergedIndividuals.length
+                            : data
+                              ? Object.keys(data.individuals).length
+                              : 0;
+                          if (
+                            merged &&
+                            selectedIdsFor2D &&
+                            selectedIdsFor2D.size > 0 &&
+                            !selectedIdsFor2D.has('__NONE__')
+                          ) {
+                            return `${selectedIdsFor2D.size}/${total}`;
+                          }
+                          if (!merged && selectedIdsFor2D && selectedIdsFor2D.size > 0 && !selectedIdsFor2D.has('__NONE__')) {
+                            return `${selectedIdsFor2D.size}/${total}`;
+                          }
+                          if (selectedIdsFor2D?.has('__NONE__')) {
+                            return `0/${total}`;
+                          }
+                          return `${t('sidebar.labels.all')} (${total})`;
+                        })()}
                   </span>
                   {onClear2DSelection && onToggle2DSelection && data && (
                       <button 
@@ -1001,7 +1037,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       : 'bg-white/95 border-slate-200 text-slate-600'
                   }`}
                 >
-                  {t('sidebar.labels.records')} ({compareMergedIndividuals.length}) — {t('app.compare.mergeUnifiedListHint')}
+                  {t('app.compare.importPairUnifiedListHint')}
                 </div>
                 {compareMergedDisplayed.map((indi) => {
                   const isPeer = indi.id.startsWith(PEER_COMPARE_ID_PREFIX);
@@ -1053,22 +1089,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                         >
                           {isPeer ? t('app.compare.sidebarRemote') : t('app.compare.sidebarLocal')}
                         </span>
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
-                            indi.gender === 'F'
-                              ? 'bg-pink-500 text-pink-500'
-                              : 'bg-blue-500 text-blue-500'
-                          }`}
-                        >
-                          {indi.givenName?.[0]}
-                          {indi.surname?.[0]}
-                          {isCal && (
-                            <div
-                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
-                              title={t('sidebar.labels.containsCalculatedDates')}
-                            />
-                          )}
-                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <div
@@ -1076,12 +1096,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                             >
                               {indi.givenName}{' '}
                               <span className="font-bold">{indi.surname}</span>
+                              {isCal && (
+                                <span
+                                  className="ms-1.5 inline-block w-2 h-2 rounded-full bg-yellow-500 border border-black/40 align-middle"
+                                  title={t('sidebar.labels.containsCalculatedDates')}
+                                />
+                              )}
                             </div>
                             {isProcessed && (
-                              <Check
-                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
-                                aria-hidden
-                              />
+                              <span
+                                className="shrink-0 inline-flex"
+                                title={t('app.compare.listProcessedMarkTitle')}
+                              >
+                                <Check
+                                  className="w-3.5 h-3.5 text-emerald-500"
+                                  aria-label={t('app.compare.listProcessedMarkTitle')}
+                                />
+                              </span>
                             )}
                             <div className="opacity-70">{getSourceIcon(indi.source)}</div>
                           </div>
@@ -1155,24 +1186,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         type="button"
                         onClick={() => onCompareSelectLocal(indi)}
-                        className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
+                        className="flex-1 text-left py-2 flex items-center gap-2 overflow-hidden"
                       >
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
-                            indi.gender === 'F'
-                              ? 'bg-pink-500 text-pink-500'
-                              : 'bg-blue-500 text-blue-500'
-                          }`}
-                        >
-                          {indi.givenName?.[0]}
-                          {indi.surname?.[0]}
-                          {isCal && (
-                            <div
-                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
-                              title={t('sidebar.labels.containsCalculatedDates')}
-                            />
-                          )}
-                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <div
@@ -1180,12 +1195,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                             >
                               {indi.givenName}{' '}
                               <span className="font-bold">{indi.surname}</span>
+                              {isCal && (
+                                <span
+                                  className="ms-1.5 inline-block w-2 h-2 rounded-full bg-yellow-500 border border-black/40 align-middle"
+                                  title={t('sidebar.labels.containsCalculatedDates')}
+                                />
+                              )}
                             </div>
                             {isProcessed && (
-                              <Check
-                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
-                                aria-hidden
-                              />
+                              <span
+                                className="shrink-0 inline-flex"
+                                title={t('app.compare.listProcessedMarkTitle')}
+                              >
+                                <Check
+                                  className="w-3.5 h-3.5 text-emerald-500"
+                                  aria-label={t('app.compare.listProcessedMarkTitle')}
+                                />
+                              </span>
                             )}
                             <div className="opacity-70">{getSourceIcon(indi.source)}</div>
                           </div>
@@ -1251,24 +1277,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         type="button"
                         onClick={() => onCompareSelectRemote(indi)}
-                        className="flex-1 text-left py-2 flex items-center gap-3 overflow-hidden"
+                        className="flex-1 text-left py-2 flex items-center gap-2 overflow-hidden"
                       >
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
-                            indi.gender === 'F'
-                              ? 'bg-pink-500 text-pink-500'
-                              : 'bg-blue-500 text-blue-500'
-                          }`}
-                        >
-                          {indi.givenName?.[0]}
-                          {indi.surname?.[0]}
-                          {isCal && (
-                            <div
-                              className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-500 rounded-full border border-black shadow-sm"
-                              title={t('sidebar.labels.containsCalculatedDates')}
-                            />
-                          )}
-                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <div
@@ -1276,12 +1286,23 @@ const Sidebar: React.FC<SidebarProps> = ({
                             >
                               {indi.givenName}{' '}
                               <span className="font-bold">{indi.surname}</span>
+                              {isCal && (
+                                <span
+                                  className="ms-1.5 inline-block w-2 h-2 rounded-full bg-yellow-500 border border-black/40 align-middle"
+                                  title={t('sidebar.labels.containsCalculatedDates')}
+                                />
+                              )}
                             </div>
                             {isProcessed && (
-                              <Check
-                                className="w-3.5 h-3.5 shrink-0 text-emerald-500"
-                                aria-hidden
-                              />
+                              <span
+                                className="shrink-0 inline-flex"
+                                title={t('app.compare.listProcessedMarkTitle')}
+                              >
+                                <Check
+                                  className="w-3.5 h-3.5 text-emerald-500"
+                                  aria-label={t('app.compare.listProcessedMarkTitle')}
+                                />
+                              </span>
                             )}
                             <div className="opacity-70">{getSourceIcon(indi.source)}</div>
                           </div>

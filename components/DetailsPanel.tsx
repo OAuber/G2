@@ -168,6 +168,11 @@ interface DetailsPanelProps {
   onRenounceIdentity: () => void;
   /** Fiche du pair en lecture seule (détail plein panneau, fond gris). */
   comparePeerReadOnly?: boolean;
+  /** Import pair (modal) : coches pilotées par App en session comparaison. */
+  comparePeerImportFields?: boolean;
+  comparePeerImportDocs?: boolean;
+  onComparePeerImportFieldsChange?: (value: boolean) => void;
+  onComparePeerImportDocsChange?: (value: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -445,6 +450,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onImportIdentityBackup,
   onRenounceIdentity,
   comparePeerReadOnly = false,
+  comparePeerImportFields: comparePeerImportFieldsProp,
+  comparePeerImportDocs: comparePeerImportDocsProp,
+  onComparePeerImportFieldsChange,
+  onComparePeerImportDocsChange,
 }) => {
   const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
@@ -503,8 +512,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [showExportPassword, setShowExportPassword] = useState(false);
   const [showImportPassword, setShowImportPassword] = useState(false);
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
-  const [peerImportFields, setPeerImportFields] = useState(true);
-  const [peerImportDocs, setPeerImportDocs] = useState(true);
+  const [peerImportFieldsInternal, setPeerImportFieldsInternal] = useState(true);
+  const [peerImportDocsInternal, setPeerImportDocsInternal] = useState(true);
+  const peerImportFields =
+    comparePeerImportFieldsProp !== undefined ? comparePeerImportFieldsProp : peerImportFieldsInternal;
+  const peerImportDocs =
+    comparePeerImportDocsProp !== undefined ? comparePeerImportDocsProp : peerImportDocsInternal;
   const prevRightPanelOpenRef = useRef(false);
 
   useEffect(() => {
@@ -1282,7 +1295,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <input
                 type="checkbox"
                 checked={peerImportFields}
-                onChange={(e) => setPeerImportFields(e.target.checked)}
+                onChange={(e) => {
+                  const v = e.target.checked;
+                  if (onComparePeerImportFieldsChange) onComparePeerImportFieldsChange(v);
+                  else setPeerImportFieldsInternal(v);
+                }}
                 className="h-3.5 w-3.5 shrink-0"
               />
               <span className={textClass}>{t('details.compareImportFields')}</span>
@@ -1291,7 +1308,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <input
                 type="checkbox"
                 checked={peerImportDocs}
-                onChange={(e) => setPeerImportDocs(e.target.checked)}
+                onChange={(e) => {
+                  const v = e.target.checked;
+                  if (onComparePeerImportDocsChange) onComparePeerImportDocsChange(v);
+                  else setPeerImportDocsInternal(v);
+                }}
                 className="h-3.5 w-3.5 shrink-0"
               />
               <span className={textClass}>{t('details.compareImportDocuments')}</span>

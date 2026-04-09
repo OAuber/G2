@@ -36,6 +36,12 @@ interface Scene2DIndividualProps {
   wheelOnlyOnCanvas?: boolean;
   /** Rubans « pistes fusion » (mode comparaison). */
   compareSuggestionIds?: Set<string>;
+  compareSuggestionScores?: ReadonlyMap<string, number> | null;
+  compareFusionCompleted?: boolean;
+  compareProcessedIds?: ReadonlySet<string> | null;
+  onCompareProcessedToggle?: (individualId: string, processed: boolean) => void;
+  comparePeerRibbonBackdrop?: boolean;
+  gridDefaultZoom?: number;
 }
 
 const Scene2DIndividual: React.FC<Scene2DIndividualProps> = (props) => {

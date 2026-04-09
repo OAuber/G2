@@ -1,19 +1,19 @@
 import React, { useState, useEffect } from 'react';
 
-export type CompareMergeMode = 'all' | 'selection';
+/** Import depuis le pair : fiche complète ou blocs cochés (panneau Détails, à venir). */
+export type CompareImportMode = 'full' | 'partial';
 
 type Props = {
   isOpen: boolean;
   isDarkMode: boolean;
   title: string;
-  optionAll: string;
-  optionSelection: string;
+  optionFull: string;
+  optionPartial: string;
   validateLabel: string;
   cancelLabel: string;
   ignoreLabel?: string;
   onCancel: () => void;
-  onConfirm: (mode: CompareMergeMode) => void;
-  /** Retour grille complète sans fusionner la paire courante. */
+  onConfirm: (mode: CompareImportMode) => void;
   onIgnorePair?: () => void;
 };
 
@@ -21,8 +21,8 @@ const CompareMergeModal: React.FC<Props> = ({
   isOpen,
   isDarkMode,
   title,
-  optionAll,
-  optionSelection,
+  optionFull,
+  optionPartial,
   validateLabel,
   cancelLabel,
   ignoreLabel,
@@ -30,10 +30,10 @@ const CompareMergeModal: React.FC<Props> = ({
   onConfirm,
   onIgnorePair,
 }) => {
-  const [mode, setMode] = useState<CompareMergeMode>('selection');
+  const [mode, setMode] = useState<CompareImportMode>('full');
 
   useEffect(() => {
-    if (isOpen) setMode('selection');
+    if (isOpen) setMode('full');
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -53,25 +53,25 @@ const CompareMergeModal: React.FC<Props> = ({
           {title}
         </h2>
         <div className="space-y-2 mb-4">
-          <label className={`flex items-center gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
+          <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
             <input
               type="radio"
-              name="compare-merge-mode"
-              checked={mode === 'all'}
-              onChange={() => setMode('all')}
-              className="shrink-0"
+              name="compare-import-mode"
+              checked={mode === 'full'}
+              onChange={() => setMode('full')}
+              className="shrink-0 mt-0.5"
             />
-            <span>{optionAll}</span>
+            <span>{optionFull}</span>
           </label>
-          <label className={`flex items-center gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
+          <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
             <input
               type="radio"
-              name="compare-merge-mode"
-              checked={mode === 'selection'}
-              onChange={() => setMode('selection')}
-              className="shrink-0"
+              name="compare-import-mode"
+              checked={mode === 'partial'}
+              onChange={() => setMode('partial')}
+              className="shrink-0 mt-0.5"
             />
-            <span>{optionSelection}</span>
+            <span>{optionPartial}</span>
           </label>
         </div>
         <div className="flex flex-wrap justify-end gap-2">

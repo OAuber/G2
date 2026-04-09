@@ -105,6 +105,8 @@ interface TopPanelProps {
   onOpenIdentityPanel?: () => void;
   /** Raccourci après invite : invité pas encore identifié. */
   showCompleteIdentityHint?: boolean;
+  /** Comparaison : message supplémentaire (ex. inviter le pair à charger son GEDCOM). */
+  compareSessionExtraHint?: string | null;
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -153,6 +155,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   showCompleteIdentityHint = false,
   shareCompareAllowed = true,
   onCreateEphemeralInvite,
+  compareSessionExtraHint = null,
 }) => {
   const { t } = useI18n();
   const [targetHostId, setTargetHostId] = useState('');
@@ -388,6 +391,13 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <p className={`text-xs mt-1 leading-relaxed ${textClass}`}>
                 {t(`topPanel.contextMessage_${sessionContextKey}`)}
               </p>
+              {compareSessionExtraHint && (
+                <p
+                  className={`text-[11px] mt-2 leading-relaxed border-t pt-2 ${isDarkMode ? 'border-slate-700 text-amber-200/95' : 'border-amber-200 text-amber-900'}`}
+                >
+                  {compareSessionExtraHint}
+                </p>
+              )}
             </div>
 
             <div
