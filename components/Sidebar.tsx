@@ -467,7 +467,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       );
     }
 
-    const sorted = applySortMode(list, sortMode || 'birth-asc');
+    const sorted = applySortMode(list, sortMode || 'name');
 
     if (!searchTerm) {
         const slice = sorted.slice(0, 200);
@@ -508,7 +508,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         }),
       );
     }
-    const sorted = applySortMode(list, sortMode || 'birth-asc');
+    const sorted = applySortMode(list, sortMode || 'name');
     if (!searchTerm) {
       const slice = sorted.slice(0, 200);
       if (
@@ -1031,13 +1031,33 @@ const Sidebar: React.FC<SidebarProps> = ({
             {compareListMode && compareMergedIndividuals != null && onCompareSelectUnified ? (
               <>
                 <div
-                  className={`sticky top-0 z-[1] -mx-1 px-2 py-1.5 mb-0.5 text-[10px] font-bold uppercase tracking-wider border-b ${
+                  className={`sticky top-0 z-[1] -mx-1 px-2 py-1.5 mb-0.5 border-b space-y-1.5 ${
                     isDarkMode
                       ? 'bg-black/95 border-slate-700 text-slate-300'
                       : 'bg-white/95 border-slate-200 text-slate-600'
                   }`}
                 >
-                  {t('app.compare.importPairUnifiedListHint')}
+                  <div className="text-[10px] font-bold uppercase tracking-wider">
+                    {t('app.compare.importPairUnifiedListHint')}
+                  </div>
+                  {onClear2DSelection && (
+                    <div className="flex flex-wrap items-center gap-2 normal-case font-normal">
+                      <button
+                        type="button"
+                        onClick={() => onClear2DSelection()}
+                        className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${
+                          isDarkMode
+                            ? 'border-slate-600 bg-slate-800/90 text-sky-200 hover:bg-slate-700'
+                            : 'border-sky-400 bg-sky-50 text-sky-900 hover:bg-sky-100'
+                        }`}
+                      >
+                        {t('app.compare.showFullGrid')}
+                      </button>
+                      <span className={`text-[9px] opacity-75 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {t('app.compare.showFullGridShortcut')}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 {compareMergedDisplayed.map((indi) => {
                   const isPeer = indi.id.startsWith(PEER_COMPARE_ID_PREFIX);
@@ -1348,9 +1368,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                     >
                       <div
                         className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold bg-opacity-20 shrink-0 relative ${
-                          indi.gender === 'F'
+                          indi.gender === Gender.Female
                             ? 'bg-pink-500 text-pink-500'
-                            : 'bg-blue-500 text-blue-500'
+                            : indi.gender === Gender.Male
+                              ? 'bg-blue-500 text-blue-500'
+                              : 'bg-slate-500 text-slate-500'
                         }`}
                       >
                         {indi.givenName?.[0]}

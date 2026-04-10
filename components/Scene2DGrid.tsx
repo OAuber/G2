@@ -90,21 +90,6 @@ function isOfflinePhotoUrl(url: string): boolean {
   return u.startsWith('data:') || u.startsWith('blob:');
 }
 
-/** Liste de pistes (scores connus) : ruban au meilleur % au centre de la rangée. */
-function orderBestScoreInCenter(
-  items: Individual[],
-  scores: ReadonlyMap<string, number>,
-): Individual[] {
-  if (items.length <= 1) return items;
-  if (!scores.size) return items;
-  const allHaveScore = items.every((i) => scores.has(i.id));
-  if (!allHaveScore) return items;
-  const sorted = [...items].sort((a, b) => scores.get(b.id)! - scores.get(a.id)!);
-  const [best, ...tail] = sorted;
-  const mid = Math.floor(tail.length / 2);
-  return [...tail.slice(0, mid), best, ...tail.slice(mid)];
-}
-
 const GRID_PHOTO_PLANES_MAX_ONLINE = 10;
 const GRID_PHOTO_PLANES_MAX_OFFLINE = 100;
 
@@ -2686,7 +2671,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   onIndividualClick,
   isDarkMode,
   relationshipRevealEnabled = false,
-  sortMode = 'birth-asc',
+  sortMode = 'name',
   activeFilters,
   singleIndividual = false,
   onExpandAndSwitch3D,
@@ -2809,10 +2794,29 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       );
     }
     let ordered = applySortMode(list, sortMode);
+    /** Comparaison : ancre (sélection) puis pistes par score décroissant, puis le reste au tri — évite l’ordre A→Z qui met un homonyme avant la bonne piste. */
     if (compareSuggestionScores && compareSuggestionScores.size > 0 && ordered.length > 1) {
-      const allScored = ordered.every((i) => compareSuggestionScores.has(i.id));
-      if (allScored) {
-        ordered = orderBestScoreInCenter(ordered, compareSuggestionScores);
+      const anchor =
+        selectedId && ordered.some((i) => i.id === selectedId)
+          ? ordered.find((i) => i.id === selectedId)
+          : null;
+      if (anchor) {
+        const rest = ordered.filter((i) => i.id !== selectedId);
+        const rScored = rest.filter((i) => compareSuggestionScores.has(i.id));
+        const rUnscored = rest.filter((i) => !compareSuggestionScores.has(i.id));
+        rScored.sort(
+          (a, b) =>
+            (compareSuggestionScores.get(b.id) ?? 0) - (compareSuggestionScores.get(a.id) ?? 0),
+        );
+        ordered = [anchor, ...rScored, ...applySortMode(rUnscored, sortMode)];
+      } else {
+        const scored = ordered.filter((i) => compareSuggestionScores.has(i.id));
+        const unscored = ordered.filter((i) => !compareSuggestionScores.has(i.id));
+        scored.sort(
+          (a, b) =>
+            (compareSuggestionScores.get(b.id) ?? 0) - (compareSuggestionScores.get(a.id) ?? 0),
+        );
+        ordered = [...unscored, ...scored];
       }
     }
     return ordered;

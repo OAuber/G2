@@ -115,18 +115,40 @@ const fr = {
         'Import partiel enregistré. Affichage sur la fiche locale fusionnée (vue 2D individuelle).',
       listProcessedMarkTitle:
         'Marquée comme traitée pour cette session de comparaison (repère local, sans modifier les fichiers).',
-      noMatchesFound: 'Aucune correspondance trouvée.',
+      noMatchesFound: 'Aucune correspondance trouvée',
+      noLocalPeerCorrespondence:
+        'Aucune correspondance repérée pour cet individu local dans l’arbre du pair.',
       importPairConfirm: 'Confirmer',
       importPairCancel: 'Annuler',
       importPairDecline: 'Ne pas importer cette paire',
       importPairBarOpen: 'Importer les données du pair vers la fiche locale',
       importPairBarHint: 'Deux fiches sont sélectionnées — choisissez comment importer.',
+      importPairBarHintSelectTwo:
+        'Sélectionnez une fiche du pair (nouvel individu local) ou une fiche locale et une fiche du pair (fusion).',
+      importPairBarDisabledTitle:
+        'Sélectionnez une fiche du pair, ou deux fiches distinctes (locale + pair) pour fusionner.',
+      importPairBarOpenCreate: 'Créer une fiche locale à partir du pair',
+      importPairBarHintCreate:
+        'Fiche pair sélectionnée — import pour créer un nouvel individu dans votre arbre.',
+      importPairModalTitleCreate: 'Créer un individu local depuis le pair',
+      importPairOptionFullCreate:
+        'Créer un nouvel individu local avec état civil, notes, documents et photos de la fiche pair.',
+      importPairOptionPartialCreate:
+        'Créer un individu local en n’important que ce qui est coché dans le panneau Détails.',
+      importPairCreateDone:
+        'Nouvel individu créé dans votre base à partir du pair. Affichage en vue 2D individuelle.',
+      importPairCreatePartialDone:
+        'Création partielle enregistrée. Affichage sur la nouvelle fiche locale (vue 2D individuelle).',
       importPairUnifiedListHint: 'Liste locale + pair — même tri et filtres que la grille.',
+      showFullGrid: 'Grille complète',
+      showFullGridShortcut: 'Tous les individus des deux bases — aussi touche Échap.',
       importPairSelectionDone:
         'Import enregistré dans votre base : champs vides complétés depuis le pair, documents ajoutés. Affichage en vue 2D individuelle.',
       importPairNeedsTwoBases: 'Importez ou chargez un GEDCOM local pour enregistrer sur votre machine.',
       importPairMissingPair: 'Paire introuvable — sélectionnez à nouveau une ancre et un candidat.',
       importPairInvalidPair: 'Il faut une fiche locale et une fiche pair (préfixe pc:).',
+      manualPairWeakMatch:
+        'Paire formée manuellement : le score automatique est faible — vérifiez prénoms, sexe et dates avant d’importer.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -139,6 +161,8 @@ const fr = {
     shortcuts: 'Raccourcis',
     shortcutReveal: 'Ctrl/⌘ + Survol — révéler les liens de parenté entre la sélection et le survol.',
     shortcutBoxes: 'Ctrl/⌘ + B — afficher/masquer les boîtes individuelles en vue 3D.',
+    shortcutCompareFullGrid:
+      'Échap (comparaison 2D) — revenir à la grille complète des deux bases et lever l’ancre de pistes.',
     appearance: 'Apparence',
     topLabels: "Les labels top apparaissent au max d'années visibles (Z)",
     labelFontSize: 'Taille de police des labels 3D',

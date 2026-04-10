@@ -87,6 +87,8 @@ import {
 import { buildPeerCompareSnapshot, peerCompareInboundAllowDocuments } from './app/peerCompareInbound';
 import {
   clonePeerDocumentsForLocalMerge,
+  emptyIndividualShellForPeerImport,
+  getNextIndividualId,
   mergePeerIndividualIntoLocal,
   resolveComparePairLocalAndPeer,
 } from './app/comparePairMerge';
@@ -113,7 +115,7 @@ import {
   useP2PTransferModes,
   type P2PSyncSendersLog,
 } from './hooks/useP2PSession';
-import { rankPeerMatchesForIndividual } from './services/compareIndividualSimilarity';
+import { rankPeerMatchesForIndividual, scoreIndividualPair } from './services/compareIndividualSimilarity';
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
@@ -197,8 +199,8 @@ function App() {
   const cameraMode: CameraMode = displayMode === '3d-individual' ? 'individual'
     : displayMode === '3d-top' ? 'top' : displayMode === '3d-free' ? 'free' : 'top';
   const is2dIndividual = displayMode === '2d-individual';
-  // CHANGED: Default sort to 'birth-asc' so Ancestors are Left (Oldest), Descendants Right (Newest)
-  const [sortMode, setSortMode] = useState<SortMode>('birth-asc'); 
+  /** Tri liste / grille 2D par défaut : noms A→Z (comparaison et usage courant). */
+  const [sortMode, setSortMode] = useState<SortMode>('name'); 
   const [, setCenterRequest] = useState(0);
   const [activeFilters, setActiveFilters] = useState<Set<FilterTag>>(new Set());
 
@@ -243,7 +245,10 @@ function App() {
         }
       : null
   );
-  const [bundleToast, setBundleToast] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [bundleToast, setBundleToast] = useState<{
+    kind: 'success' | 'error' | 'warning';
+    message: string;
+  } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
   const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
@@ -435,6 +440,10 @@ function App() {
   const [compareProcessedLocalIds, setCompareProcessedLocalIds] = useState<string[]>([]);
   const [compareProcessedRemoteIds, setCompareProcessedRemoteIds] = useState<string[]>([]);
   const [compareMergeModalOpen, setCompareMergeModalOpen] = useState(false);
+  /** Raccourci Échap (effet clavier défini plus haut que le useCallback). */
+  const handleClear2DSelectionRef = useRef<() => void>(() => {});
+  /** Après « grille complète », ne pas réappliquer tout de suite l’id cible d’invitation comme ancre. */
+  const compareSuppressAutoInviteAnchorRef = useRef(false);
   const [compareFusionCompleted, setCompareFusionCompleted] = useState(false);
   /** Coches panneau Détails (fiche pair) — import partiel depuis la modal. */
   const [comparePeerImportFields, setComparePeerImportFields] = useState(true);
@@ -866,7 +875,7 @@ function App() {
   };
 
   const showTransientToast = (
-    kind: 'success' | 'error',
+    kind: 'success' | 'error' | 'warning',
     message: string,
     durationMs: number = 2500
   ) => {
@@ -1095,8 +1104,17 @@ function App() {
       if (targetId && gedcomDataRef.current?.individuals[targetId]) {
         const target = gedcomDataRef.current.individuals[targetId];
         setRootIndividual(target);
-        setSelectedIndividual(target);
-        setDisplayMode('2d-individual');
+        const useCompareGrid =
+          p2pSessionUseCaseRef.current === 'compare' ||
+          pendingInviteRoleRef.current === 'comparator';
+        const compareGuestSkipSelection =
+          p2pModeRef.current === 'client' && useCompareGrid;
+        if (compareGuestSkipSelection) {
+          setSelectedIndividual(null);
+        } else {
+          setSelectedIndividual(target);
+        }
+        setDisplayMode(useCompareGrid ? '2d-grid' : '2d-individual');
         setCenterRequest((prev) => prev + 1);
       }
       setIsIdentifyingSelf(true);
@@ -1686,9 +1704,14 @@ function App() {
       inviteNormalizedProgress.fallbackLocal ||
       (gedcomApplied &&
         (inviteOnboardingStage === 'completed' || inviteOnboardingStage === 'ready'));
+    /** Invité en comparateur : grille sans individu sélectionné (aligné sur l’hôte) — pas besoin de `selectedIndividual` pour « UI prête ». */
+    const compareGuestGridIdle =
+      p2pMode === 'client' && p2pSessionUseCase === 'compare';
     const uiReadyLike =
       inviteOnboardingStage === 'ready' ||
-      (inviteOnboardingStage === 'completed' && !!rootIndividual && !!selectedIndividual);
+      (inviteOnboardingStage === 'completed' &&
+        !!rootIndividual &&
+        (!!selectedIndividual || compareGuestGridIdle));
 
     return [
       { key: 'connection', label: t('topPanel.inviteLandingStepConnection'), status: connected ? 'done' : (inviteOnboardingStage === 'connecting' ? 'active' : 'pending') as 'done' | 'active' | 'pending' },
@@ -1707,6 +1730,8 @@ function App() {
     inviteNormalizedProgress,
     rootIndividual,
     selectedIndividual,
+    p2pMode,
+    p2pSessionUseCase,
   ]);
   const inviteLandingMediaLabel = useMemo(() => {
     if (!inviteMediaProgress) return null;
@@ -1829,24 +1854,22 @@ function App() {
     [gedcomData, peerCompareGedcom],
   );
 
-  /** Pistes depuis l’ancre courante (local ou `pc:`) vers l’autre base. */
+  /** Pistes depuis l’ancre courante (local ou `pc:`) vers l’autre base. Source = fiche de la vue fusionnée (même objet qu’à l’écran). */
   const compareUnifiedMatchSuggestions = useMemo(() => {
-    if (!gedcomData || !peerCompareGedcom || !compareMatchAnchorId) return [];
+    if (!gedcomData || !peerCompareGedcom || !compareMatchAnchorId || !mergedCompareGedcom) return [];
+    const source = mergedCompareGedcom.individuals[compareMatchAnchorId];
+    if (!source) return [];
     if (compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX)) {
-      const remote = peerCompareGedcom.individuals[compareMatchAnchorId];
-      if (!remote) return [];
-      return rankPeerMatchesForIndividual(remote, Object.values(gedcomData.individuals), {
-        minScore: 0.2,
+      return rankPeerMatchesForIndividual(source, Object.values(gedcomData.individuals), {
+        minScore: 0.45,
         limit: 8,
       });
     }
-    const local = gedcomData.individuals[compareMatchAnchorId];
-    if (!local) return [];
-    return rankPeerMatchesForIndividual(local, Object.values(peerCompareGedcom.individuals), {
-      minScore: 0.2,
+    return rankPeerMatchesForIndividual(source, Object.values(peerCompareGedcom.individuals), {
+      minScore: 0.45,
       limit: 8,
     });
-  }, [gedcomData, peerCompareGedcom, compareMatchAnchorId]);
+  }, [gedcomData, peerCompareGedcom, compareMatchAnchorId, mergedCompareGedcom]);
 
   const compareUnifiedSuggestionIdSet = useMemo(
     () => new Set(compareUnifiedMatchSuggestions.map((s) => s.individual.id)),
@@ -1858,6 +1881,39 @@ function App() {
     [compareUnifiedMatchSuggestions],
   );
 
+  /**
+   * Import depuis le pair : fusion locale+pair, ou **création** d’un nouvel individu local à partir d’une fiche pair seule
+   * (sans chercher un homonyme local).
+   */
+  const compareMergeImportIntent = useMemo(():
+    | { kind: 'merge'; localId: string; peerPcId: string }
+    | { kind: 'create'; peerPcId: string }
+    | null => {
+    if (!gedcomData || !peerCompareGedcom) return null;
+    let merge: { localId: string; peerPcId: string } | null = null;
+    if (compareMatchAnchorId && compareMatchPairId) {
+      merge = resolveComparePairLocalAndPeer(compareMatchAnchorId, compareMatchPairId);
+    } else {
+      const anc = compareMatchAnchorId;
+      const sel = selectedIndividual?.id ?? null;
+      if (anc && sel && anc !== sel) {
+        merge = resolveComparePairLocalAndPeer(anc, sel);
+      }
+    }
+    if (merge) return { kind: 'merge', ...merge };
+    const sel = selectedIndividual?.id ?? null;
+    if (sel?.startsWith(PEER_COMPARE_ID_PREFIX) && peerCompareGedcom.individuals[sel]) {
+      return { kind: 'create', peerPcId: sel };
+    }
+    return null;
+  }, [
+    gedcomData,
+    peerCompareGedcom,
+    compareMatchAnchorId,
+    compareMatchPairId,
+    selectedIndividual?.id,
+  ]);
+
   useEffect(() => {
     if (!compareDualViewActive || is2dIndividual) {
       setCompareNoMatchFlash(null);
@@ -1867,11 +1923,24 @@ function App() {
       setCompareNoMatchFlash(null);
       return;
     }
+    if (compareMergeImportIntent?.kind === 'merge') {
+      setCompareNoMatchFlash(null);
+      return;
+    }
     if (compareUnifiedMatchSuggestions.length > 0) {
       setCompareNoMatchFlash(null);
       return;
     }
-    setCompareNoMatchFlash(t('app.compare.noMatchesFound'));
+    const anchorIsLocal =
+      !compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX) &&
+      !!gedcomData?.individuals[compareMatchAnchorId];
+    setCompareNoMatchFlash(
+      t(
+        anchorIsLocal
+          ? 'app.compare.noLocalPeerCorrespondence'
+          : 'app.compare.noMatchesFound',
+      ),
+    );
     const h = window.setTimeout(() => setCompareNoMatchFlash(null), 4200);
     return () => window.clearTimeout(h);
   }, [
@@ -1880,6 +1949,8 @@ function App() {
     compareMatchAnchorId,
     compareMatchPairId,
     compareUnifiedMatchSuggestions.length,
+    compareMergeImportIntent?.kind,
+    gedcomData,
     t,
   ]);
 
@@ -1890,6 +1961,10 @@ function App() {
       return new Set<string>([compareMatchAnchorId, compareMatchPairId]);
     }
     if (compareMatchAnchorId) {
+      /** Sans piste auto : ne pas réduire à l’ancre seule (invité après import, etc.). Grille = tous (Set vide côté Scene2DGrid). */
+      if (compareUnifiedMatchSuggestions.length === 0) {
+        return selectedIdsFor2D.size > 0 ? selectedIdsFor2D : new Set<string>();
+      }
       const ids = new Set<string>([compareMatchAnchorId]);
       for (const s of compareUnifiedMatchSuggestions) ids.add(s.individual.id);
       return ids;
@@ -1971,7 +2046,24 @@ function App() {
         }),
       );
     }
-    return applySortMode(list, sortMode);
+    const baseSorted = applySortMode(list, sortMode);
+    /** Même logique que la grille : ancre puis pistes par score, puis le reste (évite « Faustine » avant « Jacques » en A→Z). */
+    if (compareMatchAnchorId && compareUnifiedMatchSuggestions.length > 0) {
+      const anchor = mergedCompareGedcom.individuals[compareMatchAnchorId];
+      const sugIds = new Set(compareUnifiedMatchSuggestions.map((s) => s.individual.id));
+      const sugOrdered = [...compareUnifiedMatchSuggestions].sort((a, b) => b.score - a.score);
+      const rest = baseSorted.filter(
+        (i) => i.id !== compareMatchAnchorId && !sugIds.has(i.id),
+      );
+      const out: Individual[] = [];
+      if (anchor) out.push(anchor);
+      for (const s of sugOrdered) {
+        if (s.individual.id !== compareMatchAnchorId) out.push(s.individual);
+      }
+      out.push(...rest);
+      return out;
+    }
+    return baseSorted;
   }, [
     compareDualViewActive,
     mergedCompareGedcom,
@@ -1979,6 +2071,8 @@ function App() {
     selectedIndividual?.id,
     activeFiltersCompareUnified,
     mergedDocumentsForCompareUi,
+    compareMatchAnchorId,
+    compareUnifiedMatchSuggestions,
   ]);
 
   const compareProcessedIdsMerged = useMemo(
@@ -2047,10 +2141,16 @@ function App() {
     const invitedIndividual = gedcomData.individuals[pendingInviteTargetIndividualId];
     if (!invitedIndividual) return;
     setRootIndividual(invitedIndividual);
-    setSelectedIndividual(invitedIndividual);
-    setDisplayMode('2d-individual');
+    const useCompareGrid =
+      p2pSessionUseCase === 'compare' || pendingInviteRole === 'comparator';
+    if (p2pMode === 'client' && useCompareGrid) {
+      setSelectedIndividual(null);
+    } else {
+      setSelectedIndividual(invitedIndividual);
+    }
+    setDisplayMode(useCompareGrid ? '2d-grid' : '2d-individual');
     setRightPanelOpen(true);
-  }, [pendingInviteTargetIndividualId, gedcomData]);
+  }, [pendingInviteTargetIndividualId, gedcomData, p2pSessionUseCase, pendingInviteRole, p2pMode]);
 
   useEffect(() => {
     if (!pendingInviteToken) return;
@@ -2135,7 +2235,16 @@ function App() {
     if (inviteOnboardingStage !== 'completed') return;
     if (!inviteSceneDeferred) return;
     const gedcomApplied = !!inviteGedcomProgress?.applied;
-    if (!gedcomApplied || isLoading || !rootIndividual || !selectedIndividual) return;
+    const compareGuestIdle =
+      p2pMode === 'client' && p2pSessionUseCase === 'compare';
+    if (
+      !gedcomApplied ||
+      isLoading ||
+      !rootIndividual ||
+      (!selectedIndividual && !compareGuestIdle)
+    ) {
+      return;
+    }
     setInviteSceneDeferred(false);
   }, [
     pendingInviteToken,
@@ -2145,18 +2254,22 @@ function App() {
     isLoading,
     rootIndividual,
     selectedIndividual,
+    p2pMode,
+    p2pSessionUseCase,
   ]);
 
   useEffect(() => {
     if (!pendingInviteToken) return;
     if (inviteOnboardingStage !== 'completed') return;
     const gedcomApplied = !!inviteGedcomProgress?.applied;
+    const compareGuestIdle =
+      p2pMode === 'client' && p2pSessionUseCase === 'compare';
     const uiStillPreparing =
       inviteSceneDeferred ||
       isLoading ||
       !gedcomApplied ||
       !rootIndividual ||
-      !selectedIndividual;
+      (!selectedIndividual && !compareGuestIdle);
     if (uiStillPreparing) {
       if (inviteUiReadyTimerRef.current !== null) {
         window.clearTimeout(inviteUiReadyTimerRef.current);
@@ -2185,6 +2298,8 @@ function App() {
     isLoading,
     rootIndividual,
     selectedIndividual,
+    p2pMode,
+    p2pSessionUseCase,
   ]);
 
   useEffect(() => {
@@ -2204,7 +2319,9 @@ function App() {
     if (!pendingInviteToken) return;
     if (inviteOnboardingStage !== 'completed') return;
     if (shouldSuspendSceneForInvite) return;
-    if (!rootIndividual || !selectedIndividual) return;
+    const compareGuestIdle =
+      p2pMode === 'client' && p2pSessionUseCase === 'compare';
+    if (!rootIndividual || (!selectedIndividual && !compareGuestIdle)) return;
     if (inviteRibbonFirstRenderDone) return;
     if (inviteRibbonRenderRaf1Ref.current !== null) {
       window.cancelAnimationFrame(inviteRibbonRenderRaf1Ref.current);
@@ -2228,6 +2345,8 @@ function App() {
     rootIndividual,
     selectedIndividual,
     inviteRibbonFirstRenderDone,
+    p2pMode,
+    p2pSessionUseCase,
   ]);
 
   useEffect(() => {
@@ -2348,6 +2467,30 @@ function App() {
         return;
       }
 
+      if (e.key === 'Escape' && !compareMergeModalOpen) {
+        const el = e.target as HTMLElement | null;
+        if (
+          el &&
+          (el.tagName === 'INPUT' ||
+            el.tagName === 'TEXTAREA' ||
+            el.tagName === 'SELECT' ||
+            el.isContentEditable)
+        ) {
+          return;
+        }
+        if (
+          compareDualViewActive &&
+          viewMode === '2D' &&
+          (compareMatchAnchorId ||
+            compareMatchPairId ||
+            displayMode === '2d-individual')
+        ) {
+          e.preventDefault();
+          handleClear2DSelectionRef.current();
+          return;
+        }
+      }
+
       if (modifierPressed && e.key.toLowerCase() === 'b' && !e.repeat) {
         e.preventDefault();
         setShowBoxes(prev => !prev);
@@ -2368,7 +2511,15 @@ function App() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [isHelpOpen]);
+  }, [
+    isHelpOpen,
+    compareMergeModalOpen,
+    compareDualViewActive,
+    viewMode,
+    compareMatchAnchorId,
+    compareMatchPairId,
+    displayMode,
+  ]);
 
   const resetEphemeralGuestSession = () => {
     activeGuestInviteIdRef.current = null;
@@ -4099,7 +4250,18 @@ function App() {
 
     if (initialFocus) {
       setRootIndividual(initialFocus);
-      setSelectedIndividual(initialFocus);
+      const useCompareGrid =
+        p2pSessionUseCaseRef.current === 'compare' ||
+        pendingInviteRoleRef.current === 'comparator';
+      const compareGuestSkipSelection =
+        !options?.royalsDemoPreset &&
+        p2pModeRef.current === 'client' &&
+        useCompareGrid;
+      if (compareGuestSkipSelection) {
+        setSelectedIndividual(null);
+      } else {
+        setSelectedIndividual(initialFocus);
+      }
       if (options?.royalsDemoPreset && royalsFocus) {
         // Comme le passage 2D → 3D libre (handleSetDisplayMode) : animation de vol vers
         // computeModePosition('free', …) + OrbitControls identiques (rotation off pendant le vol, puis min/max polar).
@@ -4124,7 +4286,7 @@ function App() {
           setDocumentsTabSignal((n) => n + 1);
         }
       } else {
-        setDisplayMode('2d-individual');
+        setDisplayMode(useCompareGrid ? '2d-grid' : '2d-individual');
         setRightPanelOpen(true);
       }
 
@@ -4258,6 +4420,22 @@ function App() {
         return;
       }
 
+      /** Paire manuelle (même sans piste auto) : une fiche locale et une `pc:` — permet d’importer quand l’algo ne propose rien. */
+      if (compareMatchAnchorId && resolveComparePairLocalAndPeer(compareMatchAnchorId, id)) {
+        const anchorInd =
+          gedcomData?.individuals[compareMatchAnchorId] ??
+          peerCompareGedcom?.individuals[compareMatchAnchorId];
+        const pairInd = gedcomData?.individuals[id] ?? peerCompareGedcom?.individuals[id];
+        if (anchorInd && pairInd) {
+          const s = scoreIndividualPair(anchorInd, pairInd);
+          if (s < 0.45) {
+            showTransientToast('warning', t('app.compare.manualPairWeakMatch'), 4200);
+          }
+        }
+        setCompareMatchPairId(id);
+        return;
+      }
+
       setCompareMatchAnchorId(id);
       setCompareMatchPairId(null);
     },
@@ -4271,13 +4449,33 @@ function App() {
       compareMatchPairId,
       compareMatchAnchorId,
       compareUnifiedSuggestionIdSet,
+      showTransientToast,
+      t,
     ],
   );
 
   const handleCompareIgnorePair = useCallback(() => {
+    compareSuppressAutoInviteAnchorRef.current = true;
     setCompareMatchPairId(null);
     setCompareMatchAnchorId(null);
   }, []);
+
+  /** Liste 2D : « tout afficher » ; en comparaison : enlève aussi l’ancre/paire et repasse en grille 2D si besoin. */
+  const handleClear2DSelection = useCallback(() => {
+    setSelectedIdsFor2D(new Set());
+    if (compareDualViewActive) {
+      compareSuppressAutoInviteAnchorRef.current = true;
+      setCompareMatchAnchorId(null);
+      setCompareMatchPairId(null);
+      if (displayMode === '2d-individual') {
+        setDisplayMode('2d-grid');
+      }
+    }
+  }, [compareDualViewActive, displayMode]);
+
+  useEffect(() => {
+    handleClear2DSelectionRef.current = handleClear2DSelection;
+  }, [handleClear2DSelection]);
 
   const handleToggleCompareLocalProcessed = useCallback((individualId: string, processed: boolean) => {
     if (processed) {
@@ -4318,19 +4516,8 @@ function App() {
         return;
       }
 
-      if (!compareMatchAnchorId || !compareMatchPairId) {
-        showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
-        return;
-      }
-      const resolved = resolveComparePairLocalAndPeer(compareMatchAnchorId, compareMatchPairId);
-      if (!resolved) {
-        showTransientToast('error', t('app.compare.importPairInvalidPair'), 3200);
-        return;
-      }
-      const { localId, peerPcId } = resolved;
-      const localInd = originalGedcomData.individuals[localId];
-      const peerInd = peerCompareGedcom.individuals[peerPcId];
-      if (!localInd || !peerInd) {
+      const intent = compareMergeImportIntent;
+      if (!intent) {
         showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
         return;
       }
@@ -4340,10 +4527,44 @@ function App() {
       const mergeDocuments =
         mode === 'full' || (mode === 'partial' && comparePeerImportDocs);
 
-      let mergedInd: Individual = localInd;
-      if (mergeFields) {
-        mergedInd = mergePeerIndividualIntoLocal(localInd, peerInd);
+      const peerInd = peerCompareGedcom.individuals[intent.peerPcId];
+      if (!peerInd) {
+        showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
+        return;
       }
+
+      let localId: string;
+      let mergedInd: Individual;
+
+      if (intent.kind === 'merge') {
+        localId = intent.localId;
+        const localInd = originalGedcomData.individuals[localId];
+        if (!localInd) {
+          showTransientToast('error', t('app.compare.importPairMissingPair'), 3200);
+          return;
+        }
+        mergedInd = localInd;
+        if (mergeFields) {
+          mergedInd = mergePeerIndividualIntoLocal(localInd, peerInd);
+        }
+      } else {
+        const newDataScratch = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
+        localId = getNextIndividualId(newDataScratch);
+        if (mergeFields) {
+          mergedInd = mergePeerIndividualIntoLocal(
+            emptyIndividualShellForPeerImport(localId),
+            peerInd,
+          );
+          mergedInd = {
+            ...mergedInd,
+            generation: peerInd.generation ?? mergedInd.generation,
+            source: 'imported',
+          };
+        } else {
+          mergedInd = emptyIndividualShellForPeerImport(localId);
+        }
+      }
+
       const newData = JSON.parse(JSON.stringify(originalGedcomData)) as GedcomData;
       newData.individuals[localId] = mergedInd;
       setOriginalGedcomData(newData);
@@ -4352,9 +4573,9 @@ function App() {
       }, 10);
 
       const localDocs = documentsByIndividualId[localId] ?? [];
-      const peerDocs = peerCompareDocumentsByIndividualId[peerPcId] ?? [];
+      const peerDocs = peerCompareDocumentsByIndividualId[intent.peerPcId] ?? [];
       if (mergeDocuments) {
-        const imported = clonePeerDocumentsForLocalMerge(peerDocs, peerPcId, localId, localDocs);
+        const imported = clonePeerDocumentsForLocalMerge(peerDocs, intent.peerPcId, localId, localDocs);
         if (imported.length > 0) {
           setDocumentsByIndividualId((prev) => ({
             ...prev,
@@ -4364,7 +4585,7 @@ function App() {
       }
 
       handleToggleCompareLocalProcessed(localId, true);
-      handleToggleCompareRemoteProcessed(peerPcId, true);
+      handleToggleCompareRemoteProcessed(intent.peerPcId, true);
       setCompareFusionCompleted(true);
       setCompareMatchAnchorId(null);
       setCompareMatchPairId(null);
@@ -4374,9 +4595,13 @@ function App() {
       setRightPanelOpen(true);
       handleSetDisplayMode('2d-individual');
       const toastKey =
-        mode === 'partial'
-          ? 'app.compare.importPairPartialDone'
-          : 'app.compare.importPairSelectionDone';
+        intent.kind === 'create'
+          ? mode === 'partial'
+            ? 'app.compare.importPairCreatePartialDone'
+            : 'app.compare.importPairCreateDone'
+          : mode === 'partial'
+            ? 'app.compare.importPairPartialDone'
+            : 'app.compare.importPairSelectionDone';
       showTransientToast('success', t(toastKey), 4800);
     },
     [
@@ -4385,8 +4610,7 @@ function App() {
       t,
       originalGedcomData,
       peerCompareGedcom,
-      compareMatchAnchorId,
-      compareMatchPairId,
+      compareMergeImportIntent,
       comparePeerImportFields,
       comparePeerImportDocs,
       documentsByIndividualId,
@@ -4402,31 +4626,14 @@ function App() {
 
   useEffect(() => {
     if (!compareDualViewActive) {
+      compareSuppressAutoInviteAnchorRef.current = false;
       setCompareFusionCompleted(false);
       setCompareMatchAnchorId(null);
       setCompareMatchPairId(null);
     }
   }, [compareDualViewActive]);
 
-  useEffect(() => {
-    if (!compareDualViewActive || !gedcomData) return;
-    if (compareMatchAnchorId) return;
-    /** Après une fusion, l’ancre est vidée volontairement : ne pas réinjecter l’id cible d’invitation (souvent ≠ fiche locale fusionnée). */
-    if (compareFusionCompleted) return;
-    const tid = pendingInviteTargetIndividualId;
-    if (tid && gedcomData.individuals[tid]) {
-      const indi = gedcomData.individuals[tid];
-      setCompareMatchAnchorId(tid);
-      setSelectedIndividual(indi);
-      setRootIndividual(indi);
-    }
-  }, [
-    compareDualViewActive,
-    gedcomData,
-    pendingInviteTargetIndividualId,
-    compareMatchAnchorId,
-    compareFusionCompleted,
-  ]);
+  /** Pas d’ancre ni de paire implicites pour l’invité : la première sélection pose l’ancre (comme l’hôte). */
 
   /** Vue 3D individuelle ou libre : clic sur le ruban → vue 2D ; clic sur le nom → sélection (close-up 3D). */
   const handle3DRibbonOpen2DIndividual = (id: string) => {
@@ -4465,12 +4672,6 @@ function App() {
         
         return next;
     });
-  };
-
-  const handleClear2DSelection = () => {
-    // If currently showing filtered or none, clear to show ALL
-    setSelectedIdsFor2D(new Set());
-    // Don't clear selectedIndividual - keep focus on current person
   };
 
   // --- RECURSIVE EXPANSION LOGIC ---
@@ -6743,6 +6944,10 @@ function App() {
                   />
                   <span>{t('help.shortcutBoxes')}</span>
                 </label>
+
+                <p className={`ps-7 text-xs leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {t('help.shortcutCompareFullGrid')}
+                </p>
               </div>
             </div>
 
@@ -6971,7 +7176,11 @@ function App() {
                     </div>
                   </div>
                 )}
-                {compareMatchAnchorId && compareMatchPairId && (
+                {gedcomData &&
+                  peerCompareGedcom &&
+                  Object.keys(peerCompareGedcom.individuals).length > 0 &&
+                  !ephemeralGuestActive &&
+                  compareMergeImportIntent && (
                   <div className="pointer-events-auto fixed top-14 left-1/2 z-[115] flex max-w-[min(100%,24rem)] -translate-x-1/2 flex-col items-center gap-1 px-2">
                     <button
                       type="button"
@@ -6982,10 +7191,14 @@ function App() {
                           : 'border-sky-400 bg-white/95 text-sky-800 hover:bg-sky-50'
                       }`}
                     >
-                      {t('app.compare.importPairBarOpen')}
+                      {compareMergeImportIntent.kind === 'create'
+                        ? t('app.compare.importPairBarOpenCreate')
+                        : t('app.compare.importPairBarOpen')}
                     </button>
                     <span className={`text-[10px] text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                      {t('app.compare.importPairBarHint')}
+                      {compareMergeImportIntent.kind === 'create'
+                        ? t('app.compare.importPairBarHintCreate')
+                        : t('app.compare.importPairBarHint')}
                     </span>
                   </div>
                 )}
@@ -7041,9 +7254,21 @@ function App() {
             <CompareMergeModal
               isOpen={compareMergeModalOpen}
               isDarkMode={isDarkMode}
-              title={t('app.compare.importPairModalTitle')}
-              optionFull={t('app.compare.importPairOptionFull')}
-              optionPartial={t('app.compare.importPairOptionPartial')}
+              title={
+                compareMergeImportIntent?.kind === 'create'
+                  ? t('app.compare.importPairModalTitleCreate')
+                  : t('app.compare.importPairModalTitle')
+              }
+              optionFull={
+                compareMergeImportIntent?.kind === 'create'
+                  ? t('app.compare.importPairOptionFullCreate')
+                  : t('app.compare.importPairOptionFull')
+              }
+              optionPartial={
+                compareMergeImportIntent?.kind === 'create'
+                  ? t('app.compare.importPairOptionPartialCreate')
+                  : t('app.compare.importPairOptionPartial')
+              }
               validateLabel={t('app.compare.importPairConfirm')}
               cancelLabel={t('app.compare.importPairCancel')}
               ignoreLabel={t('app.compare.importPairDecline')}
@@ -7468,7 +7693,9 @@ function App() {
             className={`px-3 py-2 rounded-lg border shadow-lg text-xs font-semibold ${
               bundleToast.kind === 'success'
                 ? 'bg-emerald-600/95 border-emerald-500 text-white'
-                : 'bg-rose-600/95 border-rose-500 text-white'
+                : bundleToast.kind === 'warning'
+                  ? 'bg-amber-600/95 border-amber-500 text-white'
+                  : 'bg-rose-600/95 border-rose-500 text-white'
             }`}
           >
             {bundleToast.message}

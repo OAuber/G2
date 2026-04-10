@@ -1,4 +1,4 @@
-import type { DateInfo, Individual } from '../types';
+import type { DateInfo, GedcomData, Individual } from '../types';
 import { Gender } from '../types';
 import type { IndividualDocument } from './p2pAppTypes';
 import { PEER_COMPARE_ID_PREFIX } from './peerCompareIdNamespace';
@@ -13,6 +13,30 @@ export function resolveComparePairLocalAndPeer(
   if (aPeer === bPeer) return null;
   if (aPeer) return { localId: pairId, peerPcId: anchorId };
   return { localId: anchorId, peerPcId: pairId };
+}
+
+/** Prochain id `@I…@` disponible (même logique que la création manuelle dans l’app). */
+export function getNextIndividualId(data: GedcomData): string {
+  const keys = Object.keys(data.individuals);
+  let maxId = 0;
+  for (const k of keys) {
+    const match = k.match(/\d+/);
+    if (match) maxId = Math.max(maxId, parseInt(match[0], 10));
+  }
+  return `@I${maxId + 1}@`;
+}
+
+/** Coquille vide pour fusionner une fiche pair en **nouvel** individu local (sans doublon préexistant). */
+export function emptyIndividualShellForPeerImport(id: string): Individual {
+  return {
+    id,
+    name: ' /',
+    givenName: '',
+    surname: '',
+    gender: Gender.Unknown,
+    familySpouseIds: [],
+    generation: 0,
+  };
 }
 
 function strEmpty(s: string | undefined): boolean {

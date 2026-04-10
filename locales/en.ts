@@ -115,18 +115,40 @@ const en = {
         'Partial import saved. Showing your merged local person (2D individual view).',
       listProcessedMarkTitle:
         'Marked as done for this comparison session (local reminder only; does not change files).',
-      noMatchesFound: 'No match found.',
+      noMatchesFound: 'No correspondence found',
+      noLocalPeerCorrespondence:
+        'No correspondence found for this local person in the peer tree.',
       importPairConfirm: 'Confirm',
       importPairCancel: 'Cancel',
       importPairDecline: 'Skip this pair',
       importPairBarOpen: 'Import peer data into the local person',
       importPairBarHint: 'Two persons are selected — choose how to import.',
+      importPairBarHintSelectTwo:
+        'Select a peer person (new local individual) or one local and one peer person (merge).',
+      importPairBarDisabledTitle:
+        'Select a peer person, or two different people (local + peer) to merge.',
+      importPairBarOpenCreate: 'Create local person from peer',
+      importPairBarHintCreate:
+        'Peer person selected — import will add a new individual to your tree.',
+      importPairModalTitleCreate: 'Create local person from peer',
+      importPairOptionFullCreate:
+        'Create a new local individual with vital info, notes, documents and photos from the peer person.',
+      importPairOptionPartialCreate:
+        'Create a local individual importing only what is checked in the Details panel.',
+      importPairCreateDone:
+        'New person created in your tree from the peer. Switched to 2D individual view.',
+      importPairCreatePartialDone:
+        'Partial creation saved. Showing the new local person (2D individual view).',
       importPairUnifiedListHint: 'Local + peer list — same sort and filters as the grid.',
+      showFullGrid: 'Full grid',
+      showFullGridShortcut: 'All individuals from both trees — Escape key also works.',
       importPairSelectionDone:
         'Import saved to your tree: empty fields filled from the peer; documents added. Switched to 2D individual view.',
       importPairNeedsTwoBases: 'Load a local GEDCOM to save to this device.',
       importPairMissingPair: 'Pair not found — pick an anchor and a candidate again.',
       importPairInvalidPair: 'You need one local person and one peer person (pc: prefix).',
+      manualPairWeakMatch:
+        'Manual pair: automatic score is low — check given names, gender, and dates before importing.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -139,6 +161,8 @@ const en = {
     shortcuts: 'Shortcuts',
     shortcutReveal: 'Ctrl/⌘ + Hover — reveal relationship links between selected and hovered individuals.',
     shortcutBoxes: 'Ctrl/⌘ + B — toggle individual boxes in 3D view.',
+    shortcutCompareFullGrid:
+      'Escape (2D compare) — return to the full two-tree grid and clear the match anchor.',
     appearance: 'Appearance',
     topLabels: 'Top labels appear at max visible years (Z)',
     labelFontSize: '3D label font size',

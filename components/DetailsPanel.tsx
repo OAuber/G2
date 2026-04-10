@@ -2208,7 +2208,18 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 </div>
                 <div className="text-xs text-slate-500 font-mono mb-2 flex items-center gap-2">
                     {individual.id}
-                    {individual.gender === Gender.Female ? <span className="text-pink-500 font-bold">♀</span> : <span className="text-blue-500 font-bold">♂</span>}
+                    {individual.gender === Gender.Female ? (
+                      <span className="text-pink-500 font-bold">♀</span>
+                    ) : individual.gender === Gender.Male ? (
+                      <span className="text-blue-500 font-bold">♂</span>
+                    ) : (
+                      <span
+                        className="text-slate-400 font-bold"
+                        title={t('sidebar.filters.unknownGender')}
+                      >
+                        ?
+                      </span>
+                    )}
                 </div>
               </div>
               <button
