@@ -6,6 +6,17 @@ import {
   resolveLinkKind,
 } from './inviteLinkKind';
 
+/** Décode base64url → chaîne UTF-8 (évite la corruption « HÃ©loÃ¯se » de `JSON.parse(atob(…))`). */
+function base64UrlDecodeUtf8(encoded: string): string {
+  const padded = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** Lit le jeton d’invitation P2P depuis l’URL (query ou hash). */
 export function readInviteTokenFromLocation(): string | null {
   const search = new URLSearchParams(window.location.search);
@@ -22,9 +33,8 @@ export function parseInviteClaimsUnsafe(token: string): InviteTokenClaims | null
   const encodedClaims = token.split('.')[0];
   if (!encodedClaims) return null;
   try {
-    const padded = encodedClaims.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encodedClaims.length / 4) * 4, '=');
-    const decoded = atob(padded);
-    return JSON.parse(decoded) as InviteTokenClaims;
+    const json = base64UrlDecodeUtf8(encodedClaims);
+    return JSON.parse(json) as InviteTokenClaims;
   } catch {
     return null;
   }

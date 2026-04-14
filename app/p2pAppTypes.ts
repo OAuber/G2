@@ -17,6 +17,25 @@ export type P2PVisibilitySettings = {
   allowDirectEdit: boolean;
 };
 
+/** Périmètre et types de données proposés pour l’échange (manifeste bundle — mémo § 5.3). */
+export type InviteExchangeScope = {
+  /**
+   * Individu racine du périmètre (desc / asc / conjoints) dans le GEDCOM **local** de l’émetteur.
+   * Peut différer de la personne « ciblée » par l’invitation et des identités invitant / invité.
+   * Si absent : défaut = personne nominative de l’invitation (`individualId` du lien), si présente dans le fichier.
+   */
+  rootIndividualId?: string;
+  maxGenDown: number;
+  maxGenUp: number;
+  includeSpouses: boolean;
+  data: {
+    vital: boolean;
+    relations: boolean;
+    media: boolean;
+    notes: boolean;
+  };
+};
+
 export type P2PInviteItem = {
   inviteId: string;
   /** Vide pour les invitations « visite libre » (1.2). */
@@ -33,6 +52,8 @@ export type P2PInviteItem = {
   inviteIntent?: 'standard' | 'own_device';
   /** Absent ou `named_claim` : invitation nominative (2). */
   linkKind?: InviteLinkKind;
+  /** Choix invitant : descendance / ascendance max, conjoints, types de données (sinon défauts à l’envoi). */
+  exchangeScope?: InviteExchangeScope;
 };
 
 export type P2PProposalItem = {

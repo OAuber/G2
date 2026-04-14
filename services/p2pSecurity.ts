@@ -7,6 +7,8 @@ export interface InviteTokenClaims {
   accessProfileId: string;
   targetIndividualId?: string;
   targetIndividualName?: string;
+  /** Libellé humain de la racine d’échange (manifeste), pour l’UI invité dès le lien. */
+  exchangeRootDisplayName?: string;
   inviterName?: string;
   issuedAt: string;
   expiresAt?: string;

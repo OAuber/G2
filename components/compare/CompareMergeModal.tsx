@@ -15,6 +15,8 @@ type Props = {
   onCancel: () => void;
   onConfirm: (mode: CompareImportMode) => void;
   onIgnorePair?: () => void;
+  /** Aperçu indicatif périmètre ascendance/descendance (Phase E). */
+  branchImportHint?: string | null;
 };
 
 const CompareMergeModal: React.FC<Props> = ({
@@ -29,6 +31,7 @@ const CompareMergeModal: React.FC<Props> = ({
   onCancel,
   onConfirm,
   onIgnorePair,
+  branchImportHint,
 }) => {
   const [mode, setMode] = useState<CompareImportMode>('full');
 
@@ -52,6 +55,13 @@ const CompareMergeModal: React.FC<Props> = ({
         <h2 id="compare-merge-title" className="text-sm font-semibold mb-3">
           {title}
         </h2>
+        {branchImportHint ? (
+          <p
+            className={`text-[11px] leading-snug mb-3 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}
+          >
+            {branchImportHint}
+          </p>
+        ) : null}
         <div className="space-y-2 mb-4">
           <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
             <input

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Individual } from '../types';
 import { Gender } from '../types';
-import { rankPeerMatchesForIndividual, scoreIndividualPair } from '../services/compareIndividualSimilarity';
+import type { GedcomData } from '../types';
+import {
+  birthYearIsUncertain,
+  rankPeerMatchesForIndividual,
+  scoreIndividualPair,
+  scoreIndividualPairWithLineage,
+} from '../services/compareIndividualSimilarity';
 
 describe('compareIndividualSimilarity', () => {
   it('scores identical names and birth year highly', () => {
@@ -134,6 +140,46 @@ describe('compareIndividualSimilarity', () => {
     expect(s).toBeGreaterThanOrEqual(0.45);
   });
 
+  it('matches Virginie Ancel–like pair when only one side has birth place (5-year gap)', () => {
+    const minimal = {
+      id: '@I320@',
+      givenName: 'Virginie Héloïse',
+      surname: 'ANCEL',
+      gender: Gender.Female,
+      birthDate: { year: 1871 },
+    } as unknown as Individual;
+    const detailed = {
+      id: '@I114@',
+      givenName: 'Virginie, Héloise',
+      surname: 'Ancel',
+      gender: Gender.Female,
+      birthDate: { year: 1876 },
+      birthPlace: 'St-Eustache-la-Forêt, 76576, Seine-Maritime, Normandie, France',
+    } as unknown as Individual;
+    expect(scoreIndividualPair(minimal, detailed)).toBeGreaterThanOrEqual(0.45);
+    expect(scoreIndividualPair(detailed, minimal)).toBeGreaterThanOrEqual(0.45);
+  });
+
+  it('treats divergent GEDCOM birth place strings as same commune (St-Eustache)', () => {
+    const a = {
+      id: 'a',
+      givenName: 'Virginie Héloïse',
+      surname: 'ANCEL',
+      gender: Gender.Female,
+      birthDate: { year: 1871 },
+      birthPlace: 'St-Eustache-la-Forêt, Seine-Maritime, France',
+    } as unknown as Individual;
+    const b = {
+      id: 'b',
+      givenName: 'Virginie, Héloise',
+      surname: 'Ancel',
+      gender: Gender.Female,
+      birthDate: { year: 1876 },
+      birthPlace: 'St-Eustache-la-Forêt, 76576, Seine-Maritime, Normandie, France',
+    } as unknown as Individual;
+    expect(scoreIndividualPair(a, b)).toBeGreaterThanOrEqual(0.45);
+  });
+
   it('rejects same surname and unrelated given names when at least one birth year is missing', () => {
     const anchor = {
       id: 'a',
@@ -172,6 +218,30 @@ describe('compareIndividualSimilarity', () => {
     expect(scoreIndividualPair(older, younger)).toBe(0);
   });
 
+  it('detects uncertain birth years (isCalculated or GEDCOM qualifier in raw)', () => {
+    expect(birthYearIsUncertain({ raw: '1871', year: 1871, isCalculated: true })).toBe(true);
+    expect(birthYearIsUncertain({ raw: 'ABT 1876', year: 1876 })).toBe(true);
+    expect(birthYearIsUncertain({ raw: '1876', year: 1876 })).toBe(false);
+  });
+
+  it('softens year gap when at least one birth year is uncertain (normalized vs sourced)', () => {
+    const sourced = {
+      id: 'a',
+      givenName: 'Virginie Héloïse',
+      surname: 'ANCEL',
+      gender: Gender.Female,
+      birthDate: { raw: '1871', year: 1871 },
+    } as unknown as Individual;
+    const estimated = {
+      id: 'b',
+      givenName: 'Virginie, Héloise',
+      surname: 'Ancel',
+      gender: Gender.Female,
+      birthDate: { raw: 'ABT 1876', year: 1876, isCalculated: true },
+    } as unknown as Individual;
+    expect(scoreIndividualPair(sourced, estimated)).toBeGreaterThanOrEqual(0.45);
+  });
+
   it('does not score high when birth years differ by many years', () => {
     const a = {
       id: 'a',
@@ -188,5 +258,54 @@ describe('compareIndividualSimilarity', () => {
       birthDate: { year: 1920 },
     } as unknown as Individual;
     expect(scoreIndividualPair(a, b)).toBeLessThan(0.45);
+  });
+
+  it('adds bounded lineage bonus when parents match across two gedcoms', () => {
+    const makeGedcom = (): GedcomData => ({
+      individuals: {
+        '@I1@': {
+          id: '@I1@',
+          name: 'Jean /Dupont/',
+          givenName: 'Jean',
+          surname: 'Dupont',
+          gender: Gender.Male,
+          birthDate: { year: 1900, raw: '1900' },
+          familyChildId: '@F1@',
+        },
+        '@I10@': {
+          id: '@I10@',
+          name: 'Pierre /Dupont/',
+          givenName: 'Pierre',
+          surname: 'Dupont',
+          gender: Gender.Male,
+          birthDate: { year: 1870, raw: '' },
+        },
+        '@I11@': {
+          id: '@I11@',
+          name: 'Marie /Martin/',
+          givenName: 'Marie',
+          surname: 'Martin',
+          gender: Gender.Female,
+          birthDate: { year: 1872, raw: '' },
+        },
+      },
+      families: {
+        '@F1@': {
+          id: '@F1@',
+          husbandId: '@I10@',
+          wifeId: '@I11@',
+          childrenIds: ['@I1@'],
+        },
+      },
+    });
+    const ga = makeGedcom();
+    const gb = makeGedcom();
+    const childA = ga.individuals['@I1@']!;
+    const childB = gb.individuals['@I1@']!;
+    const base = scoreIndividualPair(childA, childB);
+    const withL = scoreIndividualPairWithLineage(childA, childB, { gedcomA: ga, gedcomB: gb });
+    expect(base).toBeGreaterThanOrEqual(0.25);
+    expect(withL).toBeGreaterThan(base);
+    expect(withL - base).toBeLessThanOrEqual(0.09);
   });
 });

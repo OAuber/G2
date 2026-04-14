@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Network,
   Copy,
@@ -22,9 +22,116 @@ import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
 import { TOP_PANEL_TAB_I18N, type TopPanelTabId, type TabIndicatorLevel } from './topPanel/topPanelTabs';
 import { TopPanelTabList } from './topPanel/TopPanelTabList';
-import type { P2PVisibilitySettings } from '../app/p2pAppTypes';
+import type { InviteExchangeScope, P2PVisibilitySettings } from '../app/p2pAppTypes';
+import { defaultInviteExchangeScope } from '../services/inviteExchangeManifest';
+import { InviteExchangeScopeForm } from './InviteExchangeScopeForm';
 import type { InviteLinkKind } from '../app/inviteLinkKind';
 import { InviteQrCode } from './InviteQrCode';
+
+const MAX_INVITE_MEMBER_PICK = 500;
+
+/** Sélection d’un membre pour invitation : recherche + liste (meilleure ergonomie qu’un menu natif très long). */
+const InviteLivingMemberCombobox: React.FC<{
+  value: string;
+  onChange: (id: string) => void;
+  candidates: Array<{ id: string; label: string; lifeSpanLine?: string }>;
+  placeholder: string;
+  inputBg: string;
+  textClass: string;
+  subTextClass: string;
+}> = ({ value, onChange, candidates, placeholder, inputBg, textClass, subTextClass }) => {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selectedLabel = useMemo(() => {
+    if (!value) return '';
+    return candidates.find((c) => c.id === value)?.label ?? value;
+  }, [value, candidates]);
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    const list = q
+      ? candidates.filter(
+          (c) =>
+            c.label.toLowerCase().includes(q) ||
+            c.id.toLowerCase().includes(q) ||
+            (c.lifeSpanLine && c.lifeSpanLine.toLowerCase().includes(q)),
+        )
+      : candidates;
+    return list.slice(0, MAX_INVITE_MEMBER_PICK);
+  }, [candidates, query]);
+
+  const pickEmpty = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      onChange('');
+      setOpen(false);
+      setQuery('');
+    },
+    [onChange],
+  );
+  const pickOne = useCallback(
+    (id: string) => (e: React.MouseEvent) => {
+      e.preventDefault();
+      onChange(id);
+      setOpen(false);
+      setQuery('');
+    },
+    [onChange],
+  );
+
+  return (
+    <div className="relative min-w-0">
+      <input
+        type="text"
+        className={`w-full rounded border px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500/40 ${inputBg}`}
+        placeholder={placeholder}
+        value={open ? query : value ? selectedLabel : ''}
+        onFocus={() => {
+          setOpen(true);
+          setQuery('');
+        }}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(false), 160);
+        }}
+        onChange={(e) => setQuery(e.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={placeholder}
+      />
+      {open && (
+        <div
+          className={`absolute z-[110] left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded border shadow-lg ${inputBg}`}
+          role="listbox"
+        >
+          <div
+            className={`px-2 py-1.5 text-xs cursor-pointer hover:bg-blue-500/20 ${subTextClass}`}
+            onMouseDown={pickEmpty}
+          >
+            {placeholder}
+          </div>
+          {filtered.map((c) => (
+            <div
+              key={c.id}
+              role="option"
+              className={`px-2 py-1.5 text-xs cursor-pointer hover:bg-blue-500/20 ${textClass} ${
+                c.id === value ? 'bg-blue-500/25 font-semibold' : ''
+              }`}
+              onMouseDown={pickOne(c.id)}
+            >
+              <span className="break-words">{c.label}</span>
+              {c.lifeSpanLine ? (
+                <span className={`block text-[10px] opacity-70 ${subTextClass}`}>{c.lifeSpanLine}</span>
+              ) : null}
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div className={`px-2 py-1.5 text-xs italic ${subTextClass}`}>{t('details.noMatch')}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface TopPanelProps {
   isOpen: boolean;
@@ -65,7 +172,9 @@ interface TopPanelProps {
     proposalKind?: 'records' | 'documents';
   }>;
   visibilitySettings: P2PVisibilitySettings;
-  livingCandidates: Array<{ id: string; label: string }>;
+  livingCandidates: Array<{ id: string; label: string; lifeSpanLine?: string }>;
+  /** Toutes les fiches du GEDCOM local — racine du périmètre d’échange (hôte). */
+  exchangeRootCandidates?: Array<{ id: string; label: string; lifeSpanLine?: string }>;
   invites: Array<{
     inviteId: string;
     individualId: string;
@@ -77,6 +186,7 @@ interface TopPanelProps {
     inviteLink?: string;
     inviteIntent?: 'standard' | 'own_device';
     linkKind?: InviteLinkKind;
+    exchangeScope?: InviteExchangeScope;
   }>;
   /** Partage/comparaison : session issue d’une invitation nominative (type 2). */
   shareCompareAllowed?: boolean;
@@ -88,9 +198,18 @@ interface TopPanelProps {
   initialCompareStatusText?: string | null;
   buildLabel?: string;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
-  onCreateInvite: (individualId: string, role: 'viewer' | 'contributor' | 'editor' | 'comparator', expiresAt?: string) => void;
+  onCreateInvite: (
+    individualId: string,
+    role: 'viewer' | 'contributor' | 'editor' | 'comparator',
+    expiresAt?: string,
+    options?: { exchangeScope?: InviteExchangeScope },
+  ) => void;
   /** Auto-invitation : même individu identifié → second appareil (ex. mobile). */
-  onCreateOwnDeviceInvite?: (role: 'viewer' | 'contributor' | 'editor', expiresAt?: string) => void;
+  onCreateOwnDeviceInvite?: (
+    role: 'viewer' | 'contributor' | 'editor',
+    expiresAt?: string,
+    options?: { exchangeScope?: InviteExchangeScope },
+  ) => void;
   selfIndividualId?: string | null;
   trustedOwnDevicePeerId?: string | null;
   ownDevicePendingCount?: number;
@@ -107,6 +226,10 @@ interface TopPanelProps {
   showCompleteIdentityHint?: boolean;
   /** Comparaison : message supplémentaire (ex. inviter le pair à charger son GEDCOM). */
   compareSessionExtraHint?: string | null;
+  /** Invité comparateur : ouvrir la modale périmètre d’échange (base locale chargée). */
+  onOpenInviteeExchangeScope?: () => void;
+  showInviteeExchangeScopeEditor?: boolean;
+  inviteeExchangeScopeSetupDone?: boolean;
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -132,6 +255,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
   proposals,
   visibilitySettings,
   livingCandidates,
+  exchangeRootCandidates = [],
   invites,
   pendingInviteToken,
   pendingProposalsCount,
@@ -156,6 +280,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
   shareCompareAllowed = true,
   onCreateEphemeralInvite,
   compareSessionExtraHint = null,
+  onOpenInviteeExchangeScope,
+  showInviteeExchangeScopeEditor = false,
+  inviteeExchangeScopeSetupDone = false,
 }) => {
   const { t } = useI18n();
   const [targetHostId, setTargetHostId] = useState('');
@@ -163,6 +290,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor' | 'comparator'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
+  const [newInviteExchangeScope, setNewInviteExchangeScope] = useState<InviteExchangeScope>(() =>
+    defaultInviteExchangeScope(),
+  );
   const [ephemeralInviteExpiresAt, setEphemeralInviteExpiresAt] = useState('');
   const [ownDeviceRole, setOwnDeviceRole] = useState<'viewer' | 'contributor' | 'editor'>('contributor');
   const [ownDeviceTtlPreset, setOwnDeviceTtlPreset] = useState<'none' | '365' | '730' | '1825' | 'custom'>('none');
@@ -399,6 +529,47 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 </p>
               )}
             </div>
+
+            {isInviteMode && showCompleteIdentityHint && onOpenIdentityPanel && (
+              <div
+                className={`rounded-lg border p-3 ${
+                  isDarkMode ? 'border-amber-600/50 bg-amber-950/40' : 'border-amber-300 bg-amber-50'
+                }`}
+              >
+                <p className={`text-xs font-semibold ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
+                  {t('topPanel.completeIdentityTitle')}
+                </p>
+                <p className={`text-[11px] mt-1 ${subTextClass}`}>{t('topPanel.completeIdentityBody')}</p>
+                <button
+                  type="button"
+                  onClick={onOpenIdentityPanel}
+                  className={`mt-2 text-[11px] px-3 py-1.5 rounded font-bold ${
+                    isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                  }`}
+                >
+                  {t('topPanel.completeIdentityCta')}
+                </button>
+              </div>
+            )}
+
+            {isInviteMode && showInviteeExchangeScopeEditor && onOpenInviteeExchangeScope && (
+              <div
+                className={`rounded-lg border px-3 py-2.5 ${isDarkMode ? 'border-emerald-900/70 bg-emerald-950/30' : 'border-emerald-300 bg-emerald-50'}`}
+              >
+                <p className={`text-[11px] mb-2 leading-relaxed ${subTextClass}`}>
+                  {t('topPanel.inviteeExchangeScopeEditorHint')}
+                </p>
+                <button
+                  type="button"
+                  onClick={onOpenInviteeExchangeScope}
+                  className={`text-sm rounded px-3 py-2 font-semibold w-full sm:w-auto ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                >
+                  {inviteeExchangeScopeSetupDone
+                    ? t('topPanel.inviteeExchangeScopeEditorAgain')
+                    : t('topPanel.inviteeExchangeScopeEditorOpen')}
+                </button>
+              </div>
+            )}
 
             <div
               className="min-h-0"
@@ -878,6 +1049,16 @@ const TopPanel: React.FC<TopPanelProps> = ({
               {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
             </p>
             <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.invitationsProfilesBridge')}</p>
+            {!isInviteMode && (
+              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-slate-600 bg-slate-900/30' : 'border-slate-200 bg-slate-50/90'}`}>
+                <InviteExchangeScopeForm
+                  value={newInviteExchangeScope}
+                  onChange={setNewInviteExchangeScope}
+                  isDarkMode={isDarkMode}
+                  rootCandidates={exchangeRootCandidates}
+                />
+              </div>
+            )}
             {!isInviteMode && onCreateEphemeralInvite && (
               <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-teal-900/80 bg-teal-950/25' : 'border-teal-200 bg-teal-50/80'}`}>
                 <div className={`text-sm font-bold mb-1 ${isDarkMode ? 'text-teal-300' : 'text-teal-800'}`}>
@@ -910,16 +1091,15 @@ const TopPanel: React.FC<TopPanelProps> = ({
             {!isInviteMode && (
             <>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-1">
-              <select
+              <InviteLivingMemberCombobox
                 value={newInviteIndividualId}
-                onChange={(e) => setNewInviteIndividualId(e.target.value)}
-                className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-              >
-                <option value="">{t('topPanel.selectLivingMember')}</option>
-                {livingCandidates.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>{candidate.label}</option>
-                ))}
-              </select>
+                onChange={setNewInviteIndividualId}
+                candidates={livingCandidates}
+                placeholder={t('topPanel.selectLivingMember')}
+                inputBg={inputBg}
+                textClass={textClass}
+                subTextClass={subTextClass}
+              />
               <select
                 value={newInviteRole}
                 onChange={(e) =>
@@ -942,10 +1122,16 @@ const TopPanel: React.FC<TopPanelProps> = ({
               <button
                 onClick={() => {
                   if (!newInviteIndividualId) return;
-                  onCreateInvite(newInviteIndividualId, newInviteRole, newInviteExpiresAt ? new Date(newInviteExpiresAt).toISOString() : undefined);
+                  onCreateInvite(
+                    newInviteIndividualId,
+                    newInviteRole,
+                    newInviteExpiresAt ? new Date(newInviteExpiresAt).toISOString() : undefined,
+                    { exchangeScope: newInviteExchangeScope },
+                  );
                   setNewInviteIndividualId('');
                   setNewInviteRole('viewer');
                   setNewInviteExpiresAt('');
+                  setNewInviteExchangeScope(defaultInviteExchangeScope());
                 }}
                 className={`text-sm rounded px-3 py-1.5 font-semibold ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
               >
@@ -1001,7 +1187,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onCreateOwnDeviceInvite(ownDeviceRole, computeOwnDeviceExpiresAt());
+                      onCreateOwnDeviceInvite(ownDeviceRole, computeOwnDeviceExpiresAt(), {
+                        exchangeScope: newInviteExchangeScope,
+                      });
                     }}
                     className={`text-sm rounded px-3 py-2 font-semibold lg:col-span-1 ${isDarkMode ? 'bg-indigo-700 hover:bg-indigo-600' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
                   >

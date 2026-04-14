@@ -8,6 +8,7 @@ import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR 
 import CompareMergeModal, { type CompareImportMode } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
+import { InviteExchangeScopeForm } from './components/InviteExchangeScopeForm';
 import { AppLayout } from './components/AppLayout';
 import {
   GedcomData,
@@ -59,6 +60,7 @@ import { readAutoSaveSnapshot } from './app/autoSave';
 import type {
   IndividualDocument,
   InitialDiffContext,
+  InviteExchangeScope,
   P2PBundleContentMode,
   P2PInviteItem,
   P2PProposalItem,
@@ -97,6 +99,7 @@ import { useAutoSave } from './hooks/useAutoSave';
 import { useGedcomCore } from './hooks/useGedcomCore';
 import { useDocumentsState } from './hooks/useDocumentsState';
 import { isProbablyLivingForUi } from './app/individualLiving';
+import { formatBirthDeathLine } from './app/formatIndividualLifeSpan';
 import {
   parseInviteClaimsUnsafe,
   readInitialInviteBootstrap,
@@ -116,6 +119,22 @@ import {
   type P2PSyncSendersLog,
 } from './hooks/useP2PSession';
 import { rankPeerMatchesForIndividual, scoreIndividualPair } from './services/compareIndividualSimilarity';
+import {
+  createInviteExchangeManifest,
+  defaultInviteExchangeScope,
+  effectiveExchangePolicy,
+  inviteDataFlagsFromP2PVisibility,
+  parseInviteExchangeManifestJson,
+  resolveExchangeRootIndividualId,
+  validateManifestRootsAgainstGedcom,
+  type InviteExchangeManifest,
+} from './services/inviteExchangeManifest';
+import { previewBranchImportOnLocalTree } from './services/lineageImportScope';
+
+function individualDisplayLabel(indi: Individual | undefined): string {
+  if (!indi) return '';
+  return (`${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id);
+}
 
 function App() {
   const { language, toggleLanguage, t } = useI18n();
@@ -264,10 +283,36 @@ function App() {
   const [pendingInviteInviterName, setPendingInviteInviterName] = useState<string | null>(
     () => INVITE_BOOTSTRAP.inviterName
   );
+  /** Libellé « fiche cible » / invité (jeton), distinct de la racine du périmètre d’échange hôte. */
+  const [pendingInviteTargetDisplayName, setPendingInviteTargetDisplayName] = useState<string | null>(() => {
+    const c = INVITE_BOOTSTRAP.claims;
+    if (!c) return null;
+    return c.targetIndividualName ?? null;
+  });
+  /** Racine d’échange côté hôte (jeton + rappel bundle) — sans repli sur le nom invité. */
+  const [pendingInviteExchangeRootName, setPendingInviteExchangeRootName] = useState<string | null>(() => {
+    const c = INVITE_BOOTSTRAP.claims;
+    if (!c) return null;
+    return c.exchangeRootDisplayName ?? null;
+  });
   const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(() => INVITE_BOOTSTRAP.role);
   const [pendingInviteIntent, setPendingInviteIntent] = useState<'standard' | 'own_device' | null>(() =>
     INVITE_BOOTSTRAP.claims ? INVITE_BOOTSTRAP.intent : null
   );
+  /** Invité : plafonds et types de données pour l’envoi vers l’hôte (croisement avec le manifeste reçu). */
+  const [inviteeExchangeScope, setInviteeExchangeScope] = useState<InviteExchangeScope>(() =>
+    defaultInviteExchangeScope(),
+  );
+  const inviteeExchangeScopeRef = useRef<InviteExchangeScope>(inviteeExchangeScope);
+  /** Invité : manifeste parsé depuis le premier bundle hôte (politique effective à la fusion). */
+  const [receivedInviterExchangeManifest, setReceivedInviterExchangeManifest] =
+    useState<InviteExchangeManifest | null>(null);
+  const receivedInviterExchangeManifestRef = useRef<InviteExchangeManifest | null>(null);
+  /** Libellés des racines d’échange hôte (GEDCOM du bundle), pour l’UI invité. */
+  const [inviterHostExchangeRootLabels, setInviterHostExchangeRootLabels] = useState<string[]>([]);
+  const [inviteeExchangeScopeModalOpen, setInviteeExchangeScopeModalOpen] = useState(false);
+  /** Invité a validé la modale périmètre (réouverture via le panneau si besoin). */
+  const [inviteeExchangeScopeSetupDone, setInviteeExchangeScopeSetupDone] = useState(false);
   const [trustedOwnDevicePeerId, setTrustedOwnDevicePeerId] = useState<string | null>(null);
   const [trustedOwnDeviceInviteId, setTrustedOwnDeviceInviteId] = useState<string | null>(null);
   const [inviteOnboardingStage, setInviteOnboardingStage] = useState<'idle' | 'connecting' | 'connected' | 'accepted' | 'syncing' | 'completed' | 'ready' | 'error'>('idle');
@@ -340,6 +385,74 @@ function App() {
   }>({ peerId: null, remoteAccessPolicy: null, selectedIndividual: undefined });
   p2pSyncRuntimeRef.current = { peerId, remoteAccessPolicy, selectedIndividual };
 
+  const buildInviteExchangeManifestJsonRef = useRef<() => string | null>(() => null);
+  buildInviteExchangeManifestJsonRef.current = () => {
+    if (p2pSessionUseCaseRef.current !== 'compare') return null;
+    const gedcom = gedcomDataRef.current;
+    if (!gedcom) return null;
+    const tok = pendingInviteToken;
+    const inv = tok ? p2pInvites.find((i) => i.token === tok) : null;
+    const inviteTargetId = pendingInviteTargetIndividualId ?? inv?.individualId ?? null;
+    if (!inv?.inviteId || !inviteTargetId) return null;
+    const policy =
+      p2pModeRef.current === 'host'
+        ? inv.accessProfile
+        : p2pSyncRuntimeRef.current.remoteAccessPolicy ?? inv.accessProfile;
+    const hostExportRootId = resolveExchangeRootIndividualId(gedcom, inv.exchangeScope, inviteTargetId);
+    if (!hostExportRootId) return null;
+    let inviterManifest: InviteExchangeManifest;
+    if (inv.exchangeScope) {
+      inviterManifest = createInviteExchangeManifest({
+        inviteId: inv.inviteId,
+        rootIndividualIds: [hostExportRootId],
+        maxGenDown: inv.exchangeScope.maxGenDown,
+        maxGenUp: inv.exchangeScope.maxGenUp,
+        includeSpouses: inv.exchangeScope.includeSpouses,
+        data: inv.exchangeScope.data,
+      });
+    } else {
+      inviterManifest = createInviteExchangeManifest({
+        inviteId: inv.inviteId,
+        rootIndividualIds: [hostExportRootId],
+        data: inviteDataFlagsFromP2PVisibility(policy),
+      });
+    }
+    if (p2pModeRef.current === 'host') {
+      return JSON.stringify(inviterManifest);
+    }
+    const guestExportRootId = resolveExchangeRootIndividualId(
+      gedcom,
+      inviteeExchangeScope,
+      inviteTargetId,
+    );
+    if (!guestExportRootId) return null;
+    const inviterFromBundle = receivedInviterExchangeManifest;
+    const syntheticInviter =
+      inviterFromBundle ??
+      (inv.exchangeScope
+        ? createInviteExchangeManifest({
+            inviteId: inv.inviteId,
+            rootIndividualIds: [hostExportRootId],
+            maxGenDown: inv.exchangeScope.maxGenDown,
+            maxGenUp: inv.exchangeScope.maxGenUp,
+            includeSpouses: inv.exchangeScope.includeSpouses,
+            data: inv.exchangeScope.data,
+          })
+        : createInviteExchangeManifest({
+            inviteId: inv.inviteId,
+            rootIndividualIds: [hostExportRootId],
+            data: inviteDataFlagsFromP2PVisibility(policy),
+          }));
+    const effective = effectiveExchangePolicy(syntheticInviter, {
+      maxGenDown: inviteeExchangeScope.maxGenDown,
+      maxGenUp: inviteeExchangeScope.maxGenUp,
+      includeSpouses: inviteeExchangeScope.includeSpouses,
+      data: inviteeExchangeScope.data,
+      rootIndividualIds: [guestExportRootId],
+    });
+    return JSON.stringify(effective);
+  };
+
   const logP2PActivityRef = useRef<P2PSyncSendersLog | null>(null);
   const p2pSyncSenders = useMemo(
     () =>
@@ -357,6 +470,7 @@ function App() {
         getPeerId: () => p2pSyncRuntimeRef.current.peerId,
         getRemoteAccessPolicy: () => p2pSyncRuntimeRef.current.remoteAccessPolicy,
         getSelectedIndividual: () => p2pSyncRuntimeRef.current.selectedIndividual,
+        getInviteExchangeManifestJson: () => buildInviteExchangeManifestJsonRef.current(),
         setP2PSyncStatusText,
       }),
     []
@@ -470,7 +584,11 @@ function App() {
   const inviteMediaRecoveryRequestedRef = useRef(false);
   const inviteMediaRecoveryTimerRef = useRef<number | null>(null);
   const inviteMediaRecoveryAttemptRef = useRef(0);
+  /** Invité : évite d’écraser le formulaire si plusieurs bundles portent un manifeste. */
+  const inviteeBundleScopeAppliedRef = useRef(false);
   const inviteOnboardingStageRef = useRef(inviteOnboardingStage);
+  const inviteOnboardingStagePrevRef = useRef(inviteOnboardingStage);
+  const inviteeExchangeModalEligiblePrevRef = useRef(false);
   const handleInitP2PRef = useRef<() => void>(() => {});
   const topPanelP2pAutoInitForOpenRef = useRef(false);
   /** Dernière `handleDataLoaded` + état invité éphémère : le handler P2P doit lire des refs, pas une closure figée. */
@@ -511,6 +629,29 @@ function App() {
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { pendingInviteTokenRef.current = pendingInviteToken; }, [pendingInviteToken]);
+  useEffect(() => {
+    receivedInviterExchangeManifestRef.current = receivedInviterExchangeManifest;
+  }, [receivedInviterExchangeManifest]);
+  useEffect(() => {
+    inviteeExchangeScopeRef.current = inviteeExchangeScope;
+  }, [inviteeExchangeScope]);
+  useEffect(() => {
+    inviteeBundleScopeAppliedRef.current = false;
+    setReceivedInviterExchangeManifest(null);
+    receivedInviterExchangeManifestRef.current = null;
+    setInviterHostExchangeRootLabels([]);
+    setInviteeExchangeScopeModalOpen(false);
+    setInviteeExchangeScopeSetupDone(false);
+    inviteeExchangeModalEligiblePrevRef.current = false;
+    inviteOnboardingStagePrevRef.current = inviteOnboardingStage;
+    /** Conserver `pendingInviteExchangeRootName` après effacement du jeton (onboarding `ready`) — libellé invité dans le panneau Identité. */
+    if (pendingInviteToken) {
+      const fresh = defaultInviteExchangeScope();
+      inviteeExchangeScopeRef.current = fresh;
+      setInviteeExchangeScope(fresh);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ne resynchroniser qu’au changement de jeton
+  }, [pendingInviteToken]);
   useEffect(() => {
     p2pStatusRef.current = p2pStatus;
     guestSessionModeRef.current = guestSessionMode;
@@ -928,6 +1069,42 @@ function App() {
       setP2PSyncStatusText(null);
       return;
     }
+    const manifestRaw =
+      typeof metadata.inviteExchangeManifestJson === 'string'
+        ? metadata.inviteExchangeManifestJson
+        : null;
+    if (manifestRaw) {
+      const parsedManifest = parseInviteExchangeManifestJson(manifestRaw);
+      if (parsedManifest) {
+        const { ok, missingRootIds } = validateManifestRootsAgainstGedcom(parsedManifest, incomingGedcom);
+        if (!ok) {
+          console.warn('[G2] Manifeste invitation : racines absentes du GEDCOM du bundle', missingRootIds);
+        }
+        if (p2pModeRef.current === 'client' && pendingInviteTokenRef.current) {
+          setReceivedInviterExchangeManifest(parsedManifest);
+          receivedInviterExchangeManifestRef.current = parsedManifest;
+          const labels = parsedManifest.rootIndividualIds.map((rid) => {
+            const indi = incomingGedcom.individuals[rid];
+            return individualDisplayLabel(indi) || rid;
+          });
+          setInviterHostExchangeRootLabels(labels);
+          if (!inviteeBundleScopeAppliedRef.current) {
+            inviteeBundleScopeAppliedRef.current = true;
+            const merged: InviteExchangeScope = {
+              ...inviteeExchangeScopeRef.current,
+              maxGenDown: parsedManifest.maxGenDown,
+              maxGenUp: parsedManifest.maxGenUp,
+              includeSpouses: parsedManifest.includeSpouses,
+              data: { ...parsedManifest.data },
+            };
+            inviteeExchangeScopeRef.current = merged;
+            setInviteeExchangeScope(merged);
+          }
+        }
+      } else {
+        console.warn('[G2] Manifeste invitation : JSON invalide ou schéma incompatible');
+      }
+    }
     const normalizedFromBundle = typeof metadata.normalizedGedcomContent === 'string'
       ? parseGedcom(metadata.normalizedGedcomContent)
       : null;
@@ -1101,14 +1278,62 @@ function App() {
         }
       }
     } else {
-      if (targetId && gedcomDataRef.current?.individuals[targetId]) {
+      const useCompareGrid =
+        p2pSessionUseCaseRef.current === 'compare' ||
+        pendingInviteRoleRef.current === 'comparator';
+      const compareGuestSkipSelection =
+        p2pModeRef.current === 'client' && useCompareGrid;
+      if (compareGuestSkipSelection && peerCompareGedcomRef.current) {
+        const gedcom = gedcomDataRef.current;
+        const manifest = receivedInviterExchangeManifestRef.current;
+        const scope = inviteeExchangeScopeRef.current;
+        const hostRootWire = manifest?.rootIndividualIds?.[0] ?? null;
+
+        let localRootId = resolveExchangeRootIndividualId(
+          gedcom ?? { individuals: {}, families: {} },
+          scope,
+          targetId,
+        );
+        if (hostRootWire && gedcom?.individuals[hostRootWire]) {
+          localRootId = hostRootWire;
+        } else if (!localRootId && targetId && gedcom?.individuals[targetId]) {
+          localRootId = targetId;
+        }
+
+        const localInd =
+          localRootId && gedcom?.individuals[localRootId] ? gedcom.individuals[localRootId] : null;
+
+        const peerMap = peerCompareGedcomRef.current.individuals;
+        let peerInd: Individual | undefined;
+        if (hostRootWire) {
+          const pc = wireIndividualIdToPeerCompareId(hostRootWire);
+          if (peerMap[pc]) peerInd = peerMap[pc];
+        }
+        if (!peerInd && targetId) {
+          const pc = wireIndividualIdToPeerCompareId(targetId);
+          if (peerMap[pc]) peerInd = peerMap[pc];
+          if (!peerInd && peerMap[targetId]) peerInd = peerMap[targetId];
+        }
+        if (!peerInd) {
+          peerInd = Object.values(peerMap)[0];
+        }
+
+        if (localInd) {
+          setRootIndividual(localInd);
+          setSelectedIndividual(null);
+          setCompareMatchAnchorId(localInd.id);
+          setCompareMatchPairId(peerInd?.id ?? null);
+        } else if (peerInd) {
+          setRootIndividual(peerInd);
+          setSelectedIndividual(null);
+          setCompareMatchAnchorId(null);
+          setCompareMatchPairId(peerInd.id);
+        }
+        setDisplayMode('2d-grid');
+        setCenterRequest((prev) => prev + 1);
+      } else if (targetId && gedcomDataRef.current?.individuals[targetId]) {
         const target = gedcomDataRef.current.individuals[targetId];
         setRootIndividual(target);
-        const useCompareGrid =
-          p2pSessionUseCaseRef.current === 'compare' ||
-          pendingInviteRoleRef.current === 'comparator';
-        const compareGuestSkipSelection =
-          p2pModeRef.current === 'client' && useCompareGrid;
         if (compareGuestSkipSelection) {
           setSelectedIndividual(null);
         } else {
@@ -1122,7 +1347,20 @@ function App() {
     }
     setInviteOnboardingStage('completed');
     setInviteRibbonFirstRenderDone(false);
-    setInviteGedcomProgress((prev) => prev ? { ...prev, applied: true } : { receivedChunks: 1, totalChunks: 1, applied: true });
+    setInviteGedcomProgress({
+      receivedChunks: 1,
+      totalChunks: 1,
+      applied: true,
+    });
+    /** Invité comparateur : pas de normalisé réseau (`applyIncomingNormalizedGedcom` ignoré) — marquer le pas comme résolu. */
+    if (pendingInviteRoleRef.current === 'comparator') {
+      setInviteNormalizedProgress({
+        receivedChunks: 0,
+        totalChunks: 0,
+        applied: true,
+        fallbackLocal: true,
+      });
+    }
     setLeftPanelOpen(true);
     setRightPanelOpen(true);
     if (inviteOnboardingDismissTimerRef.current !== null) {
@@ -1608,6 +1846,39 @@ function App() {
   const livingCandidates = probablyLivingCandidates;
   const identityClaimCandidates = probablyLivingCandidates;
 
+  /** Cibles d’invitation (hôte) : liste plus large que l’identité stricte — même base que la fiche affichée (mort calculée / pas d’année). */
+  const hostInviteMemberCandidates = useMemo(() => {
+    if (!gedcomData) return [];
+    return Object.values(gedcomData.individuals)
+      .filter((indi) => {
+        if (isProbablyLivingForUi(indi.id, gedcomData, originalGedcomData)) return true;
+        const d = indi.deathDate;
+        if (!d?.year) return true;
+        if (d.isCalculated === true) return true;
+        return false;
+      })
+      .map((indi) => ({
+        id: indi.id,
+        label: `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id,
+        lifeSpanLine: formatBirthDeathLine(indi.birthDate, indi.deathDate),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id));
+  }, [gedcomData, originalGedcomData]);
+
+  /** Toutes les fiches du fichier local (jeu source), pour choisir la racine du périmètre — aligné mémo §8 (pas seulement le normalisé affiché). */
+  const exchangeRootCandidates = useMemo(() => {
+    const data = originalGedcomData ?? gedcomData;
+    if (!data?.individuals) return [];
+    return Object.values(data.individuals)
+      .filter((indi) => !indi.id.startsWith(PEER_COMPARE_ID_PREFIX))
+      .map((indi) => ({
+        id: indi.id,
+        label: `${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id,
+        lifeSpanLine: formatBirthDeathLine(indi.birthDate, indi.deathDate),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id));
+  }, [originalGedcomData, gedcomData]);
+
   const pendingProposalsCount = useMemo(
     () => p2pProposals.filter((proposal) => proposal.status === 'pending').length,
     [p2pProposals]
@@ -1626,6 +1897,60 @@ function App() {
     () => p2pInvites.find((invite) => invite.token === pendingInviteToken) || null,
     [p2pInvites, pendingInviteToken]
   );
+  /** Nom affiché de l’invité (fiche cible / jeton), distinct du libellé racine d’échange hôte. */
+  const guestInviteTargetDisplayName = useMemo(() => {
+    if (pendingInviteTargetDisplayName) return pendingInviteTargetDisplayName;
+    if (pendingInviteItem?.individualName) return pendingInviteItem.individualName;
+    const introId = selfIdentity?.introduction?.inviteId;
+    if (introId) {
+      const inv = p2pInvites.find((i) => i.inviteId === introId);
+      if (inv?.individualName) return inv.individualName;
+    }
+    return null;
+  }, [pendingInviteTargetDisplayName, pendingInviteItem, selfIdentity?.introduction?.inviteId, p2pInvites]);
+  /** Bandeau / bouton périmètre d’échange : comparateur + lien nominatif (jeton ou session après fin d’onboarding — le jeton est souvent effacé au `ready`). */
+  const inviteeExchangeScopeEditorVisible = useMemo(() => {
+    if (p2pMode === 'host') return false;
+    const fromToken =
+      !!pendingInviteToken &&
+      (() => {
+        const claims = parseInviteClaimsUnsafe(pendingInviteToken);
+        return (
+          !!claims &&
+          claims.role === 'comparator' &&
+          resolveLinkKind(claims) !== 'ephemeral_free'
+        );
+      })();
+    const namedClaimSession = sessionLinkKind === 'named_claim';
+    const fromSession =
+      namedClaimSession &&
+      (pendingInviteRole === 'comparator' ||
+        (p2pMode === 'client' && p2pSessionUseCase === 'compare'));
+    return Boolean(fromToken || fromSession);
+  }, [p2pMode, pendingInviteToken, sessionLinkKind, pendingInviteRole, p2pSessionUseCase]);
+
+  /** Auto-ouverture modale : même éligibilité + base locale chargée (évite une modale vide au premier rendu). */
+  const inviteeExchangeScopeModalEligible = useMemo(() => {
+    if (!inviteeExchangeScopeEditorVisible) return false;
+    const localData = originalGedcomData ?? gedcomData;
+    if (!localData || Object.keys(localData.individuals).length === 0) return false;
+    return true;
+  }, [inviteeExchangeScopeEditorVisible, gedcomData, originalGedcomData]);
+
+  useEffect(() => {
+    if (inviteeExchangeScopeSetupDone) return;
+    const prevStage = inviteOnboardingStagePrevRef.current;
+    const prevEligible = inviteeExchangeModalEligiblePrevRef.current;
+    inviteOnboardingStagePrevRef.current = inviteOnboardingStage;
+    inviteeExchangeModalEligiblePrevRef.current = inviteeExchangeScopeModalEligible;
+    if (!inviteeExchangeScopeModalEligible || inviteOnboardingStage !== 'ready') return;
+    const becameReady = prevStage !== 'ready' && inviteOnboardingStage === 'ready';
+    const becameEligible = !prevEligible && inviteeExchangeScopeModalEligible;
+    if (becameReady || becameEligible) {
+      setInviteeExchangeScopeModalOpen(true);
+    }
+  }, [inviteOnboardingStage, inviteeExchangeScopeModalEligible, inviteeExchangeScopeSetupDone]);
+
   const ephemeralNoPersist = useMemo(() => {
     if (p2pMode !== 'client') return false;
     /** Session comparaison : autosauvegarde de la base locale (imports) pour l’invité comme pour l’hôte. */
@@ -1670,11 +1995,34 @@ function App() {
     inviteOnboardingStage !== 'ready' &&
     !(pendingInviteRole === 'comparator' && !inviteLandingBlocksComparatorWorkspace);
   const inviteLandingDescription = useMemo(() => {
-    const template = t('topPanel.inviteLandingText');
     const inviter = pendingInviteInviterName || t('topPanel.inviteLandingInviterFallback');
+    const rootDisplay =
+      inviterHostExchangeRootLabels.length > 0
+        ? inviterHostExchangeRootLabels.join(' · ')
+        : pendingInviteExchangeRootName ||
+          pendingInviteItem?.individualName ||
+          t('topPanel.inviteLandingRootNameFallback');
+    if (
+      pendingInviteRole === 'comparator' &&
+      pendingInviteItem &&
+      resolveLinkKind(pendingInviteItem) !== 'ephemeral_free'
+    ) {
+      return t('topPanel.inviteLandingCompareWithRoot')
+        .replace('{{inviter}}', inviter)
+        .replace('{{rootName}}', rootDisplay);
+    }
+    const template = t('topPanel.inviteLandingText');
     const action = pendingInviteRoleLabel || t('topPanel.inviteActionView');
     return template.replace('{{inviter}}', inviter).replace('{{action}}', action);
-  }, [pendingInviteInviterName, pendingInviteRoleLabel, t]);
+  }, [
+    pendingInviteInviterName,
+    pendingInviteRoleLabel,
+    pendingInviteRole,
+    pendingInviteItem,
+    pendingInviteExchangeRootName,
+    inviterHostExchangeRootLabels,
+    t,
+  ]);
   const inviteLandingStatusLabel = useMemo(() => {
     if (inviteOnboardingStage === 'connecting') return t('topPanel.inviteLandingConnecting');
     if (inviteOnboardingStage === 'connected') return t('topPanel.inviteLandingConnected');
@@ -1854,22 +2202,39 @@ function App() {
     [gedcomData, peerCompareGedcom],
   );
 
-  /** Pistes depuis l’ancre courante (local ou `pc:`) vers l’autre base. Source = fiche de la vue fusionnée (même objet qu’à l’écran). */
+  /** Données sources pour le scoring de fusion (indépendant du toggle « normalisé » à l’écran). */
+  const compareLocalGedcomForScore = originalGedcomData ?? gedcomData;
+
+  /** Pistes depuis l’ancre courante (local ou `pc:`) vers l’autre base. Source = fiche source (original local si ancre locale). */
   const compareUnifiedMatchSuggestions = useMemo(() => {
     if (!gedcomData || !peerCompareGedcom || !compareMatchAnchorId || !mergedCompareGedcom) return [];
-    const source = mergedCompareGedcom.individuals[compareMatchAnchorId];
+    const localForScore = compareLocalGedcomForScore;
+    if (!localForScore) return [];
+    let source = mergedCompareGedcom.individuals[compareMatchAnchorId];
     if (!source) return [];
+    if (!compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX)) {
+      const orig = localForScore.individuals[compareMatchAnchorId];
+      if (orig) source = orig;
+    }
     if (compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX)) {
-      return rankPeerMatchesForIndividual(source, Object.values(gedcomData.individuals), {
+      return rankPeerMatchesForIndividual(source, Object.values(localForScore.individuals), {
         minScore: 0.45,
         limit: 8,
+        lineage: { gedcomSource: peerCompareGedcom, gedcomCandidate: localForScore },
       });
     }
     return rankPeerMatchesForIndividual(source, Object.values(peerCompareGedcom.individuals), {
       minScore: 0.45,
       limit: 8,
+      lineage: { gedcomSource: localForScore, gedcomCandidate: peerCompareGedcom },
     });
-  }, [gedcomData, peerCompareGedcom, compareMatchAnchorId, mergedCompareGedcom]);
+  }, [
+    gedcomData,
+    compareLocalGedcomForScore,
+    peerCompareGedcom,
+    compareMatchAnchorId,
+    mergedCompareGedcom,
+  ]);
 
   const compareUnifiedSuggestionIdSet = useMemo(
     () => new Set(compareUnifiedMatchSuggestions.map((s) => s.individual.id)),
@@ -1913,6 +2278,20 @@ function App() {
     compareMatchPairId,
     selectedIndividual?.id,
   ]);
+
+  /** Aperçu Phase E (plafonds par défaut) — rappel que la fusion courante s’inscrit dans un arbre local plus large. */
+  const compareMergeBranchPreviewHint = useMemo(() => {
+    if (!gedcomData || !compareMergeImportIntent || compareMergeImportIntent.kind !== 'merge') {
+      return null;
+    }
+    const prev = previewBranchImportOnLocalTree(gedcomData, compareMergeImportIntent.localId);
+    if (!prev) return null;
+    return t('app.compare.branchImportPreviewHint')
+      .replace('{{desc}}', String(prev.descendantCount))
+      .replace('{{asc}}', String(prev.ancestorCount))
+      .replace('{{gd}}', String(prev.maxGenDown))
+      .replace('{{gu}}', String(prev.maxGenUp));
+  }, [gedcomData, compareMergeImportIntent, t]);
 
   useEffect(() => {
     if (!compareDualViewActive || is2dIndividual) {
@@ -2378,6 +2757,8 @@ function App() {
     pendingInviteRoleRef.current = claims.role;
     setPendingInviteIntent(claims.intent === 'own_device' ? 'own_device' : 'standard');
     setPendingInviteInviterName(claims.inviterName || null);
+    setPendingInviteExchangeRootName(claims.exchangeRootDisplayName ?? null);
+    setPendingInviteTargetDisplayName(claims.targetIndividualName ?? null);
     setInviteOnboardingStage('idle');
     const urlLinkKind = resolveLinkKind(claims);
     if (claims.targetIndividualId) {
@@ -2547,6 +2928,8 @@ function App() {
     setPendingInviteToken(null);
     setPendingInviteHostPeerId(null);
     setPendingInviteTargetIndividualId(null);
+    setPendingInviteTargetDisplayName(null);
+    setPendingInviteExchangeRootName(null);
     setInviteOnboardingStage('idle');
     setSelectedIndividual(null);
     setRootIndividual(null);
@@ -2597,8 +2980,11 @@ function App() {
                 activeSessionPeerPolicyRef.current = null;
                 setTrustedOwnDevicePeerId(null);
                 setTrustedOwnDeviceInviteId(null);
-                setSessionLinkKind(null);
-                setGuestSessionMode('none');
+                /** Ne pas effacer `named_claim` sur les transitions `connecting` (ICE / retry PeerJS) — sinon l’invité perd l’indice identité et le bandeau comparateur. */
+                if (!preserveInviteSharedTreeImport && status !== 'connecting') {
+                  setSessionLinkKind(null);
+                  setGuestSessionMode('none');
+                }
               }
               logP2PActivity(`session.${status}`, 'session', id || 'local');
               if (
@@ -4422,10 +4808,14 @@ function App() {
 
       /** Paire manuelle (même sans piste auto) : une fiche locale et une `pc:` — permet d’importer quand l’algo ne propose rien. */
       if (compareMatchAnchorId && resolveComparePairLocalAndPeer(compareMatchAnchorId, id)) {
+        const localGed = originalGedcomData ?? gedcomData;
         const anchorInd =
-          gedcomData?.individuals[compareMatchAnchorId] ??
-          peerCompareGedcom?.individuals[compareMatchAnchorId];
-        const pairInd = gedcomData?.individuals[id] ?? peerCompareGedcom?.individuals[id];
+          compareMatchAnchorId.startsWith(PEER_COMPARE_ID_PREFIX)
+            ? peerCompareGedcom?.individuals[compareMatchAnchorId]
+            : localGed?.individuals[compareMatchAnchorId];
+        const pairInd = id.startsWith(PEER_COMPARE_ID_PREFIX)
+          ? peerCompareGedcom?.individuals[id]
+          : localGed?.individuals[id];
         if (anchorInd && pairInd) {
           const s = scoreIndividualPair(anchorInd, pairInd);
           if (s < 0.45) {
@@ -4442,6 +4832,7 @@ function App() {
     [
       isCreating,
       gedcomData,
+      originalGedcomData,
       peerCompareGedcom,
       compareDualViewActive,
       viewMode,
@@ -5130,7 +5521,7 @@ function App() {
     individualId: string,
     role: P2PRole,
     expiresAt?: string,
-    options?: { intent?: 'standard' | 'own_device' }
+    options?: { intent?: 'standard' | 'own_device'; exchangeScope?: InviteExchangeScope }
   ) => {
     if (!isIdentified) {
       alert(t('app.alerts.claimIdentityBeforeInvites'));
@@ -5153,6 +5544,13 @@ function App() {
     const inviterName = inviterIndividual
       ? (`${inviterIndividual.givenName || ''} ${inviterIndividual.surname || ''}`.trim() || inviterIndividual.name || inviterIndividual.id)
       : undefined;
+    const exchangeRootDisplayName = (() => {
+      const scope = options?.exchangeScope;
+      if (scope?.rootIndividualId && gedcomData?.individuals[scope.rootIndividualId]) {
+        return individualDisplayLabel(gedcomData.individuals[scope.rootIndividualId]);
+      }
+      return candidate.label;
+    })();
     const claims: InviteTokenClaims = {
       inviteId,
       sessionId: peerId,
@@ -5160,6 +5558,7 @@ function App() {
       accessProfileId: `profile-${role}`,
       targetIndividualId: individualId,
       targetIndividualName: candidate.label,
+      exchangeRootDisplayName,
       inviterName,
       issuedAt,
       expiresAt,
@@ -5190,6 +5589,7 @@ function App() {
       accessProfile,
       inviteIntent: intent,
       linkKind: 'named_claim',
+      ...(options?.exchangeScope ? { exchangeScope: options.exchangeScope } : {}),
     };
     setP2PInvites((prev) => [invite, ...prev]);
     logP2PActivity('invite.created', 'invite', invite.inviteId);
@@ -5208,7 +5608,11 @@ function App() {
     );
   };
 
-  const handleCreateOwnDeviceInvite = (role: P2PRole, expiresAt?: string) => {
+  const handleCreateOwnDeviceInvite = (
+    role: P2PRole,
+    expiresAt?: string,
+    options?: { exchangeScope?: InviteExchangeScope },
+  ) => {
     if (!selfIdentity?.individualId) {
       showTransientToast('error', t('app.alerts.claimIdentityBeforeInvites'), 2200);
       return;
@@ -5218,7 +5622,10 @@ function App() {
       showTransientToast('error', t('app.toasts.ownDeviceInviteNeedsLivingSelf'), 3200);
       return;
     }
-    void handleCreateInvite(selfIdentity.individualId, role, expiresAt, { intent: 'own_device' });
+    void handleCreateInvite(selfIdentity.individualId, role, expiresAt, {
+      intent: 'own_device',
+      exchangeScope: options?.exchangeScope,
+    });
   };
 
   const handleCreateEphemeralInvite = async (expiresAt?: string) => {
@@ -7275,6 +7682,7 @@ function App() {
               onCancel={() => setCompareMergeModalOpen(false)}
               onConfirm={handleCompareMergeConfirm}
               onIgnorePair={handleCompareIgnorePair}
+              branchImportHint={compareMergeBranchPreviewHint}
             />
           </>
         ) : is2dIndividual ? (
@@ -7374,6 +7782,18 @@ function App() {
                   {t('topPanel.inviteLandingOwnDeviceHint')}
                 </p>
               )}
+              {receivedInviterExchangeManifest &&
+                pendingInviteRole === 'comparator' &&
+                pendingInviteItem &&
+                resolveLinkKind(pendingInviteItem) !== 'ephemeral_free' && (
+                  <p
+                    className={`mt-3 text-[11px] max-w-2xl leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}
+                  >
+                    {t('topPanel.exchangeScopeInviterReceivedHint')
+                      .replace('{{down}}', String(receivedInviterExchangeManifest.maxGenDown))
+                      .replace('{{up}}', String(receivedInviterExchangeManifest.maxGenUp))}
+                  </p>
+                )}
               <div className="mt-6 flex justify-center">
                 {(inviteOnboardingStage === 'idle' || inviteOnboardingStage === 'connecting' || inviteOnboardingStage === 'connected' || inviteOnboardingStage === 'error') &&
                   !inviteHasAccepted &&
@@ -7428,6 +7848,81 @@ function App() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {inviteeExchangeScopeModalOpen && inviteeExchangeScopeEditorVisible && (
+          <div
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/55"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invitee-exchange-scope-modal-title"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setInviteeExchangeScopeModalOpen(false);
+            }}
+          >
+            <div
+              className={`max-w-lg w-full max-h-[min(92vh,760px)] flex flex-col rounded-xl border shadow-2xl overflow-hidden ${
+                isDarkMode ? 'bg-slate-900 border-slate-600 text-white' : 'bg-white border-slate-200 text-slate-900'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-start gap-2 px-5 pt-5 pb-2 shrink-0">
+                <h3
+                  id="invitee-exchange-scope-modal-title"
+                  className="text-sm font-bold uppercase tracking-wide pr-2"
+                >
+                  {t('topPanel.inviteeExchangeScopeModalTitle')}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setInviteeExchangeScopeModalOpen(false)}
+                  className={`shrink-0 p-1 rounded ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-100'}`}
+                  aria-label={t('topPanel.inviteeExchangeScopeModalDismiss')}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div
+                className={`px-5 max-h-[min(28vh,220px)] overflow-y-auto shrink-0 text-xs leading-relaxed mb-1 ${
+                  isDarkMode ? 'text-slate-300' : 'text-slate-600'
+                }`}
+              >
+                {inviterHostExchangeRootLabels.length > 0
+                  ? t('topPanel.inviteeExchangeScopeModalIntro').replace(
+                      '{{names}}',
+                      inviterHostExchangeRootLabels.join(' · '),
+                    )
+                  : t('topPanel.inviteeExchangeScopeModalIntroNoNames')}
+              </div>
+              <div className="px-5 pb-5 pt-3 overflow-visible flex-1 min-h-0">
+                <InviteExchangeScopeForm
+                  value={inviteeExchangeScope}
+                  onChange={setInviteeExchangeScope}
+                  isDarkMode={isDarkMode}
+                  rootCandidates={exchangeRootCandidates}
+                />
+              </div>
+              <div className="px-5 pb-5 flex flex-wrap justify-end gap-2 shrink-0 border-t border-slate-500/20 pt-4 mt-auto">
+                <button
+                  type="button"
+                  onClick={() => setInviteeExchangeScopeModalOpen(false)}
+                  className={`text-sm px-3 py-1.5 rounded border ${isDarkMode ? 'border-slate-600 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-50'}`}
+                >
+                  {t('topPanel.inviteeExchangeScopeModalClose')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteeExchangeScopeSetupDone(true);
+                    setInviteeExchangeScopeModalOpen(false);
+                  }}
+                  className={`text-sm px-3 py-1.5 rounded font-semibold ${isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                >
+                  {t('topPanel.inviteeExchangeScopeModalSave')}
+                </button>
               </div>
             </div>
           </div>
@@ -7598,6 +8093,12 @@ function App() {
         onExportIdentityBackup={handleExportIdentityBackup}
         onImportIdentityBackup={handleImportIdentityBackup}
         onRenounceIdentity={handleRenounceIdentity}
+        guestNamedClaimSlotId={
+          p2pMode === 'client' && sessionLinkKind === 'named_claim' ? pendingInviteTargetIndividualId : null
+        }
+        localGedcomForIdentity={gedcomData}
+        originalGedcomForIdentity={originalGedcomData}
+        guestInviteTargetDisplayName={guestInviteTargetDisplayName}
         comparePeerReadOnly={
           compareDualViewActive &&
           (selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ?? false)
@@ -7635,7 +8136,8 @@ function App() {
         activityEvents={p2pActivityEvents}
         proposals={p2pProposals}
         visibilitySettings={p2pVisibilitySettings}
-        livingCandidates={livingCandidates}
+        livingCandidates={hostInviteMemberCandidates}
+        exchangeRootCandidates={exchangeRootCandidates}
         invites={p2pInvites}
         pendingInviteToken={pendingInviteToken}
         pendingProposalsCount={pendingProposalsCount}
@@ -7664,6 +8166,9 @@ function App() {
         }
         shareCompareAllowed={sessionAllowsShareCompare(sessionLinkKind)}
         onCreateEphemeralInvite={handleCreateEphemeralInvite}
+        onOpenInviteeExchangeScope={() => setInviteeExchangeScopeModalOpen(true)}
+        showInviteeExchangeScopeEditor={inviteeExchangeScopeEditorVisible}
+        inviteeExchangeScopeSetupDone={inviteeExchangeScopeSetupDone}
       />
 
       {/* --- Bottom Panel (Display) --- */}

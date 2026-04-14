@@ -93,6 +93,10 @@ export interface G2BundleMetadata {
   normalizedGedcomContent?: string;
   normalizationAlgoVersion?: string;
   selfIdentity?: SelfIdentityPublic | null;
+  /** JSON stringifié de {@link InviteExchangeManifest} (session invitation / comparaison — mémo § 5.2). */
+  inviteExchangeManifestJson?: string;
+  /** True si le `gedcomContent` est un sous-graphe extrait selon le manifeste (phases C/D). */
+  inviteExchangeGedcomSubset?: boolean;
   [key: string]: unknown;
 }
 

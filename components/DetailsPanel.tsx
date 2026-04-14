@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop, Eye, EyeOff } from 'lucide-react';
 import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
+import { findIndividualInGedcom } from '../app/gedcomIndividualLookup';
 import { parseDate } from '../services/gedcomParser';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { useI18n } from '../i18n';
@@ -166,6 +167,19 @@ interface DetailsPanelProps {
   onExportIdentityBackup: (password: string) => Promise<void> | void;
   onImportIdentityBackup: (file: File, password: string) => Promise<void> | void;
   onRenounceIdentity: () => void;
+  /**
+   * Invité session nominative : ID de la fiche « votre place » dans l’invitation (badge « Vous » même avant revendication).
+   */
+  guestNamedClaimSlotId?: string | null;
+  /**
+   * GEDCOM local (toujours l’arbre invité/hôte) : sert à résoudre la fiche revendiquée pour l’en-tête Identité
+   * quand `data` est l’arbre pair (`pc:`) en vue comparée.
+   */
+  localGedcomForIdentity?: GedcomData | null;
+  /** Copie GEDCOM d’origine (pré-normalisation) — secours si la fiche n’est pas sous la même clé dans `gedcomData`. */
+  originalGedcomForIdentity?: GedcomData | null;
+  /** Nom humain de l’invité (invitation / jeton), si la fiche locale n’a que le xref. */
+  guestInviteTargetDisplayName?: string | null;
   /** Fiche du pair en lecture seule (détail plein panneau, fond gris). */
   comparePeerReadOnly?: boolean;
   /** Import pair (modal) : coches pilotées par App en session comparaison. */
@@ -449,6 +463,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onExportIdentityBackup,
   onImportIdentityBackup,
   onRenounceIdentity,
+  guestNamedClaimSlotId = null,
+  localGedcomForIdentity = null,
+  originalGedcomForIdentity = null,
+  guestInviteTargetDisplayName = null,
   comparePeerReadOnly = false,
   comparePeerImportFields: comparePeerImportFieldsProp,
   comparePeerImportDocs: comparePeerImportDocsProp,
@@ -1040,6 +1058,62 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const showClaimBlock = !selfIdentity;
   const showSelfIdentityData = !!selfIdentity && isSelectedSelf;
   const showEmptyIdentityForSelectedOther = !!selfIdentity && !!selectedIndividualId && !isSelectedSelf;
+  /** Onglet Identité : afficher identité / sauvegarde / renoncement dès qu’une identité existe (pas seulement si la fiche sélectionnée est la sienne). */
+  const showIdentityTabManagement = activeTab === 'identity' && !!selfIdentity;
+  const showClaimedIdentityPanels = showSelfIdentityData || showIdentityTabManagement;
+  /** Avertissement « mauvaise fiche » : pas en onglet Identité si identité revendiquée (le panneau gère l’identité complète). */
+  const showIdentityMismatchCard = showEmptyIdentityForSelectedOther && activeTab !== 'identity';
+  const idsMatchForYouBadge = (a: string | undefined, b: string | undefined) => {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const norm = (s: string) => s.trim().replace(/^@+/g, '').replace(/@+$/g, '');
+    return norm(a) === norm(b);
+  };
+
+  /** En onglet Identité, l’en-tête reflète la fiche revendiquée (pas la sélection arbre), pour afficher le badge « Vous ». */
+  const headerSummaryIndividual = useMemo(() => {
+    if (activeTab === 'identity' && selfIdentity) {
+      const id = selfIdentity.individualId;
+      const fromLocal = findIndividualInGedcom(localGedcomForIdentity, id);
+      if (fromLocal) return fromLocal;
+      const fromOriginal = findIndividualInGedcom(originalGedcomForIdentity, id);
+      if (fromOriginal) return fromOriginal;
+      const fromPanel = findIndividualInGedcom(data, id);
+      if (fromPanel) return fromPanel;
+      /** Comparateur : sélection souvent vide ; garantir nom + badge même si la clé ne matche pas les index. */
+      return {
+        id,
+        name: id,
+        givenName: '',
+        surname: '',
+        gender: Gender.Unknown,
+      } as Individual;
+    }
+    return individual ?? null;
+  }, [activeTab, selfIdentity, localGedcomForIdentity, originalGedcomForIdentity, data, individual]);
+  const showYouBadgeOnHeader =
+    !isCreating &&
+    !!headerSummaryIndividual &&
+    !!selfIdentity &&
+    (idsMatchForYouBadge(selfIdentity.individualId, headerSummaryIndividual.id) ||
+      (!!guestNamedClaimSlotId &&
+        idsMatchForYouBadge(guestNamedClaimSlotId, headerSummaryIndividual.id)));
+  const headerPersonLabel = useMemo(() => {
+    if (!headerSummaryIndividual) return '';
+    const ind = headerSummaryIndividual;
+    const fromParts = `${ind.givenName || ''} ${ind.surname || ''}`.trim();
+    if (fromParts) return fromParts;
+    const nm = ind.name?.trim();
+    if (nm && nm !== ind.id) return nm;
+    if (
+      guestInviteTargetDisplayName &&
+      selfIdentity &&
+      idsMatchForYouBadge(selfIdentity.individualId, ind.id)
+    ) {
+      return guestInviteTargetDisplayName;
+    }
+    return nm || ind.id;
+  }, [headerSummaryIndividual, selfIdentity, guestInviteTargetDisplayName]);
   const selectedRemoteIdentityClaim = selectedIndividualId ? remoteIdentityClaimsByIndividualId?.[selectedIndividualId] : undefined;
   /** Solo / base vide : pas d’identité requise pour créer ou éditer. Avec identité revendiquée, on continue d’exiger le statut « claimed ». */
   const canModifyRecords = !selfIdentity || selfIdentity.status === 'claimed';
@@ -1218,17 +1292,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       >
         <div className={`${cardBg} rounded-lg p-2.5 border ${isDarkMode ? 'border-slate-700' : 'border-slate-200'}`}>
           <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
-            {t('details.selectedIndividual')}
+            {activeTab === 'identity' && selfIdentity
+              ? t('details.identityHeaderCardTitle')
+              : t('details.selectedIndividual')}
           </div>
           <div className={`text-sm font-semibold mt-1 ${textClass} flex items-center gap-2`}>
             <span>
               {isCreating
                 ? t('details.newIndividual')
-                : individual
-                ? `${individual.givenName || ''} ${individual.surname || ''}`.trim() || individual.name || individual.id
+                : headerSummaryIndividual
+                ? headerPersonLabel
                 : t('details.noIndividualSelected')}
             </span>
-            {!isCreating && individual && selfIdentity?.individualId === individual.id && (
+            {!isCreating && headerSummaryIndividual && showYouBadgeOnHeader && (
               <span className="inline-flex items-center rounded-full border border-emerald-500/60 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">
                 {t('details.you')}
               </span>
@@ -1999,6 +2075,13 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </div>
         ) : activeTab === 'identity' ? (
           <div className="space-y-4">
+            {showIdentityTabManagement && !isSelectedSelf && (
+              <div
+                className={`rounded-lg border px-2.5 py-2 text-[11px] ${isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-300 bg-slate-100/90'}`}
+              >
+                <p className={subTextClass}>{t('details.identityTabOtherSelectionHint')}</p>
+              </div>
+            )}
             {showClaimBlock && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identityClaim')}</div>
@@ -2038,7 +2121,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             )}
 
-            {showEmptyIdentityForSelectedOther && (
+            {showIdentityMismatchCard && (
               <div className={`${cardBg} rounded-lg p-3 space-y-2`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.identity')}</div>
                 <p className={`text-xs ${subTextClass}`}>
@@ -2072,7 +2155,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             )}
 
-            {showSelfIdentityData && (
+            {showClaimedIdentityPanels && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-1`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.claimedIdentity')}</div>
                 <div className={`text-xs ${textClass}`}>{t('details.individualLabel')}: {selfIdentity.individualId}</div>
@@ -2086,7 +2169,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             )}
 
-            {showSelfIdentityData && selfIdentity.introduction && (
+            {showClaimedIdentityPanels && selfIdentity.introduction && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-2 border ${isDarkMode ? 'border-emerald-700/50' : 'border-emerald-600/40'}`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.introductionContext')}</div>
                 <p className={`text-[11px] ${subTextClass}`}>{t('details.introductionContextHint')}</p>
@@ -2105,7 +2188,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               </div>
             )}
 
-            {showSelfIdentityData && (
+            {showClaimedIdentityPanels && (
               <>
                 <div className={`${cardBg} rounded-lg p-2.5 space-y-2`}>
                   <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.certificationHistory')}</div>

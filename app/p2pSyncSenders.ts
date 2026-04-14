@@ -3,6 +3,8 @@ import { generateGedcom } from '../services/gedcomParser';
 import { p2pService } from '../services/p2p';
 import type { ActivityLogEvent } from '../services/p2pDomain';
 import { createG2Bundle } from '../services/bundleService';
+import { collectIndividualIdsForManifest, parseInviteExchangeManifestJson } from '../services/inviteExchangeManifest';
+import { extractGedcomSubset } from '../services/lineageImportScope';
 import type { GedcomData, Individual, P2PMode } from '../types';
 import type {
   IndividualDocument,
@@ -40,6 +42,8 @@ export type P2PSyncSendersContext = {
   getPeerId: () => string | null;
   getRemoteAccessPolicy: () => P2PVisibilitySettings | null;
   getSelectedIndividual: () => Individual | null | undefined;
+  /** Manifeste d’échange (JSON) pour les bundles en session comparaison + invitation — mémo § 5.2. */
+  getInviteExchangeManifestJson?: () => string | null;
   setP2PSyncStatusText: (text: string | null) => void;
 };
 
@@ -192,14 +196,39 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
     const includeDocuments =
       ctx.p2pBundleContentModeRef.current === 'gedcom-and-documents' ||
       ctx.p2pSessionUseCaseRef.current === 'compare';
-    const transferable = includeDocuments ? await toTransferableDocumentsForPeer(documents) : {};
-    const gedcomText = generateGedcom(gedcom);
+    let gedcomForBundle = gedcom;
+    let documentsForBundle = documents;
+    let gedcomSubsetApplied = false;
+    const inviteExchangeManifestJson = ctx.getInviteExchangeManifestJson?.() ?? null;
+    if (inviteExchangeManifestJson) {
+      const manifest = parseInviteExchangeManifestJson(inviteExchangeManifestJson);
+      if (manifest) {
+        const scopeIds = collectIndividualIdsForManifest(gedcom, manifest);
+        if (scopeIds.size > 0) {
+          const sub = extractGedcomSubset(gedcom, scopeIds);
+          if (Object.keys(sub.individuals).length > 0) {
+            gedcomForBundle = sub;
+            gedcomSubsetApplied = true;
+            const filtered: Record<string, IndividualDocument[]> = {};
+            for (const id of scopeIds) {
+              const list = documents[id];
+              if (list?.length) filtered[id] = list;
+            }
+            documentsForBundle = filtered;
+          }
+        }
+      }
+    }
+    const transferable = includeDocuments ? await toTransferableDocumentsForPeer(documentsForBundle) : {};
+    const gedcomText = generateGedcom(gedcomForBundle);
     const bundleBlob = await createG2Bundle(gedcomText, {
       version: '1.0',
       databaseName: ctx.databaseNameRef.current,
       exportedAt: new Date().toISOString(),
       documentsByIndividualId: transferable,
       includesDocuments: includeDocuments,
+      ...(inviteExchangeManifestJson ? { inviteExchangeManifestJson } : {}),
+      ...(gedcomSubsetApplied ? { inviteExchangeGedcomSubset: true } : {}),
     });
     const serialized = await bundleBlob.text();
     if (serialized.length <= BUNDLE_SYNC_CHUNK_SIZE) {

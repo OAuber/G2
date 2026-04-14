@@ -149,6 +149,8 @@ const en = {
       importPairInvalidPair: 'You need one local person and one peer person (pc: prefix).',
       manualPairWeakMatch:
         'Manual pair: automatic score is low — check given names, gender, and dates before importing.',
+      branchImportPreviewHint:
+        'Indicative scope on your local tree: {{desc}} people in descent (≤{{gd}} gen.) and {{asc}} in ascent (≤{{gu}} gen.) — future branch import per invitation manifest.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -373,6 +375,9 @@ const en = {
     inviteCopied: 'Link copied',
     pendingInviteToken: 'An invitation token is detected in the URL. Connect to the host peer and accept the invitation.',
     inviteLandingText: '{{inviter}} invites you to {{action}} their genealogy database.',
+    inviteLandingCompareWithRoot:
+      '{{inviter}} invites you to compare the genealogy of {{rootName}} between their archive and yours. You will be able to find the matching person and set sharing options once you have opened your own archive.',
+    inviteLandingRootNameFallback: 'the root person for this exchange',
     inviteLandingInviterFallback: 'A genealogist',
     inviteActionView: 'view',
     inviteActionContribute: 'contribute to',
@@ -421,6 +426,39 @@ const en = {
     roleComparator: 'comparator',
     comparatorRoleHint:
       'Comparator: the invitee keeps their file; the host’s tree is received alongside for comparison and merge-by-proposal (like UUID exchange).',
+    exchangeScopeTitle: 'Exchange scope (archive / compare)',
+    exchangeScopeIntro:
+      'Pick a root person in your file (not necessarily you or the person named in the link). Limit generations and data types; either side may narrow further — the effective policy is the strictest.',
+    exchangeScopeRootIndividual: 'Root individual for scope',
+    exchangeScopeRootDefault: 'Default: person named in the invitation',
+    exchangeScopeRootHint:
+      'Ancestor, branch, spouse of a branch, etc. — anyone present in your GEDCOM.',
+    exchangeScopeRootSearchPlaceholder: 'Search by name or id…',
+    exchangeScopeRootClear: 'Clear root (use default)',
+    exchangeScopeRootNoCandidates:
+      'No local individuals to list — open or import a GEDCOM, or wait for loading to finish.',
+    exchangeScopeMaxGenDown: 'Max descendant generations',
+    exchangeScopeMaxGenUp: 'Max ancestor generations',
+    exchangeScopeIncludeSpouses: 'Include spouses in scope',
+    exchangeScopeDataSection: 'Data in the exchanged file',
+    exchangeScopeDataVital: 'Vital facts (births, deaths, places as selected)',
+    exchangeScopeDataRelations: 'Family links (families, unions)',
+    exchangeScopeDataMedia: 'Linked media and documents',
+    exchangeScopeDataNotes: 'Notes and text',
+    exchangeScopeInviterReceivedHint:
+      'Host limits: up to {{down}} descendant generations and {{up}} ancestor generations.',
+    inviteeExchangeScopeModalTitle: 'Your exchange scope',
+    inviteeExchangeScopeModalIntro:
+      "The host centered their send on: {{names}}. In your file, pick the matching record (often the same person), then adjust limits and data flags.",
+    inviteeExchangeScopeModalIntroNoNames:
+      'Choose your export root and limits; the host’s suggested name will appear here once their tree is received.',
+    inviteeExchangeScopeModalClose: 'Close',
+    inviteeExchangeScopeModalSave: 'Save',
+    inviteeExchangeScopeModalDismiss: 'Close dialog',
+    inviteeExchangeScopeEditorHint:
+      'Match the host tree: open this to set your export root person and limits.',
+    inviteeExchangeScopeEditorOpen: 'Set my exchange scope',
+    inviteeExchangeScopeEditorAgain: 'Edit exchange scope',
     inviteExpiryOptionalHint:
       'Optional expiry date: leave empty for an invitation with no time limit.',
     ownDeviceInviteTitle: 'Own-device invite (phone or tablet)',
@@ -601,6 +639,7 @@ const en = {
     createNew: 'Create New',
     newRecord: 'New Record',
     selectedIndividual: 'Selected individual',
+    identityHeaderCardTitle: 'Your identity record',
     newIndividual: 'New individual',
     noIndividualSelected: 'No individual selected',
     you: 'You',
@@ -730,6 +769,8 @@ const en = {
     identityMismatchHint:
       'Your saved local identity belongs to a different individual than the one shown (e.g. another tab on this site, or a previous test). Renounce it to claim yourself and collaborate as an invitee.',
     identityMismatchRenounceCta: 'Renounce and claim my identity',
+    identityTabOtherSelectionHint:
+      'Another person is selected in the tree. Below: your claimed identity, key backup, and renounce options.',
     remoteIdentityClaimed: 'Identity claimed by invitee',
     claimedIdentity: 'Claimed identity',
     individualLabel: 'Individual',

@@ -149,6 +149,8 @@ const fr = {
       importPairInvalidPair: 'Il faut une fiche locale et une fiche pair (préfixe pc:).',
       manualPairWeakMatch:
         'Paire formée manuellement : le score automatique est faible — vérifiez prénoms, sexe et dates avant d’importer.',
+      branchImportPreviewHint:
+        'Périmètre indicatif sur votre arbre local : {{desc}} personnes en descendance (≤{{gd}} gén.) et {{asc}} en ascendance (≤{{gu}} gén.) — import de branche futur selon manifeste d’invitation.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -373,6 +375,9 @@ const fr = {
     inviteCopied: 'Lien copié',
     pendingInviteToken: "Un token d'invitation est détecté dans l'URL. Connectez-vous au pair hôte puis acceptez l'invitation.",
     inviteLandingText: '{{inviter}} vous invite à {{action}} sa base généalogique.',
+    inviteLandingCompareWithRoot:
+      '{{inviter}} vous invite à comparer la généalogie de {{rootName}} entre son archive et la vôtre. Vous pourrez chercher la personne correspondante et régler les paramètres de partage une fois que vous aurez ouvert votre propre archive.',
+    inviteLandingRootNameFallback: 'la personne racine de l’échange',
     inviteLandingInviterFallback: 'Un généalogiste',
     inviteActionView: 'consulter',
     inviteActionContribute: 'contribuer à',
@@ -421,6 +426,39 @@ const fr = {
     roleComparator: 'comparateur',
     comparatorRoleHint:
       'Comparateur : l’invité garde son fichier ; la base de l’hôte est reçue à côté pour comparaison et fusions par propositions (comme l’échange par UUID).',
+    exchangeScopeTitle: 'Périmètre d’échange (archive / comparaison)',
+    exchangeScopeIntro:
+      'Choisissez une racine dans votre fichier (ce n’est pas forcément vous ni la personne du lien). Limitez la descendance, l’ascendance et les types de données ; chaque côté peut restreindre — la politique effective est la plus stricte.',
+    exchangeScopeRootIndividual: 'Individu racine du périmètre',
+    exchangeScopeRootDefault: 'Par défaut : personne nominée dans l’invitation',
+    exchangeScopeRootHint:
+      'Ancêtre, branche, conjoint d’une branche, etc. — tout individu présent dans votre GEDCOM.',
+    exchangeScopeRootSearchPlaceholder: 'Rechercher par nom ou identifiant…',
+    exchangeScopeRootClear: 'Effacer la racine (revenir au défaut)',
+    exchangeScopeRootNoCandidates:
+      'Aucune fiche locale listée — ouvrez ou importez un GEDCOM, ou attendez la fin du chargement.',
+    exchangeScopeMaxGenDown: 'Générations descendantes (max)',
+    exchangeScopeMaxGenUp: 'Générations ascendantes (max)',
+    exchangeScopeIncludeSpouses: 'Inclure les conjoints dans le périmètre',
+    exchangeScopeDataSection: 'Données dans le fichier échangé',
+    exchangeScopeDataVital: 'Faits vitaux (naissances, décès, lieux selon cases cochées)',
+    exchangeScopeDataRelations: 'Liens familiaux (familles, unions)',
+    exchangeScopeDataMedia: 'Médias et documents liés',
+    exchangeScopeDataNotes: 'Notes et textes',
+    exchangeScopeInviterReceivedHint:
+      'Plafonds indiqués par l’hôte : jusqu’à {{down}} gén. en descendance et {{up}} en ascendance.',
+    inviteeExchangeScopeModalTitle: 'Votre périmètre d’échange',
+    inviteeExchangeScopeModalIntro:
+      'L’hôte a centré son envoi sur : {{names}}. Dans votre fichier, indiquez la fiche qui correspond (souvent la même personne ou un homonyme), puis ajustez plafonds et types de données.',
+    inviteeExchangeScopeModalIntroNoNames:
+      'Indiquez la fiche racine de votre export et les limites ; le nom proposé par l’hôte s’affichera ici une fois son arbre reçu.',
+    inviteeExchangeScopeModalClose: 'Fermer',
+    inviteeExchangeScopeModalSave: 'Enregistrer',
+    inviteeExchangeScopeModalDismiss: 'Fermer la fenêtre',
+    inviteeExchangeScopeEditorHint:
+      'Correspondance avec l’arbre hôte : ouvrez cet écran pour choisir la fiche racine de votre export et vos plafonds.',
+    inviteeExchangeScopeEditorOpen: 'Régler mon périmètre d’échange',
+    inviteeExchangeScopeEditorAgain: 'Modifier le périmètre d’échange',
     inviteExpiryOptionalHint:
       'Date d’expiration facultative : laissez vide pour une invitation sans limite de durée.',
     ownDeviceInviteTitle: 'Auto-invitation (mon téléphone ou tablette)',
@@ -601,6 +639,7 @@ const fr = {
     createNew: 'Créer nouveau',
     newRecord: 'Nouvelle fiche',
     selectedIndividual: 'Individu sélectionné',
+    identityHeaderCardTitle: 'Votre fiche identitaire',
     newIndividual: 'Nouvel individu',
     noIndividualSelected: 'Aucun individu sélectionné',
     you: 'Vous',
@@ -730,6 +769,8 @@ const fr = {
     identityMismatchHint:
       'Votre identité locale correspond à une autre fiche que celle affichée (ex. autre onglet sur ce site, ou ancien test). Renoncez à cette identité pour revendiquer la vôtre et collaborer en tant qu’invité.',
     identityMismatchRenounceCta: 'Renoncer et revendiquer mon identité',
+    identityTabOtherSelectionHint:
+      'Une autre fiche est sélectionnée dans l’arbre. Ci-dessous : rappels de votre identité revendiquée, sauvegarde des clés et renoncement.',
     remoteIdentityClaimed: "Identité revendiquée par l'invité",
     claimedIdentity: 'Identité revendiquée',
     individualLabel: 'Individu',

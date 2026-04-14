@@ -1,4 +1,86 @@
-import { Gender, Individual } from '../types';
+import { DateInfo, GedcomData, Gender, Individual } from '../types';
+
+/** Seuil : au-dessus, on applique l’ajustement parents/enfants (mémo § 3.3). */
+const LINEAGE_BASE_THRESHOLD = 0.25;
+/** Bonus / malus parents+enfants, borné (mémo : ex. ±0,08–0,15 ; choix : ±0,08). */
+const LINEAGE_DELTA_CAP = 0.08;
+
+export function getParentsFromGedcom(ind: Individual, data: GedcomData): Individual[] {
+  if (!ind.familyChildId) return [];
+  const fam = data.families[ind.familyChildId];
+  if (!fam) return [];
+  const out: Individual[] = [];
+  if (fam.husbandId) {
+    const h = data.individuals[fam.husbandId];
+    if (h) out.push(h);
+  }
+  if (fam.wifeId) {
+    const w = data.individuals[fam.wifeId];
+    if (w) out.push(w);
+  }
+  return out;
+}
+
+export function getChildrenFromGedcom(ind: Individual, data: GedcomData): Individual[] {
+  const ids = new Set<string>();
+  for (const fid of ind.familySpouseIds ?? []) {
+    const fam = data.families[fid];
+    if (!fam) continue;
+    for (const cid of fam.childrenIds) {
+      if (data.individuals[cid]) ids.add(cid);
+    }
+  }
+  return [...ids].map((id) => data.individuals[id]);
+}
+
+/**
+ * Ajustement borné à partir des parents et enfants dans chaque graphe.
+ * Choix : malus si les deux côtés ont des parents (ou des enfants) mais aucune paire ne ressemble ;
+ * bonus si au moins une paire parent ou enfant dépasse un seuil fort.
+ */
+function computeLineageDelta(a: Individual, b: Individual, gedcomA: GedcomData, gedcomB: GedcomData): number {
+  let d = 0;
+  const pa = getParentsFromGedcom(a, gedcomA);
+  const pb = getParentsFromGedcom(b, gedcomB);
+  if (pa.length > 0 && pb.length > 0) {
+    let maxP = 0;
+    for (const x of pa) {
+      for (const y of pb) {
+        maxP = Math.max(maxP, scoreIndividualPair(x, y));
+      }
+    }
+    if (maxP < 0.35) d -= 0.05;
+    else if (maxP >= 0.55) d += 0.04;
+  }
+  const ca = getChildrenFromGedcom(a, gedcomA);
+  const cb = getChildrenFromGedcom(b, gedcomB);
+  if (ca.length > 0 && cb.length > 0) {
+    let maxC = 0;
+    for (const x of ca) {
+      for (const y of cb) {
+        maxC = Math.max(maxC, scoreIndividualPair(x, y));
+      }
+    }
+    if (maxC < 0.22) d -= 0.04;
+    else if (maxC >= 0.5) d += 0.04;
+  }
+  return Math.max(-LINEAGE_DELTA_CAP, Math.min(LINEAGE_DELTA_CAP, d));
+}
+
+/**
+ * Score direct + ajustement familial (parents/enfants) si les deux graphes sont fournis.
+ * Les familles recomposées : on se limite aux liens GEDCOM (familyChildId / familySpouseIds) sans traitement spécial (mémo).
+ */
+export function scoreIndividualPairWithLineage(
+  a: Individual,
+  b: Individual,
+  opts?: { gedcomA: GedcomData; gedcomB: GedcomData },
+): number {
+  const base = scoreIndividualPair(a, b);
+  if (base < LINEAGE_BASE_THRESHOLD || !opts) return base;
+  const delta = computeLineageDelta(a, b, opts.gedcomA, opts.gedcomB);
+  return Math.min(1, Math.max(0, base + delta));
+}
 
 function normalizeWord(s?: string): string {
   return (s || '')
@@ -79,10 +161,68 @@ function scoreSurname(a: Individual, b: Individual): number {
   return as === bs ? 1 : 0;
 }
 
-function birthPlaceLikelySame(a: Individual, b: Individual): boolean {
+/** Égalité stricte après normalisation (identique à l’ancien comportement). */
+function birthPlaceExactNormalized(a: Individual, b: Individual): boolean {
   const pa = normalizeWord(a.birthPlace);
   const pb = normalizeWord(b.birthPlace);
   return !!pa && pa.length > 3 && pa === pb;
+}
+
+/**
+ * Même lieu de naissance « en pratique » : formats GEDCOM différents (code postal, région, ponctuation),
+ * ou même commune en 1re partie avant virgule (ex. St-Eustache-la-Forêt vs … 76576 … Normandie).
+ */
+export function birthPlacesLooselyCompatible(a: Individual, b: Individual): boolean {
+  if (birthPlaceExactNormalized(a, b)) return true;
+  const pa = a.birthPlace?.trim();
+  const pb = b.birthPlace?.trim();
+  if (!pa || !pb) return false;
+  const strip = (s: string) =>
+    normalizeWord(
+      s
+        .replace(/\b\d{4,5}\b/g, ' ')
+        .replace(/[,;]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    );
+  const ca = strip(pa);
+  const cb = strip(pb);
+  if (ca.length < 6 || cb.length < 6) return false;
+  if (ca === cb) return true;
+  if (ca.includes(cb) || cb.includes(ca)) return true;
+  const firstA = normalizeWord(pa.split(',')[0] || '');
+  const firstB = normalizeWord(pb.split(',')[0] || '');
+  if (firstA.length >= 6 && firstB.length >= 6) {
+    if (firstA === firstB) return true;
+    if (firstA.includes(firstB) || firstB.includes(firstA)) return true;
+  }
+  return false;
+}
+
+/**
+ * Une seule naissance avec lieu : écart modéré toléré si patronyme + prénom (token) cohérents
+ * (relevés complétés différemment d’un côté).
+ */
+function yearGapRescueOnePlaceMissing(
+  a: Individual,
+  b: Individual,
+  yearDiff: number,
+  givenS: number,
+  surS: number,
+): boolean {
+  if (yearDiff > 12) return false;
+  if (surS < 1 || givenS < 0.5) return false;
+  const ha = !!a.birthPlace?.trim();
+  const hb = !!b.birthPlace?.trim();
+  return ha !== hb;
+}
+
+/** Année issue de la normalisation locale, ou qualificatif GEDCOM (ABT/EST/…) après import fil — pas une date « relevé ». */
+export function birthYearIsUncertain(d?: DateInfo): boolean {
+  if (!d) return false;
+  if (d.isCalculated === true) return true;
+  const raw = (d.raw || '').trim();
+  return /^(ABT|EST|CAL|BEF|AFT|INT|VERS|ENV|CA|CIRCA)\b/i.test(raw);
 }
 
 /**
@@ -92,15 +232,34 @@ function birthPlaceLikelySame(a: Individual, b: Individual): boolean {
 function scoreBirthYear(a: Individual, b: Individual): { score: number; bothPresent: boolean } {
   const aby = a.birthDate?.year;
   const bby = b.birthDate?.year;
+  const eitherUncertain = birthYearIsUncertain(a.birthDate) || birthYearIsUncertain(b.birthDate);
   if (aby != null && bby != null) {
     const d = Math.abs(aby - bby);
     if (d === 0) return { score: 1, bothPresent: true };
-    if (d === 1) return { score: 0.35, bothPresent: true };
-    if (d === 2) return { score: 0.12, bothPresent: true };
-    if (d > 2 && birthPlaceLikelySame(a, b)) {
-      return { score: 0.22, bothPresent: true };
+    if (d === 1) return { score: eitherUncertain ? 0.4 : 0.35, bothPresent: true };
+    if (d === 2) return { score: eitherUncertain ? 0.18 : 0.12, bothPresent: true };
+    if (d > 2) {
+      if (birthPlacesLooselyCompatible(a, b)) {
+        return { score: 0.22, bothPresent: true };
+      }
+      if (
+        d <= 12 &&
+        scoreSurname(a, b) >= 1 &&
+        scoreGiven(a, b) >= 0.5 &&
+        !!a.birthPlace?.trim() !== !!b.birthPlace?.trim()
+      ) {
+        return { score: 0.2, bothPresent: true };
+      }
+      if (
+        eitherUncertain &&
+        d <= 15 &&
+        scoreSurname(a, b) >= 1 &&
+        scoreGiven(a, b) >= 0.5
+      ) {
+        return { score: 0.26, bothPresent: true };
+      }
+      return { score: 0, bothPresent: true };
     }
-    return { score: 0, bothPresent: true };
   }
   return { score: 0.15, bothPresent: false };
 }
@@ -123,24 +282,28 @@ function scoreDeathYearBonus(a: Individual, b: Individual): number {
 export function scoreIndividualPair(a: Individual, b: Individual): number {
   if (genderConflict(a, b)) return 0;
 
+  const givenS = scoreGiven(a, b);
+  const surS = scoreSurname(a, b);
   const abyEarly = a.birthDate?.year;
   const bbyEarly = b.birthDate?.year;
   /**
-   * Écart d’années > 2 : exclusion, sauf même lieu de naissance avec écart « plausible » (relevés divergents).
-   * Ne pas utiliser le lieu pour sauver un écart de générations (ex. 1924 vs 2014 au Havre = homonymes).
+   * Écart d’années > 2 : exclusion, sauf lieu compatible (formats divergents) ou secours « un lieu manquant »
+   * (relevés complétés différemment). Au-delà de 35 ans : homonymes probables, pas de secours par le lieu.
    */
   if (abyEarly != null && bbyEarly != null) {
     const yd = Math.abs(abyEarly - bbyEarly);
     if (yd > 2) {
-      const place = birthPlaceLikelySame(a, b);
-      if (!place || yd > 35) {
-        return 0;
+      if (yd > 35) return 0;
+      const eitherUncertain = birthYearIsUncertain(a.birthDate) || birthYearIsUncertain(b.birthDate);
+      if (eitherUncertain) {
+        if (surS < 1 || givenS < 0.5) return 0;
+      } else {
+        const placeOk = birthPlacesLooselyCompatible(a, b);
+        const rescue = yearGapRescueOnePlaceMissing(a, b, yd, givenS, surS);
+        if (!placeOk && !rescue) return 0;
       }
     }
   }
-
-  const givenS = scoreGiven(a, b);
-  const surS = scoreSurname(a, b);
   const { score: birthS, bothPresent: birthBothPresent } = scoreBirthYear(a, b);
   const deathBonus = scoreDeathYearBonus(a, b);
 
@@ -194,13 +357,22 @@ export function scoreIndividualPair(a: Individual, b: Individual): number {
 export function rankPeerMatchesForIndividual(
   source: Individual,
   candidates: Individual[],
-  opts?: { minScore?: number; limit?: number },
+  opts?: {
+    minScore?: number;
+    limit?: number;
+    /** Si fourni : score avec bonus/malus parents-enfants (graphe source vs graphe candidat). */
+    lineage?: { gedcomSource: GedcomData; gedcomCandidate: GedcomData };
+  },
 ): { individual: Individual; score: number }[] {
   const minScore = opts?.minScore ?? 0.48;
   const limit = opts?.limit ?? 8;
   const sy = source.birthDate?.year ?? null;
+  const scoreFn = (a: Individual, b: Individual) =>
+    opts?.lineage
+      ? scoreIndividualPairWithLineage(a, b, { gedcomA: opts.lineage.gedcomSource, gedcomB: opts.lineage.gedcomCandidate })
+      : scoreIndividualPair(a, b);
   return candidates
-    .map((individual) => ({ individual, score: scoreIndividualPair(source, individual) }))
+    .map((individual) => ({ individual, score: scoreFn(source, individual) }))
     .filter((x) => x.score >= minScore)
     .sort((a, b) => {
       if (Math.abs(b.score - a.score) > 1e-9) return b.score - a.score;
