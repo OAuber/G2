@@ -230,6 +230,9 @@ interface TopPanelProps {
   onOpenInviteeExchangeScope?: () => void;
   showInviteeExchangeScopeEditor?: boolean;
   inviteeExchangeScopeSetupDone?: boolean;
+  /** Hôte : périmètre d’échange (formulaire) — état piloté par `App` pour l’aligner avec la liste comparaison. */
+  inviterExchangeScopeDraft?: InviteExchangeScope;
+  onInviterExchangeScopeDraftChange?: (scope: InviteExchangeScope) => void;
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -283,6 +286,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onOpenInviteeExchangeScope,
   showInviteeExchangeScopeEditor = false,
   inviteeExchangeScopeSetupDone = false,
+  inviterExchangeScopeDraft,
+  onInviterExchangeScopeDraftChange,
 }) => {
   const { t } = useI18n();
   const [targetHostId, setTargetHostId] = useState('');
@@ -290,9 +295,17 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor' | 'comparator'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
-  const [newInviteExchangeScope, setNewInviteExchangeScope] = useState<InviteExchangeScope>(() =>
+  const [internalInviteExchangeScope, setInternalInviteExchangeScope] = useState<InviteExchangeScope>(() =>
     defaultInviteExchangeScope(),
   );
+  const inviteExchangeScope =
+    inviterExchangeScopeDraft != null && onInviterExchangeScopeDraftChange != null
+      ? inviterExchangeScopeDraft
+      : internalInviteExchangeScope;
+  const setInviteExchangeScope =
+    inviterExchangeScopeDraft != null && onInviterExchangeScopeDraftChange != null
+      ? onInviterExchangeScopeDraftChange
+      : setInternalInviteExchangeScope;
   const [ephemeralInviteExpiresAt, setEphemeralInviteExpiresAt] = useState('');
   const [ownDeviceRole, setOwnDeviceRole] = useState<'viewer' | 'contributor' | 'editor'>('contributor');
   const [ownDeviceTtlPreset, setOwnDeviceTtlPreset] = useState<'none' | '365' | '730' | '1825' | 'custom'>('none');
@@ -1052,8 +1065,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
             {!isInviteMode && (
               <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-slate-600 bg-slate-900/30' : 'border-slate-200 bg-slate-50/90'}`}>
                 <InviteExchangeScopeForm
-                  value={newInviteExchangeScope}
-                  onChange={setNewInviteExchangeScope}
+                  value={inviteExchangeScope}
+                  onChange={setInviteExchangeScope}
                   isDarkMode={isDarkMode}
                   rootCandidates={exchangeRootCandidates}
                 />
@@ -1126,12 +1139,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     newInviteIndividualId,
                     newInviteRole,
                     newInviteExpiresAt ? new Date(newInviteExpiresAt).toISOString() : undefined,
-                    { exchangeScope: newInviteExchangeScope },
+                    { exchangeScope: inviteExchangeScope },
                   );
                   setNewInviteIndividualId('');
                   setNewInviteRole('viewer');
                   setNewInviteExpiresAt('');
-                  setNewInviteExchangeScope(defaultInviteExchangeScope());
+                  setInviteExchangeScope(defaultInviteExchangeScope());
                 }}
                 className={`text-sm rounded px-3 py-1.5 font-semibold ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
               >
@@ -1188,7 +1201,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     type="button"
                     onClick={() => {
                       onCreateOwnDeviceInvite(ownDeviceRole, computeOwnDeviceExpiresAt(), {
-                        exchangeScope: newInviteExchangeScope,
+                        exchangeScope: inviteExchangeScope,
                       });
                     }}
                     className={`text-sm rounded px-3 py-2 font-semibold lg:col-span-1 ${isDarkMode ? 'bg-indigo-700 hover:bg-indigo-600' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
@@ -1256,7 +1269,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold flex flex-wrap items-center gap-1.5">
+                      <div className={`font-semibold flex flex-wrap items-center gap-2 ${textClass}`}>
                         {invite.linkKind === 'ephemeral_free' ? (
                           <>
                             <span
@@ -1293,8 +1306,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
                                 {t('topPanel.inviteKindNamedShort')}
                               </span>
                             )}
-                            <span>
-                              {invite.individualName || '—'} ({formatInviteRole(invite.role)})
+                            <span className={`min-w-0 break-words ${textClass}`}>
+                              {t('topPanel.inviteNamedFor')
+                                .replace('{{name}}', invite.individualName || '—')
+                                .replace('{{role}}', formatInviteRole(invite.role))}
                             </span>
                           </>
                         )}

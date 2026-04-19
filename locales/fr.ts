@@ -52,6 +52,7 @@ const fr = {
       archiveImportFailed: "Import de l'archive impossible. Vérifiez le format du fichier.",
       documentsUpdatedByPeer: 'Documents mis à jour par le pair.',
       inviteCreated: 'Invitation personnalisée créée.',
+      inviteCreatedNamed: 'Invitation créée pour {{name}}.',
       inviteAcceptedHostSync: 'Invitation acceptée — profil appliqué et synchronisation de l’arbre lancée.',
       ownDeviceInviteCreated: 'Lien auto-invitation (second appareil) créé. Copiez-le pour votre mobile.',
       ownDeviceInviteNeedsLivingSelf:
@@ -150,7 +151,27 @@ const fr = {
       manualPairWeakMatch:
         'Paire formée manuellement : le score automatique est faible — vérifiez prénoms, sexe et dates avant d’importer.',
       branchImportPreviewHint:
-        'Périmètre indicatif sur votre arbre local : {{desc}} personnes en descendance (≤{{gd}} gén.) et {{asc}} en ascendance (≤{{gu}} gén.) — import de branche futur selon manifeste d’invitation.',
+        'Périmètre indicatif sur votre arbre local : {{desc}} personnes en descendance (≤{{gd}} gén.) et {{asc}} en ascendance (≤{{gu}} gén.) — les boutons ci-dessous utilisent le manifeste d’invitation (plafonds hôte ∩ invité).',
+      branchImportSectionTitle: 'Importer une partie du graphe pair',
+      branchImportAncestorsLabel: 'Ascendants (vers le haut)',
+      branchImportDescendantsLabel: 'Descendants (vers le bas)',
+      branchImportDirectionDetail:
+        '{{scope}} fiche(s) pair dans ce périmètre : {{create}} création(s), {{merge}} fusion(s) auto, {{conflict}} conflit(s) à trancher, {{skip}} ignorée(s) (hors seuil).',
+      branchImportPlanUnavailable: 'Plan indisponible — vérifiez la paire locale / pair et le manifeste.',
+      branchImportEmptyScope: 'Aucune fiche dans ce périmètre pour cette direction.',
+      branchImportDone:
+        'Import de branche terminé : {{created}} fiches créées, {{merged}} fusionnées, {{families}} familles importées.',
+      branchImportNeedsMergePair:
+        'Import de branche : sélectionnez une paire locale + pair (fusion) pour ancrer le périmètre.',
+      exchangeRootsBarLocalOnly: 'Racine d’échange (vous) : {{local}}',
+      exchangeRootsBarBoth: 'Racines d’échange — vous : {{local}} · pair : {{peer}}',
+      recallGridBanner:
+        'Le périmètre invité est prêt : repassez en grille 2D pour voir les deux racines côte à côte.',
+      recallGridBannerCta: 'Grille 2D comparaison',
+      dismissBanner: 'Masquer',
+      compareSessionBannersAria: 'Indicateurs de session de comparaison',
+      operationHighlightLine:
+        '{{count}} fiche(s) concernée(s) — {{merge}} fusion(s), {{create}} création(s), {{families}} famille(s) importée(s).',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -374,10 +395,12 @@ const fr = {
     copyInviteLink: 'Copier lien',
     inviteCopied: 'Lien copié',
     pendingInviteToken: "Un token d'invitation est détecté dans l'URL. Connectez-vous au pair hôte puis acceptez l'invitation.",
-    inviteLandingText: '{{inviter}} vous invite à {{action}} sa base généalogique.',
+    inviteLandingText:
+      '{{inviter}} vous invite {{invitee}} à {{action}} sa base généalogique.',
     inviteLandingCompareWithRoot:
-      '{{inviter}} vous invite à comparer la généalogie de {{rootName}} entre son archive et la vôtre. Vous pourrez chercher la personne correspondante et régler les paramètres de partage une fois que vous aurez ouvert votre propre archive.',
+      '{{inviter}} vous invite {{invitee}} à comparer la généalogie de {{rootName}} entre son archive et la vôtre. Vous pourrez chercher la personne correspondante et régler les paramètres de partage une fois que vous aurez ouvert votre propre archive.',
     inviteLandingRootNameFallback: 'la personne racine de l’échange',
+    inviteLandingInviteeFallback: 'la personne désignée dans le lien',
     inviteLandingInviterFallback: 'Un généalogiste',
     inviteActionView: 'consulter',
     inviteActionContribute: 'contribuer à',
@@ -542,6 +565,8 @@ const fr = {
     inviteKindEphemeralBadge: '1.2',
     ephemeralInviteExpiresOptional: 'Expiration du lien (optionnel)',
     inviteKindNamedShort: 'Nominatif',
+    /** Liste des invitations : met en avant la personne invitée (GEDCOM). {{name}} {{role}} */
+    inviteNamedFor: 'Invitation pour {{name}} ({{role}})',
     inviteKindOwnDeviceShort: '2ᵉ appareil',
     inviteQrHint: 'Flasher pour ouvrir le même lien',
     visibilityProfilesTitle: 'Profils de visibilité',

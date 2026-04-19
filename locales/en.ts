@@ -52,6 +52,7 @@ const en = {
       archiveImportFailed: 'Archive import failed. Please check file format.',
       documentsUpdatedByPeer: 'Documents updated by peer.',
       inviteCreated: 'Invitation created.',
+      inviteCreatedNamed: 'Invitation created for {{name}}.',
       inviteAcceptedHostSync: 'Invite accepted — profile applied and tree sync started.',
       ownDeviceInviteCreated: 'Own-device invite link created. Copy it to your phone.',
       ownDeviceInviteNeedsLivingSelf:
@@ -150,7 +151,27 @@ const en = {
       manualPairWeakMatch:
         'Manual pair: automatic score is low — check given names, gender, and dates before importing.',
       branchImportPreviewHint:
-        'Indicative scope on your local tree: {{desc}} people in descent (≤{{gd}} gen.) and {{asc}} in ascent (≤{{gu}} gen.) — future branch import per invitation manifest.',
+        'Indicative scope on your local tree: {{desc}} people in descent (≤{{gd}} gen.) and {{asc}} in ascent (≤{{gu}} gen.) — the buttons below use the invitation manifest (host ∩ guest limits).',
+      branchImportSectionTitle: 'Import part of the peer graph',
+      branchImportAncestorsLabel: 'Ancestors (upward)',
+      branchImportDescendantsLabel: 'Descendants (downward)',
+      branchImportDirectionDetail:
+        '{{scope}} peer record(s) in this scope: {{create}} to create, {{merge}} auto-merge(s), {{conflict}} conflict(s) to resolve, {{skip}} skipped (below threshold).',
+      branchImportPlanUnavailable: 'Plan unavailable — check local/peer pair and manifest.',
+      branchImportEmptyScope: 'No records in this scope for that direction.',
+      branchImportDone:
+        'Branch import completed: {{created}} records created, {{merged}} merged, {{families}} families imported.',
+      branchImportNeedsMergePair:
+        'Branch import: select a local + peer pair (merge) to anchor the scope.',
+      exchangeRootsBarLocalOnly: 'Exchange root (you): {{local}}',
+      exchangeRootsBarBoth: 'Exchange roots — you: {{local}} · peer: {{peer}}',
+      recallGridBanner:
+        'Guest scope is ready: switch back to the 2D grid to see both roots side by side.',
+      recallGridBannerCta: '2D compare grid',
+      dismissBanner: 'Dismiss',
+      compareSessionBannersAria: 'Comparison session indicators',
+      operationHighlightLine:
+        '{{count}} record(s) — {{merge}} merge(s), {{create}} create(s), {{families}} families imported.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -374,10 +395,11 @@ const en = {
     copyInviteLink: 'Copy link',
     inviteCopied: 'Link copied',
     pendingInviteToken: 'An invitation token is detected in the URL. Connect to the host peer and accept the invitation.',
-    inviteLandingText: '{{inviter}} invites you to {{action}} their genealogy database.',
+    inviteLandingText: '{{inviter}} invites {{invitee}} to {{action}} their genealogy database.',
     inviteLandingCompareWithRoot:
-      '{{inviter}} invites you to compare the genealogy of {{rootName}} between their archive and yours. You will be able to find the matching person and set sharing options once you have opened your own archive.',
+      '{{inviter}} invites {{invitee}} to compare the genealogy of {{rootName}} between their archive and yours. You will be able to find the matching person and set sharing options once you have opened your own archive.',
     inviteLandingRootNameFallback: 'the root person for this exchange',
+    inviteLandingInviteeFallback: 'the person named in the invitation link',
     inviteLandingInviterFallback: 'A genealogist',
     inviteActionView: 'view',
     inviteActionContribute: 'contribute to',
@@ -542,6 +564,7 @@ const en = {
     inviteKindEphemeralBadge: '1.2',
     ephemeralInviteExpiresOptional: 'Link expiry (optional)',
     inviteKindNamedShort: 'Named',
+    inviteNamedFor: 'Invitation for {{name}} ({{role}})',
     inviteKindOwnDeviceShort: '2nd device',
     inviteQrHint: 'Scan to open the same link',
     visibilityProfilesTitle: 'Visibility profiles',

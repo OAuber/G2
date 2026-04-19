@@ -18,6 +18,8 @@ export type P2PMessageType =
   | 'INVITE_CREATE'
   | 'INVITE_REVOKE'
   | 'INVITE_ACCEPT'
+  /** Invité → hôte : racine et plafonds du périmètre (alignement manifeste / grille comparateur). */
+  | 'INVITEE_EXCHANGE_SCOPE'
   | 'ACCESS_PROFILE_SET'
   | 'ACTIVITY_EVENT'
   | 'PROPOSAL_SUBMIT'

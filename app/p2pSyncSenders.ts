@@ -200,7 +200,12 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
     let documentsForBundle = documents;
     let gedcomSubsetApplied = false;
     const inviteExchangeManifestJson = ctx.getInviteExchangeManifestJson?.() ?? null;
-    if (inviteExchangeManifestJson) {
+    /** Session comparer : ne pas réduire le GEDCOM au périmètre manifeste. Le sous-graphe (`extractGedcomSubset`)
+     * exclut toute famille dont un membre manque dans le scope — ce qui supprime souvent les FAMS vers les
+     * enfants alors que la chaîne FAMC des ascendants reste ; l’import « branche descendants » côté pair
+     * ne trouve alors plus d’arête descendante. */
+    const skipManifestSubsetForCompare = ctx.p2pSessionUseCaseRef.current === 'compare';
+    if (inviteExchangeManifestJson && !skipManifestSubsetForCompare) {
       const manifest = parseInviteExchangeManifestJson(inviteExchangeManifestJson);
       if (manifest) {
         const scopeIds = collectIndividualIdsForManifest(gedcom, manifest);

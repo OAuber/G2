@@ -17,6 +17,17 @@ type Props = {
   onIgnorePair?: () => void;
   /** Aperçu indicatif périmètre ascendance/descendance (Phase E). */
   branchImportHint?: string | null;
+  /** Titre de la zone import de branche (périmètre manifeste / invitation). */
+  branchImportSectionTitle?: string;
+  /** Résumé + action : ascendants du pair dans le périmètre. */
+  branchImportAncestorsSummary?: string | null;
+  branchImportDescendantsSummary?: string | null;
+  branchImportAncestorsLabel?: string;
+  branchImportDescendantsLabel?: string;
+  onBranchImportAncestors?: () => void;
+  onBranchImportDescendants?: () => void;
+  branchImportAncestorsDisabled?: boolean;
+  branchImportDescendantsDisabled?: boolean;
 };
 
 const CompareMergeModal: React.FC<Props> = ({
@@ -32,17 +43,36 @@ const CompareMergeModal: React.FC<Props> = ({
   onConfirm,
   onIgnorePair,
   branchImportHint,
+  branchImportSectionTitle,
+  branchImportAncestorsSummary,
+  branchImportDescendantsSummary,
+  branchImportAncestorsLabel,
+  branchImportDescendantsLabel,
+  onBranchImportAncestors,
+  onBranchImportDescendants,
+  branchImportAncestorsDisabled,
+  branchImportDescendantsDisabled,
 }) => {
   const [mode, setMode] = useState<CompareImportMode>('full');
 
   useEffect(() => {
-    if (isOpen) setMode('full');
+    if (isOpen) {
+      setMode('full');
+    }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const panel = isDarkMode ? 'bg-slate-900 border-slate-600 text-slate-100' : 'bg-white border-slate-300 text-slate-900';
   const inputCls = isDarkMode ? 'border-slate-600 text-slate-100' : 'border-slate-300 text-slate-900';
+  const branchBtnBase = `w-full text-left rounded border px-3 py-2 text-xs transition-colors ${
+    isDarkMode
+      ? 'border-slate-600 hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed'
+      : 'border-slate-300 hover:bg-slate-50 disabled:opacity-45 disabled:cursor-not-allowed'
+  }`;
+
+  const showBranchBlock =
+    !!branchImportSectionTitle && (onBranchImportAncestors || onBranchImportDescendants);
 
   return (
     <div
@@ -51,7 +81,7 @@ const CompareMergeModal: React.FC<Props> = ({
       aria-modal="true"
       aria-labelledby="compare-merge-title"
     >
-      <div className={`max-w-md w-full rounded-lg border shadow-xl p-4 ${panel}`}>
+      <div className={`max-w-md w-full max-h-[min(92vh,720px)] overflow-y-auto rounded-lg border shadow-xl p-4 ${panel}`}>
         <h2 id="compare-merge-title" className="text-sm font-semibold mb-3">
           {title}
         </h2>
@@ -84,6 +114,41 @@ const CompareMergeModal: React.FC<Props> = ({
             <span>{optionPartial}</span>
           </label>
         </div>
+
+        {showBranchBlock ? (
+          <div className={`mb-4 rounded-lg border p-3 ${inputCls}`}>
+            <h3 className="text-[11px] font-bold uppercase tracking-wide mb-2 opacity-90">{branchImportSectionTitle}</h3>
+            <div className="flex flex-col gap-2">
+              {onBranchImportAncestors ? (
+                <button
+                  type="button"
+                  disabled={branchImportAncestorsDisabled}
+                  onClick={() => onBranchImportAncestors()}
+                  className={branchBtnBase}
+                >
+                  <span className="block font-semibold">{branchImportAncestorsLabel}</span>
+                  <span className={`mt-1 block text-[10px] leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                    {branchImportAncestorsSummary ?? '—'}
+                  </span>
+                </button>
+              ) : null}
+              {onBranchImportDescendants ? (
+                <button
+                  type="button"
+                  disabled={branchImportDescendantsDisabled}
+                  onClick={() => onBranchImportDescendants()}
+                  className={branchBtnBase}
+                >
+                  <span className="block font-semibold">{branchImportDescendantsLabel}</span>
+                  <span className={`mt-1 block text-[10px] leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                    {branchImportDescendantsSummary ?? '—'}
+                  </span>
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap justify-end gap-2">
           {onIgnorePair && ignoreLabel && (
             <button

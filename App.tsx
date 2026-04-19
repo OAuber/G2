@@ -121,15 +121,23 @@ import {
 import { rankPeerMatchesForIndividual, scoreIndividualPair } from './services/compareIndividualSimilarity';
 import {
   createInviteExchangeManifest,
+  DEFAULT_INVITE_EXCHANGE_MAX_GEN_DOWN,
+  DEFAULT_INVITE_EXCHANGE_MAX_GEN_UP,
   defaultInviteExchangeScope,
   effectiveExchangePolicy,
   inviteDataFlagsFromP2PVisibility,
   parseInviteExchangeManifestJson,
   resolveExchangeRootIndividualId,
   validateManifestRootsAgainstGedcom,
+  type InviteDataFlags,
   type InviteExchangeManifest,
 } from './services/inviteExchangeManifest';
 import { previewBranchImportOnLocalTree } from './services/lineageImportScope';
+import {
+  applyBranchImportPlan,
+  buildBranchImportPlan,
+  type BranchImportPlan,
+} from './services/branchImportFromManifest';
 
 function individualDisplayLabel(indi: Individual | undefined): string {
   if (!indi) return '';
@@ -303,11 +311,26 @@ function App() {
   const [inviteeExchangeScope, setInviteeExchangeScope] = useState<InviteExchangeScope>(() =>
     defaultInviteExchangeScope(),
   );
+  /** Hôte : brouillon périmètre d’échange (onglet Invitations) — aligné sur la liste comparaison et l’invitation active. */
+  const [inviterDraftExchangeScope, setInviterDraftExchangeScope] = useState<InviteExchangeScope>(() =>
+    defaultInviteExchangeScope(),
+  );
   const inviteeExchangeScopeRef = useRef<InviteExchangeScope>(inviteeExchangeScope);
   /** Invité : manifeste parsé depuis le premier bundle hôte (politique effective à la fusion). */
   const [receivedInviterExchangeManifest, setReceivedInviterExchangeManifest] =
     useState<InviteExchangeManifest | null>(null);
   const receivedInviterExchangeManifestRef = useRef<InviteExchangeManifest | null>(null);
+  /** Côté hôte : périmètre annoncé par l’invité (alignement import branche / manifeste effectif). */
+  const [guestExchangeScopeFromPeer, setGuestExchangeScopeFromPeer] = useState<{
+    inviteId: string;
+    rootIndividualWireId: string;
+    maxGenDown: number;
+    maxGenUp: number;
+    includeSpouses: boolean;
+    data: InviteDataFlags;
+  } | null>(null);
+  const compareExchangeRootsAutoAppliedRef = useRef(false);
+  const inviteeExchangeScopeAnnouncedRef = useRef(false);
   /** Libellés des racines d’échange hôte (GEDCOM du bundle), pour l’UI invité. */
   const [inviterHostExchangeRootLabels, setInviterHostExchangeRootLabels] = useState<string[]>([]);
   const [inviteeExchangeScopeModalOpen, setInviteeExchangeScopeModalOpen] = useState(false);
@@ -385,6 +408,9 @@ function App() {
   }>({ peerId: null, remoteAccessPolicy: null, selectedIndividual: undefined });
   p2pSyncRuntimeRef.current = { peerId, remoteAccessPolicy, selectedIndividual };
 
+  /** Mis à jour après `effectiveInviterExchangeScopeForCompare` : brouillon panneau + invitation (hôte). */
+  const inviterExchangeScopeForBundleRef = useRef<InviteExchangeScope>(defaultInviteExchangeScope());
+
   const buildInviteExchangeManifestJsonRef = useRef<() => string | null>(() => null);
   buildInviteExchangeManifestJsonRef.current = () => {
     if (p2pSessionUseCaseRef.current !== 'compare') return null;
@@ -398,28 +424,25 @@ function App() {
       p2pModeRef.current === 'host'
         ? inv.accessProfile
         : p2pSyncRuntimeRef.current.remoteAccessPolicy ?? inv.accessProfile;
-    const hostExportRootId = resolveExchangeRootIndividualId(gedcom, inv.exchangeScope, inviteTargetId);
-    if (!hostExportRootId) return null;
-    let inviterManifest: InviteExchangeManifest;
-    if (inv.exchangeScope) {
-      inviterManifest = createInviteExchangeManifest({
-        inviteId: inv.inviteId,
-        rootIndividualIds: [hostExportRootId],
-        maxGenDown: inv.exchangeScope.maxGenDown,
-        maxGenUp: inv.exchangeScope.maxGenUp,
-        includeSpouses: inv.exchangeScope.includeSpouses,
-        data: inv.exchangeScope.data,
-      });
-    } else {
-      inviterManifest = createInviteExchangeManifest({
-        inviteId: inv.inviteId,
-        rootIndividualIds: [hostExportRootId],
-        data: inviteDataFlagsFromP2PVisibility(policy),
-      });
-    }
+
+    /** Hôte : manifeste JSON du bundle = périmètre effectif (formulaire Invitations ∩ invitation stockée), pas seulement `inv.exchangeScope`. */
     if (p2pModeRef.current === 'host') {
+      const hostScope = inviterExchangeScopeForBundleRef.current;
+      const hostExportRootId = resolveExchangeRootIndividualId(gedcom, hostScope, inviteTargetId);
+      if (!hostExportRootId) return null;
+      const inviterManifest = createInviteExchangeManifest({
+        inviteId: inv.inviteId,
+        rootIndividualIds: [hostExportRootId],
+        maxGenDown: hostScope.maxGenDown,
+        maxGenUp: hostScope.maxGenUp,
+        includeSpouses: hostScope.includeSpouses,
+        data: hostScope.data,
+      });
       return JSON.stringify(inviterManifest);
     }
+
+    const hostExportRootId = resolveExchangeRootIndividualId(gedcom, inv.exchangeScope, inviteTargetId);
+    if (!hostExportRootId) return null;
     const guestExportRootId = resolveExchangeRootIndividualId(
       gedcom,
       inviteeExchangeScope,
@@ -1996,6 +2019,10 @@ function App() {
     !(pendingInviteRole === 'comparator' && !inviteLandingBlocksComparatorWorkspace);
   const inviteLandingDescription = useMemo(() => {
     const inviter = pendingInviteInviterName || t('topPanel.inviteLandingInviterFallback');
+    const invitee =
+      pendingInviteTargetDisplayName ||
+      pendingInviteItem?.individualName ||
+      t('topPanel.inviteLandingInviteeFallback');
     const rootDisplay =
       inviterHostExchangeRootLabels.length > 0
         ? inviterHostExchangeRootLabels.join(' · ')
@@ -2009,13 +2036,18 @@ function App() {
     ) {
       return t('topPanel.inviteLandingCompareWithRoot')
         .replace('{{inviter}}', inviter)
+        .replace('{{invitee}}', invitee)
         .replace('{{rootName}}', rootDisplay);
     }
     const template = t('topPanel.inviteLandingText');
     const action = pendingInviteRoleLabel || t('topPanel.inviteActionView');
-    return template.replace('{{inviter}}', inviter).replace('{{action}}', action);
+    return template
+      .replace('{{inviter}}', inviter)
+      .replace('{{invitee}}', invitee)
+      .replace('{{action}}', action);
   }, [
     pendingInviteInviterName,
+    pendingInviteTargetDisplayName,
     pendingInviteRoleLabel,
     pendingInviteRole,
     pendingInviteItem,
@@ -2184,6 +2216,15 @@ function App() {
   }, [p2pSessionUseCase, p2pStatus, p2pMode, peerCompareGedcom, gedcomData, t]);
 
   const [compareNoMatchFlash, setCompareNoMatchFlash] = useState<string | null>(null);
+  /** Périmètre invité validé : rappel si l’utilisateur a quitté la grille 2D de comparaison. */
+  const [compareGridRecallDismissed, setCompareGridRecallDismissed] = useState(false);
+  /** Après fusion / création / import de branche : fiches concernées + comptages (bandeau). */
+  const [compareOperationHighlight, setCompareOperationHighlight] = useState<{
+    individualIds: string[];
+    mergeCount: number;
+    createCount: number;
+    familyCount?: number;
+  } | null>(null);
 
   /** Import local après coup : pousser l’arbre vers l’hôte dès que GEDCOM + snapshot pair sont prêts. */
   useEffect(() => {
@@ -2292,6 +2333,292 @@ function App() {
       .replace('{{gd}}', String(prev.maxGenDown))
       .replace('{{gu}}', String(prev.maxGenUp));
   }, [gedcomData, compareMergeImportIntent, t]);
+
+  const inviteForCompareHost = useMemo(() => {
+    if (guestExchangeScopeFromPeer) {
+      const byId = p2pInvites.find((i) => i.inviteId === guestExchangeScopeFromPeer.inviteId);
+      if (byId) return byId;
+    }
+    return pendingInviteItem;
+  }, [guestExchangeScopeFromPeer, p2pInvites, pendingInviteItem]);
+
+  /** Invitant : périmètre effectif pour l’UI (invitation enregistrée ou brouillon du formulaire). */
+  const effectiveInviterExchangeScopeForCompare = useMemo(() => {
+    if (p2pMode !== 'host') return null;
+    return inviteForCompareHost?.exchangeScope ?? inviterDraftExchangeScope;
+  }, [p2pMode, inviteForCompareHost?.exchangeScope, inviterDraftExchangeScope]);
+
+  inviterExchangeScopeForBundleRef.current =
+    effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+
+  useEffect(() => {
+    if (p2pMode !== 'host') return;
+    const inv = inviteForCompareHost;
+    if (!inv?.exchangeScope) return;
+    setInviterDraftExchangeScope(inv.exchangeScope);
+  }, [p2pMode, inviteForCompareHost?.inviteId]);
+
+  const compareBranchImportManifest = useMemo((): InviteExchangeManifest | null => {
+    if (!originalGedcomData || !peerCompareGedcom || !compareMergeImportIntent) return null;
+    if (compareMergeImportIntent.kind !== 'merge') return null;
+
+    /** Hôte : manifeste effectif (min invitant ∩ invité) + racines pair en `pc:` — corrige l’import descendants si le fallback utilisait seulement le state « invité » par défaut. */
+    if (
+      p2pMode === 'host' &&
+      guestExchangeScopeFromPeer &&
+      inviteForCompareHost?.exchangeScope
+    ) {
+      const hostExportRoot = resolveExchangeRootIndividualId(
+        originalGedcomData,
+        inviteForCompareHost.exchangeScope,
+        pendingInviteTargetIndividualId ?? inviteForCompareHost.individualId,
+      );
+      if (hostExportRoot && originalGedcomData.individuals[hostExportRoot]) {
+        const inviterManifest = createInviteExchangeManifest({
+          inviteId: inviteForCompareHost.inviteId,
+          rootIndividualIds: [hostExportRoot],
+          maxGenDown: inviteForCompareHost.exchangeScope.maxGenDown,
+          maxGenUp: inviteForCompareHost.exchangeScope.maxGenUp,
+          includeSpouses: inviteForCompareHost.exchangeScope.includeSpouses,
+          data: inviteForCompareHost.exchangeScope.data,
+        });
+        const g = guestExchangeScopeFromPeer;
+        const effective = effectiveExchangePolicy(inviterManifest, {
+          maxGenDown: g.maxGenDown,
+          maxGenUp: g.maxGenUp,
+          includeSpouses: g.includeSpouses,
+          data: g.data,
+          rootIndividualIds: [g.rootIndividualWireId],
+        });
+        const rootPc = effective.rootIndividualIds
+          .map((id) => wireIndividualIdToPeerCompareId(id))
+          .filter((id) => !!peerCompareGedcom.individuals[id]);
+        if (rootPc.length > 0) {
+          return createInviteExchangeManifest({
+            inviteId: effective.inviteId,
+            rootIndividualIds: rootPc,
+            maxGenDown: effective.maxGenDown,
+            maxGenUp: effective.maxGenUp,
+            includeSpouses: effective.includeSpouses,
+            data: effective.data,
+            generatedAt: effective.generatedAt,
+          });
+        }
+      }
+    }
+
+    const manifestRootsFromHost =
+      receivedInviterExchangeManifest?.rootIndividualIds
+        ?.map((rid) => wireIndividualIdToPeerCompareId(rid))
+        .filter((rid) => !!peerCompareGedcom.individuals[rid]) ?? [];
+    const rootIndividualIds =
+      manifestRootsFromHost.length > 0 ? manifestRootsFromHost : [compareMergeImportIntent.peerPcId];
+    /** `maxGenDown: 0` dans le JSON manifeste est valide — `??` ne le corrige pas ; sans plafond > 0 pas de descendance/ascendance importables. */
+    const host = receivedInviterExchangeManifest;
+    const scopeForEff =
+      p2pMode === 'host'
+        ? inviteForCompareHost?.exchangeScope ?? defaultInviteExchangeScope()
+        : inviteeExchangeScope;
+    const effDown =
+      host && host.maxGenDown > 0
+        ? Math.min(host.maxGenDown, scopeForEff.maxGenDown)
+        : scopeForEff.maxGenDown;
+    const effUp =
+      host && host.maxGenUp > 0
+        ? Math.min(host.maxGenUp, scopeForEff.maxGenUp)
+        : scopeForEff.maxGenUp;
+    const maxGenDown = effDown > 0 ? effDown : DEFAULT_INVITE_EXCHANGE_MAX_GEN_DOWN;
+    const maxGenUp = effUp > 0 ? effUp : DEFAULT_INVITE_EXCHANGE_MAX_GEN_UP;
+    const includeSpouses =
+      (host?.includeSpouses ?? true) && scopeForEff.includeSpouses;
+    return createInviteExchangeManifest({
+      inviteId: host?.inviteId ?? 'compare-branch-import',
+      rootIndividualIds,
+      maxGenDown,
+      maxGenUp,
+      includeSpouses,
+      data: host?.data,
+    });
+  }, [
+    originalGedcomData,
+    peerCompareGedcom,
+    compareMergeImportIntent,
+    receivedInviterExchangeManifest,
+    inviteeExchangeScope,
+    p2pMode,
+    guestExchangeScopeFromPeer,
+    inviteForCompareHost,
+    pendingInviteTargetIndividualId,
+  ]);
+
+  const branchImportPlanOpts = useMemo(
+    () => ({
+      autoMergeScore: 0.9,
+      suggestMatchScore: 0.55,
+      candidateLimit: 3,
+    }),
+    [],
+  );
+
+  const compareBranchImportPlanAncestors = useMemo((): BranchImportPlan | null => {
+    if (!originalGedcomData || !peerCompareGedcom || !compareBranchImportManifest) return null;
+    return buildBranchImportPlan(originalGedcomData, peerCompareGedcom, compareBranchImportManifest, {
+      ...branchImportPlanOpts,
+      direction: 'ancestors',
+    });
+  }, [originalGedcomData, peerCompareGedcom, compareBranchImportManifest, branchImportPlanOpts]);
+
+  const compareBranchImportPlanDescendants = useMemo((): BranchImportPlan | null => {
+    if (!originalGedcomData || !peerCompareGedcom || !compareBranchImportManifest) return null;
+    return buildBranchImportPlan(originalGedcomData, peerCompareGedcom, compareBranchImportManifest, {
+      ...branchImportPlanOpts,
+      direction: 'descendants',
+    });
+  }, [originalGedcomData, peerCompareGedcom, compareBranchImportManifest, branchImportPlanOpts]);
+
+  const formatBranchImportDirectionDetail = useCallback(
+    (plan: BranchImportPlan | null) => {
+      if (!plan) return t('app.compare.branchImportPlanUnavailable');
+      return t('app.compare.branchImportDirectionDetail')
+        .replace('{{scope}}', String(plan.scopePeerIds.length))
+        .replace('{{create}}', String(plan.summary.create))
+        .replace('{{merge}}', String(plan.summary.merge))
+        .replace('{{conflict}}', String(plan.summary.conflict))
+        .replace('{{skip}}', String(plan.summary.skip));
+    },
+    [t],
+  );
+
+  const branchImportModalEnabled =
+    compareMergeImportIntent?.kind === 'merge' && !!compareBranchImportManifest;
+
+  useEffect(() => {
+    if (p2pStatus === 'disconnected') {
+      setGuestExchangeScopeFromPeer(null);
+      compareExchangeRootsAutoAppliedRef.current = false;
+      inviteeExchangeScopeAnnouncedRef.current = false;
+      setCompareOperationHighlight(null);
+      setCompareGridRecallDismissed(false);
+    }
+  }, [p2pStatus]);
+
+  useEffect(() => {
+    setCompareGridRecallDismissed(false);
+  }, [guestExchangeScopeFromPeer?.inviteId, guestExchangeScopeFromPeer?.rootIndividualWireId]);
+
+  useEffect(() => {
+    if (inviteeExchangeScopeSetupDone) setCompareGridRecallDismissed(false);
+  }, [inviteeExchangeScopeSetupDone]);
+
+  /** Invité → hôte : annoncer la racine et les plafonds (une fois par session connectée) pour l’import branche et la grille. */
+  useEffect(() => {
+    if (p2pMode !== 'client' || p2pStatus !== 'connected' || p2pSessionUseCase !== 'compare') return;
+    if (!inviteeExchangeScopeSetupDone) return;
+    if (inviteeExchangeScopeAnnouncedRef.current) return;
+    if (!gedcomData || !pendingInviteTargetIndividualId) return;
+    const inviteId =
+      receivedInviterExchangeManifest?.inviteId ||
+      (pendingInviteToken ? parseInviteClaimsUnsafe(pendingInviteToken)?.inviteId : null);
+    if (!inviteId) return;
+    const rootWire = resolveExchangeRootIndividualId(
+      gedcomData,
+      inviteeExchangeScope,
+      pendingInviteTargetIndividualId,
+    );
+    if (!rootWire || !gedcomData.individuals[rootWire]) return;
+    inviteeExchangeScopeAnnouncedRef.current = true;
+    p2pService.sendMessage('INVITEE_EXCHANGE_SCOPE', {
+      inviteId,
+      rootIndividualWireId: rootWire,
+      maxGenDown: inviteeExchangeScope.maxGenDown,
+      maxGenUp: inviteeExchangeScope.maxGenUp,
+      includeSpouses: inviteeExchangeScope.includeSpouses,
+      data: inviteeExchangeScope.data,
+    });
+    logP2PActivityRef.current?.(
+      'invitee.exchange_scope.sent',
+      'session',
+      inviteId,
+      peerId || 'client',
+    );
+  }, [
+    p2pMode,
+    p2pStatus,
+    p2pSessionUseCase,
+    inviteeExchangeScopeSetupDone,
+    gedcomData,
+    inviteeExchangeScope,
+    pendingInviteTargetIndividualId,
+    receivedInviterExchangeManifest?.inviteId,
+    pendingInviteToken,
+    peerId,
+  ]);
+
+  /** Invité : dès racine + périmètre validés, focaliser la grille 2D sur les deux « mêmes » racines (local ↔ hôte). */
+  useEffect(() => {
+    if (!compareDualViewActive || p2pMode !== 'client' || p2pSessionUseCase !== 'compare') return;
+    if (!inviteeExchangeScopeSetupDone) return;
+    if (!gedcomData || !peerCompareGedcom || !receivedInviterExchangeManifest?.rootIndividualIds?.length)
+      return;
+    if (!pendingInviteTargetIndividualId) return;
+    if (compareExchangeRootsAutoAppliedRef.current) return;
+    const localRoot = resolveExchangeRootIndividualId(
+      gedcomData,
+      inviteeExchangeScope,
+      pendingInviteTargetIndividualId,
+    );
+    if (!localRoot || !gedcomData.individuals[localRoot]) return;
+    const hostWire = receivedInviterExchangeManifest.rootIndividualIds[0];
+    const peerPc = wireIndividualIdToPeerCompareId(hostWire);
+    if (!peerCompareGedcom.individuals[peerPc]) return;
+    compareExchangeRootsAutoAppliedRef.current = true;
+    setCompareMatchAnchorId(localRoot);
+    setCompareMatchPairId(peerPc);
+    setSelectedIndividual(gedcomData.individuals[localRoot]);
+    setSelectedIdsFor2D(new Set([localRoot]));
+  }, [
+    compareDualViewActive,
+    p2pMode,
+    p2pSessionUseCase,
+    inviteeExchangeScopeSetupDone,
+    gedcomData,
+    peerCompareGedcom,
+    receivedInviterExchangeManifest,
+    inviteeExchangeScope,
+    pendingInviteTargetIndividualId,
+  ]);
+
+  /** Hôte : à réception du périmètre invité — même focalisation (racine locale ↔ racine pair). */
+  useEffect(() => {
+    if (!compareDualViewActive || p2pMode !== 'host' || p2pSessionUseCase !== 'compare') return;
+    if (!guestExchangeScopeFromPeer) return;
+    if (!gedcomData || !peerCompareGedcom) return;
+    if (compareExchangeRootsAutoAppliedRef.current) return;
+    const inv = inviteForCompareHost;
+    if (!inv?.exchangeScope) return;
+    const hostLocal = resolveExchangeRootIndividualId(
+      gedcomData,
+      inv.exchangeScope,
+      pendingInviteTargetIndividualId ?? inv.individualId,
+    );
+    if (!hostLocal || !gedcomData.individuals[hostLocal]) return;
+    const peerPc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
+    if (!peerCompareGedcom.individuals[peerPc]) return;
+    compareExchangeRootsAutoAppliedRef.current = true;
+    setCompareMatchAnchorId(hostLocal);
+    setCompareMatchPairId(peerPc);
+    setSelectedIndividual(gedcomData.individuals[hostLocal]);
+    setSelectedIdsFor2D(new Set([hostLocal]));
+  }, [
+    compareDualViewActive,
+    p2pMode,
+    p2pSessionUseCase,
+    guestExchangeScopeFromPeer,
+    gedcomData,
+    peerCompareGedcom,
+    inviteForCompareHost,
+    pendingInviteTargetIndividualId,
+  ]);
 
   useEffect(() => {
     if (!compareDualViewActive || is2dIndividual) {
@@ -2411,8 +2738,157 @@ function App() {
     return { ...renderedPrimaryPhotoUrlById, ...peerComparePrimaryPhotoUrlById };
   }, [compareDualViewActive, renderedPrimaryPhotoUrlById, peerComparePrimaryPhotoUrlById]);
 
+  /** Racines d’échange (local + pair) en tête de liste comparaison — cohérent avec le formulaire Invitations / périmètre invité. */
+  const compareSidebarPinIds = useMemo(() => {
+    if (!compareDualViewActive || !mergedCompareGedcom) return [];
+    const ids: string[] = [];
+    const push = (id: string | null | undefined) => {
+      if (!id || !mergedCompareGedcom.individuals[id]) return;
+      if (!ids.includes(id)) ids.push(id);
+    };
+    push(compareMatchAnchorId);
+    push(compareMatchPairId);
+    const gd = gedcomData ?? originalGedcomData;
+    if (!gd) return ids;
+    if (p2pMode === 'host' && p2pSessionUseCase === 'compare') {
+      const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+      const targetId = pendingInviteTargetIndividualId ?? inviteForCompareHost?.individualId ?? null;
+      push(resolveExchangeRootIndividualId(gd, scope, targetId));
+      if (guestExchangeScopeFromPeer?.rootIndividualWireId) {
+        push(wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId));
+      }
+    } else if (p2pMode === 'client' && p2pSessionUseCase === 'compare') {
+      push(
+        resolveExchangeRootIndividualId(gd, inviteeExchangeScope, pendingInviteTargetIndividualId),
+      );
+      const hw = receivedInviterExchangeManifest?.rootIndividualIds?.[0];
+      if (hw) push(wireIndividualIdToPeerCompareId(hw));
+    }
+    return ids;
+  }, [
+    compareDualViewActive,
+    mergedCompareGedcom,
+    compareMatchAnchorId,
+    compareMatchPairId,
+    gedcomData,
+    originalGedcomData,
+    p2pMode,
+    p2pSessionUseCase,
+    effectiveInviterExchangeScopeForCompare,
+    pendingInviteTargetIndividualId,
+    inviteForCompareHost?.individualId,
+    guestExchangeScopeFromPeer,
+    inviteeExchangeScope,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+  ]);
+
+  const compareExchangeRootsBarText = useMemo(() => {
+    if (!compareDualViewActive || p2pSessionUseCase !== 'compare' || !mergedCompareGedcom) return null;
+    const gd = gedcomData ?? originalGedcomData;
+    if (!gd) return null;
+    const labelOf = (id: string | null | undefined) => {
+      if (!id || !mergedCompareGedcom.individuals[id]) return '—';
+      const n = mergedCompareGedcom.individuals[id];
+      return (
+        n.name ||
+        [n.givenName, n.surname].filter(Boolean).join(' ').trim() ||
+        id
+      );
+    };
+    if (p2pMode === 'host') {
+      const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+      const localR = resolveExchangeRootIndividualId(
+        gd,
+        scope,
+        pendingInviteTargetIndividualId ?? inviteForCompareHost?.individualId ?? null,
+      );
+      const localLabel = localR ? labelOf(localR) : '—';
+      if (guestExchangeScopeFromPeer?.rootIndividualWireId) {
+        const pc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
+        return t('app.compare.exchangeRootsBarBoth')
+          .replace('{{local}}', localLabel)
+          .replace('{{peer}}', labelOf(pc));
+      }
+      return t('app.compare.exchangeRootsBarLocalOnly').replace('{{local}}', localLabel);
+    }
+    if (p2pMode === 'client' && inviteeExchangeScopeSetupDone) {
+      const localR = resolveExchangeRootIndividualId(gd, inviteeExchangeScope, pendingInviteTargetIndividualId);
+      const hw = receivedInviterExchangeManifest?.rootIndividualIds?.[0];
+      const pc = hw ? wireIndividualIdToPeerCompareId(hw) : null;
+      if (localR && pc) {
+        return t('app.compare.exchangeRootsBarBoth')
+          .replace('{{local}}', labelOf(localR))
+          .replace('{{peer}}', labelOf(pc));
+      }
+    }
+    return null;
+  }, [
+    compareDualViewActive,
+    p2pSessionUseCase,
+    mergedCompareGedcom,
+    p2pMode,
+    t,
+    gedcomData,
+    originalGedcomData,
+    effectiveInviterExchangeScopeForCompare,
+    pendingInviteTargetIndividualId,
+    inviteForCompareHost?.individualId,
+    guestExchangeScopeFromPeer,
+    inviteeExchangeScopeSetupDone,
+    inviteeExchangeScope,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+  ]);
+
+  const compareBothExchangeRootsReady = useMemo(() => {
+    if (p2pSessionUseCase !== 'compare' || p2pStatus !== 'connected') return false;
+    const peerOk =
+      !!peerCompareGedcom && Object.keys(peerCompareGedcom.individuals).length > 0;
+    if (!peerOk || !gedcomData) return false;
+    if (p2pMode === 'host') {
+      return !!guestExchangeScopeFromPeer?.rootIndividualWireId;
+    }
+    return (
+      inviteeExchangeScopeSetupDone &&
+      !!receivedInviterExchangeManifest?.rootIndividualIds?.length
+    );
+  }, [
+    p2pSessionUseCase,
+    p2pStatus,
+    peerCompareGedcom,
+    gedcomData,
+    p2pMode,
+    guestExchangeScopeFromPeer,
+    inviteeExchangeScopeSetupDone,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+  ]);
+
+  const showCompareGridRecallBanner = useMemo(() => {
+    if (!compareDualViewActive || !compareBothExchangeRootsReady) return false;
+    if (compareGridRecallDismissed) return false;
+    return viewMode === '3D' || is2dIndividual;
+  }, [
+    compareDualViewActive,
+    compareBothExchangeRootsReady,
+    compareGridRecallDismissed,
+    viewMode,
+    is2dIndividual,
+  ]);
+
   const compareMergedSidebarIndividuals = useMemo(() => {
     if (!compareDualViewActive || !mergedCompareGedcom) return [];
+    const pinReorder = (arr: Individual[]): Individual[] => {
+      if (compareSidebarPinIds.length === 0) return arr;
+      const seen = new Set<string>();
+      const pinned: Individual[] = [];
+      for (const id of compareSidebarPinIds) {
+        const ind = mergedCompareGedcom.individuals[id];
+        if (ind && !seen.has(id)) {
+          seen.add(id);
+          pinned.push(ind);
+        }
+      }
+      return [...pinned, ...arr.filter((i) => !seen.has(i.id))];
+    };
     let list = Object.values(mergedCompareGedcom.individuals) as Individual[];
     const lineageSets = computeLineageFilterSets(mergedCompareGedcom, selectedIndividual?.id);
     const filters = activeFiltersCompareUnified;
@@ -2440,9 +2916,9 @@ function App() {
         if (s.individual.id !== compareMatchAnchorId) out.push(s.individual);
       }
       out.push(...rest);
-      return out;
+      return pinReorder(out);
     }
-    return baseSorted;
+    return pinReorder(baseSorted);
   }, [
     compareDualViewActive,
     mergedCompareGedcom,
@@ -2452,6 +2928,7 @@ function App() {
     mergedDocumentsForCompareUi,
     compareMatchAnchorId,
     compareUnifiedMatchSuggestions,
+    compareSidebarPinIds,
   ]);
 
   const compareProcessedIdsMerged = useMemo(
@@ -3706,6 +4183,46 @@ function App() {
                     sendSessionState(false);
                   }
               }
+              if (data.type === 'INVITEE_EXCHANGE_SCOPE' && data.payload && p2pModeRef.current === 'host') {
+                  const payload = data.payload as {
+                    inviteId?: string;
+                    rootIndividualWireId?: string;
+                    maxGenDown?: number;
+                    maxGenUp?: number;
+                    includeSpouses?: boolean;
+                    data?: InviteDataFlags;
+                  };
+                  if (
+                    typeof payload.inviteId === 'string' &&
+                    payload.inviteId &&
+                    typeof payload.rootIndividualWireId === 'string' &&
+                    payload.rootIndividualWireId &&
+                    typeof payload.maxGenDown === 'number' &&
+                    typeof payload.maxGenUp === 'number' &&
+                    typeof payload.includeSpouses === 'boolean' &&
+                    payload.data &&
+                    typeof payload.data.vital === 'boolean' &&
+                    typeof payload.data.relations === 'boolean' &&
+                    typeof payload.data.media === 'boolean' &&
+                    typeof payload.data.notes === 'boolean'
+                  ) {
+                    setGuestExchangeScopeFromPeer({
+                      inviteId: payload.inviteId,
+                      rootIndividualWireId: payload.rootIndividualWireId,
+                      maxGenDown: payload.maxGenDown,
+                      maxGenUp: payload.maxGenUp,
+                      includeSpouses: payload.includeSpouses,
+                      data: payload.data,
+                    });
+                    compareExchangeRootsAutoAppliedRef.current = false;
+                    logP2PActivity(
+                      'invitee.exchange_scope.received',
+                      'session',
+                      payload.inviteId,
+                      data.senderPeerId || 'remote',
+                    );
+                  }
+              }
               if (data.type === 'INVITE_CREATE' && data.payload) {
                   const payload = data.payload as {
                     invite?: P2PInviteItem;
@@ -4895,6 +5412,82 @@ function App() {
     [handleToggleCompareRemoteProcessed, handleToggleCompareLocalProcessed],
   );
 
+  const handleReturnToCompareExchangeGrid = useCallback(() => {
+    handleSetDisplayMode('2d-grid');
+    setCompareGridRecallDismissed(true);
+  }, [handleSetDisplayMode]);
+
+  const handleBranchImportDirection = useCallback(
+    (direction: 'ancestors' | 'descendants') => {
+      setCompareMergeModalOpen(false);
+      if (ephemeralGuestActive) {
+        showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
+        return;
+      }
+      if (!originalGedcomData || !peerCompareGedcom) {
+        showTransientToast('error', t('app.compare.importPairNeedsTwoBases'), 3600);
+        return;
+      }
+      const intent = compareMergeImportIntent;
+      if (!intent || intent.kind !== 'merge') {
+        showTransientToast('warning', t('app.compare.branchImportNeedsMergePair'), 3200);
+        return;
+      }
+      const plan =
+        direction === 'ancestors' ? compareBranchImportPlanAncestors : compareBranchImportPlanDescendants;
+      if (!plan || plan.scopePeerIds.length === 0) {
+        showTransientToast('warning', t('app.compare.branchImportEmptyScope'), 3200);
+        return;
+      }
+      const applied = applyBranchImportPlan(originalGedcomData, peerCompareGedcom, plan);
+      setOriginalGedcomData(applied.data);
+      setTimeout(() => {
+        setNormalizedGedcomData(normalizeGedcom(applied.data));
+      }, 10);
+      const allAffectedIds = [
+        ...new Set([...applied.mergedIndividualIds, ...applied.importedIndividualIds]),
+      ];
+      const localRoot = applied.data.individuals[intent.localId] ?? null;
+      if (localRoot) {
+        setSelectedIndividual(localRoot);
+        setRootIndividual(localRoot);
+        setSelectedIdsFor2D(new Set(allAffectedIds.length > 0 ? allAffectedIds : [localRoot.id]));
+        handleSetDisplayMode('2d-grid');
+      }
+      setCompareOperationHighlight({
+        individualIds: allAffectedIds,
+        mergeCount: applied.mergedIndividualIds.length,
+        createCount: applied.importedIndividualIds.length,
+        familyCount: applied.importedFamilyIds.length,
+      });
+      setRightPanelOpen(true);
+      setCompareFusionCompleted(true);
+      setCompareMatchAnchorId(null);
+      setCompareMatchPairId(null);
+      showTransientToast(
+        'success',
+        t('app.compare.branchImportDone')
+          .replace('{{created}}', String(applied.importedIndividualIds.length))
+          .replace('{{merged}}', String(applied.mergedIndividualIds.length))
+          .replace('{{families}}', String(applied.importedFamilyIds.length)),
+        5200,
+      );
+    },
+    [
+      ephemeralGuestActive,
+      showTransientToast,
+      t,
+      originalGedcomData,
+      peerCompareGedcom,
+      compareMergeImportIntent,
+      compareBranchImportPlanAncestors,
+      compareBranchImportPlanDescendants,
+      setOriginalGedcomData,
+      setNormalizedGedcomData,
+      handleSetDisplayMode,
+    ],
+  );
+
   const handleCompareMergeConfirm = useCallback(
     (mode: CompareImportMode) => {
       setCompareMergeModalOpen(false);
@@ -4984,7 +5577,12 @@ function App() {
       setRootIndividual(mergedInd);
       setSelectedIdsFor2D(new Set([localId]));
       setRightPanelOpen(true);
-      handleSetDisplayMode('2d-individual');
+      setCompareOperationHighlight({
+        individualIds: [localId],
+        mergeCount: intent.kind === 'merge' ? 1 : 0,
+        createCount: intent.kind === 'create' ? 1 : 0,
+      });
+      handleSetDisplayMode('2d-grid');
       const toastKey =
         intent.kind === 'create'
           ? mode === 'partial'
@@ -5603,7 +6201,9 @@ function App() {
     }
     showTransientToast(
       'success',
-      intent === 'own_device' ? t('app.toasts.ownDeviceInviteCreated') : t('app.toasts.inviteCreated'),
+      intent === 'own_device'
+        ? t('app.toasts.ownDeviceInviteCreated')
+        : t('app.toasts.inviteCreatedNamed').replace('{{name}}', candidate.label),
       2200,
     );
   };
@@ -7503,7 +8103,87 @@ function App() {
       />
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
-        
+        {compareDualViewActive &&
+          (compareExchangeRootsBarText ||
+            showCompareGridRecallBanner ||
+            compareOperationHighlight) && (
+          <div
+            className="pointer-events-none absolute left-1/2 top-3 z-[116] flex max-w-[min(100%,32rem)] -translate-x-1/2 flex-col gap-1.5 px-2"
+            role="region"
+            aria-label={t('app.compare.compareSessionBannersAria')}
+          >
+            {compareExchangeRootsBarText && (
+              <div
+                className={`pointer-events-none rounded-lg border px-3 py-1.5 text-center text-[11px] font-medium leading-snug shadow-md ${
+                  isDarkMode
+                    ? 'border-slate-600 bg-slate-950/90 text-slate-100'
+                    : 'border-slate-300 bg-white/95 text-slate-800'
+                }`}
+              >
+                {compareExchangeRootsBarText}
+              </div>
+            )}
+            {showCompareGridRecallBanner && (
+              <div
+                className={`pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] shadow-md ${
+                  isDarkMode
+                    ? 'border-amber-700/80 bg-amber-950/90 text-amber-50'
+                    : 'border-amber-400 bg-amber-50 text-amber-950'
+                }`}
+              >
+                <span>{t('app.compare.recallGridBanner')}</span>
+                <button
+                  type="button"
+                  onClick={handleReturnToCompareExchangeGrid}
+                  className={`rounded px-2 py-1 text-[11px] font-semibold ${
+                    isDarkMode ? 'bg-amber-800 hover:bg-amber-700' : 'bg-amber-600 text-white hover:bg-amber-500'
+                  }`}
+                >
+                  {t('app.compare.recallGridBannerCta')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCompareGridRecallDismissed(true)}
+                  className="text-[10px] underline opacity-80"
+                >
+                  {t('app.compare.dismissBanner')}
+                </button>
+              </div>
+            )}
+            {compareOperationHighlight && (
+              <div
+                className={`pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] shadow-md ${
+                  isDarkMode
+                    ? 'border-sky-700/80 bg-slate-950/92 text-sky-100'
+                    : 'border-sky-400 bg-white/96 text-sky-950'
+                }`}
+              >
+                <span>
+                  {t('app.compare.operationHighlightLine')
+                    .replace('{{count}}', String(compareOperationHighlight.individualIds.length))
+                    .replace('{{merge}}', String(compareOperationHighlight.mergeCount))
+                    .replace('{{create}}', String(compareOperationHighlight.createCount))
+                    .replace(
+                      '{{families}}',
+                      compareOperationHighlight.familyCount != null
+                        ? String(compareOperationHighlight.familyCount)
+                        : '0',
+                    )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCompareOperationHighlight(null)}
+                  className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                    isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-200 hover:bg-slate-300'
+                  }`}
+                >
+                  {t('app.compare.dismissBanner')}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {shouldSuspendSceneForInvite ? (
           <div className={`absolute inset-0 ${isDarkMode ? 'bg-black' : 'bg-sky-50'}`} />
         ) : viewMode === '3D' ? (
@@ -7683,6 +8363,35 @@ function App() {
               onConfirm={handleCompareMergeConfirm}
               onIgnorePair={handleCompareIgnorePair}
               branchImportHint={compareMergeBranchPreviewHint}
+              branchImportSectionTitle={
+                branchImportModalEnabled ? t('app.compare.branchImportSectionTitle') : undefined
+              }
+              branchImportAncestorsLabel={t('app.compare.branchImportAncestorsLabel')}
+              branchImportDescendantsLabel={t('app.compare.branchImportDescendantsLabel')}
+              branchImportAncestorsSummary={
+                branchImportModalEnabled
+                  ? formatBranchImportDirectionDetail(compareBranchImportPlanAncestors)
+                  : undefined
+              }
+              branchImportDescendantsSummary={
+                branchImportModalEnabled
+                  ? formatBranchImportDirectionDetail(compareBranchImportPlanDescendants)
+                  : undefined
+              }
+              onBranchImportAncestors={
+                branchImportModalEnabled ? () => handleBranchImportDirection('ancestors') : undefined
+              }
+              onBranchImportDescendants={
+                branchImportModalEnabled ? () => handleBranchImportDirection('descendants') : undefined
+              }
+              branchImportAncestorsDisabled={
+                !compareBranchImportPlanAncestors ||
+                compareBranchImportPlanAncestors.scopePeerIds.length === 0
+              }
+              branchImportDescendantsDisabled={
+                !compareBranchImportPlanDescendants ||
+                compareBranchImportPlanDescendants.scopePeerIds.length === 0
+              }
             />
           </>
         ) : is2dIndividual ? (
@@ -8169,6 +8878,8 @@ function App() {
         onOpenInviteeExchangeScope={() => setInviteeExchangeScopeModalOpen(true)}
         showInviteeExchangeScopeEditor={inviteeExchangeScopeEditorVisible}
         inviteeExchangeScopeSetupDone={inviteeExchangeScopeSetupDone}
+        inviterExchangeScopeDraft={p2pMode === 'host' ? inviterDraftExchangeScope : undefined}
+        onInviterExchangeScopeDraftChange={p2pMode === 'host' ? setInviterDraftExchangeScope : undefined}
       />
 
       {/* --- Bottom Panel (Display) --- */}
