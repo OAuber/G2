@@ -172,6 +172,18 @@ const en = {
       compareSessionBannersAria: 'Comparison session indicators',
       operationHighlightLine:
         '{{count}} record(s) — {{merge}} merge(s), {{create}} create(s), {{families}} families imported.',
+      importScopeSingle: 'Selected individual',
+      importScopeAncestors: 'Ancestors',
+      importScopeDescendants: 'Descendants',
+      importDepthLabel: 'Merge depth',
+      importDepthHelp:
+        'Depth is limited by the scope validated by both host and guest.',
+      importDataOptionsTitle: 'Data to merge',
+      importDataModeAll: 'All',
+      importDataModeCustom: 'Custom selection',
+      importDataFields: 'Vital info and notes',
+      importDataDocuments: 'Documents and photos',
+      importDataSelectionRequired: 'Select at least one data type to merge.',
     },
     errors: {
       invalidIdentityBackupFormat: 'Invalid identity backup format',
@@ -268,6 +280,10 @@ const en = {
       autosaveArchive: 'Local draft archive',
       autosaveScopeHint: 'Local browser draft, not a disk file',
       saveToDiskHint: 'Manual save to disk',
+      projectName: 'Current GEDCOM / archive',
+      projectNameHint:
+        'Used for exported files (.ged, .g2) and local auto-save — rename after a merge before saving.',
+      projectNamePlaceholder: 'e.g. Smith family 2026',
       viewOriginalData: 'View Original Data',
       calculateMissingDates: 'Calculate Missing Dates',
       normalized: 'Normalized (CAL)',
@@ -678,6 +694,7 @@ const en = {
       'Choose what to include for a partial import from the import bar (modal). Full import includes everything.',
     compareImportFields: 'Vital info and notes',
     compareImportDocuments: 'Documents and photos',
+    peerRecordBadge: 'Peer record',
     peerDocumentsReadOnly: 'Peer documents are read-only here.',
     noIndividualCreatedOrSelected: 'No individual created nor selected',
     cancel: 'Cancel',

@@ -10,12 +10,12 @@ import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
 /*  Sort & Filter definitions                                          */
 /* ------------------------------------------------------------------ */
 const SORT_OPTIONS: { value: SortMode; key: string }[] = [
+  { value: 'name',       key: 'sidebar.sort.name' },
   { value: 'birth-desc', key: 'sidebar.sort.birthDesc' },
   { value: 'birth-asc',  key: 'sidebar.sort.birthAsc' },
   { value: 'death-desc', key: 'sidebar.sort.deathDesc' },
   { value: 'death-asc',  key: 'sidebar.sort.deathAsc' },
   { value: 'lifespan',   key: 'sidebar.sort.lifespan' },
-  { value: 'name',       key: 'sidebar.sort.name' },
 ];
 
 const FILTER_OPTIONS: { value: FilterTag; key: string; color: string; requiresSelected?: boolean }[] = [
@@ -155,7 +155,9 @@ function hasOfflineDocument(docs: SortDocumentRef[] | undefined): boolean {
 }
 
 function nameCompare(a: Individual, b: Individual): number {
-  return `${a.surname} ${a.givenName}`.localeCompare(`${b.surname} ${b.givenName}`);
+  const s = (a.surname ?? '').localeCompare(b.surname ?? '', undefined, { sensitivity: 'base' });
+  if (s !== 0) return s;
+  return (a.givenName ?? '').localeCompare(b.givenName ?? '', undefined, { sensitivity: 'base' });
 }
 
 export function applySortMode(
@@ -191,6 +193,11 @@ export function applySortMode(
 interface SidebarProps {
   onDataLoaded: (data: GedcomData, name?: string) => void;
   onImportBundle: (file: File, options?: { royalsDemo?: boolean }) => Promise<void> | void;
+  /** Nom affiché / exports — toujours visible dans l’onglet Données. */
+  databaseName: string;
+  onDatabaseNameChange: (name: string) => void;
+  /** Ex. invité visite libre : pas de renommage. */
+  disableProjectRename?: boolean;
   onDownloadGedcom: () => void;
   onDownloadBundle: () => void;
   onSelectIndividual: (indi: Individual) => void;
@@ -249,6 +256,9 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ 
   onDataLoaded, 
   onImportBundle,
+  databaseName,
+  onDatabaseNameChange,
+  disableProjectRename = false,
   onDownloadGedcom,
   onDownloadBundle,
   onSelectIndividual, 
@@ -663,6 +673,26 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Header (Data actions & Normalization) */}
       {activePane === 'data' && <div className={`p-4 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} space-y-3`}>
+        <div className="space-y-1">
+          <div className={`text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
+            {t('sidebar.labels.projectName')}
+          </div>
+          <input
+            type="text"
+            value={databaseName}
+            onChange={(e) => onDatabaseNameChange(e.target.value)}
+            disabled={disableProjectRename}
+            placeholder={t('sidebar.labels.projectNamePlaceholder')}
+            spellCheck={false}
+            className={`w-full rounded-md border px-2 py-1.5 text-xs ${
+              isDarkMode
+                ? 'border-slate-600 bg-slate-900/80 text-slate-100 placeholder:text-slate-500 disabled:opacity-50'
+                : 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 disabled:opacity-50'
+            }`}
+            title={databaseName}
+          />
+          <p className={`text-[9px] leading-snug ${subTextClass}`}>{t('sidebar.labels.projectNameHint')}</p>
+        </div>
         <div className={`flex items-center justify-between text-[10px] font-bold uppercase tracking-wider ${subTextClass}`}>
           <span>{t('sidebar.labels.data')}</span>
           <button

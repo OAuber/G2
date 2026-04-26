@@ -172,6 +172,18 @@ const fr = {
       compareSessionBannersAria: 'Indicateurs de session de comparaison',
       operationHighlightLine:
         '{{count}} fiche(s) concernée(s) — {{merge}} fusion(s), {{create}} création(s), {{families}} famille(s) importée(s).',
+      importScopeSingle: 'Individu sélectionné',
+      importScopeAncestors: 'Ascendants',
+      importScopeDescendants: 'Descendants',
+      importDepthLabel: 'Profondeur de fusion',
+      importDepthHelp:
+        'La profondeur est bornée par les périmètres validés par l’invitant et l’invité.',
+      importDataOptionsTitle: 'Données à fusionner',
+      importDataModeAll: 'Tout',
+      importDataModeCustom: 'Sélection fine',
+      importDataFields: 'État civil et notes',
+      importDataDocuments: 'Documents et photos',
+      importDataSelectionRequired: 'Sélectionnez au moins un type de données à fusionner.',
     },
     errors: {
       invalidIdentityBackupFormat: "Format de sauvegarde d'identité invalide",
@@ -268,6 +280,10 @@ const fr = {
       autosaveArchive: 'Brouillon local archive',
       autosaveScopeHint: 'Brouillon local (navigateur), pas un fichier disque',
       saveToDiskHint: 'Enregistrement manuel sur disque',
+      projectName: 'GEDCOM / archive en cours',
+      projectNameHint:
+        'Nom utilisé pour les fichiers exportés (.ged, .g2) et l’auto-sauvegarde locale — modifiez-le après une fusion avant d’enregistrer.',
+      projectNamePlaceholder: 'Ex. Famille Martin 2026',
       viewOriginalData: 'Voir les données originales',
       calculateMissingDates: 'Calculer les dates manquantes',
       normalized: 'Normalisées (CAL)',
@@ -680,6 +696,7 @@ const fr = {
       'Cochez ce qui doit être repris lors d’un import partiel depuis la barre d’import (modal). L’import total reprend tout.',
     compareImportFields: 'État civil et notes',
     compareImportDocuments: 'Documents et photos',
+    peerRecordBadge: 'Fiche pair',
     peerDocumentsReadOnly: 'Documents du pair en lecture seule.',
     noIndividualCreatedOrSelected: 'Aucun individu créé ou sélectionné',
     cancel: 'Annuler',

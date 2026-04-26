@@ -5,7 +5,7 @@ import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
 import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
-import CompareMergeModal, { type CompareImportMode } from './components/compare/CompareMergeModal';
+import CompareMergeModal, { type CompareImportRequest } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
 import { InviteExchangeScopeForm } from './components/InviteExchangeScopeForm';
@@ -142,6 +142,15 @@ import {
 function individualDisplayLabel(indi: Individual | undefined): string {
   if (!indi) return '';
   return (`${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id);
+}
+
+/** Journalisation session comparaison / périmètre invité (filtre console : `[compare-exchange]`). */
+function compareExchangeDebugLog(message: string, payload?: Record<string, unknown>) {
+  if (payload !== undefined) {
+    console.log(`[compare-exchange] ${message}`, payload);
+  } else {
+    console.log(`[compare-exchange] ${message}`);
+  }
 }
 
 function App() {
@@ -416,9 +425,38 @@ function App() {
     if (p2pSessionUseCaseRef.current !== 'compare') return null;
     const gedcom = gedcomDataRef.current;
     if (!gedcom) return null;
-    const tok = pendingInviteToken;
-    const inv = tok ? p2pInvites.find((i) => i.token === tok) : null;
-    const inviteTargetId = pendingInviteTargetIndividualId ?? inv?.individualId ?? null;
+    const resolveCompareInvite = (): P2PInviteItem | null => {
+      const tok = pendingInviteToken;
+      if (tok) {
+        const byTok = p2pInvites.find((i) => i.token === tok);
+        if (byTok) return byTok;
+      }
+      if (p2pModeRef.current === 'host') {
+        const sid = hostCompareSessionInviteIdRef.current;
+        if (sid) {
+          const bySession = p2pInvites.find((i) => i.inviteId === sid);
+          if (bySession) return bySession;
+        }
+        return (
+          p2pInvites.find(
+            (i) =>
+              i.role === 'comparator' &&
+              i.status !== 'revoked' &&
+              (i.status === 'accepted' || i.status === 'active'),
+          ) ?? null
+        );
+      }
+      return (
+        p2pInvites.find(
+          (i) =>
+            i.role === 'comparator' && (i.status === 'active' || i.status === 'accepted'),
+        ) ?? null
+      );
+    };
+    const inv = resolveCompareInvite();
+    const rawTargetId = pendingInviteTargetIndividualId ?? inv?.individualId ?? null;
+    const inviteTargetId =
+      rawTargetId && gedcom.individuals[rawTargetId] ? rawTargetId : null;
     if (!inv?.inviteId || !inviteTargetId) return null;
     const policy =
       p2pModeRef.current === 'host'
@@ -546,6 +584,8 @@ function App() {
   const p2pInvitesRef = useRef<P2PInviteItem[]>([]);
   /** Invité (lien dans l’URL) : id d’invitation pour appliquer INVITE_REVOKE (1.2 et nominatif). */
   const activeGuestInviteIdRef = useRef<string | null>(null);
+  /** Hôte session comparer : invitation acceptée (le jeton URL n’existe pas côté invitant — manifeste bundle sinon absent). */
+  const hostCompareSessionInviteIdRef = useRef<string | null>(null);
   /** Invité « comparateur » : copie distante reçue sans remplacer le GEDCOM local (UI comparaison). */
   const [peerCompareGedcom, setPeerCompareGedcom] = useState<GedcomData | null>(null);
   /** Médias reçus pour l’aperçu pair (photos / documents), séparés du stockage local. */
@@ -583,8 +623,6 @@ function App() {
   const compareSuppressAutoInviteAnchorRef = useRef(false);
   const [compareFusionCompleted, setCompareFusionCompleted] = useState(false);
   /** Coches panneau Détails (fiche pair) — import partiel depuis la modal. */
-  const [comparePeerImportFields, setComparePeerImportFields] = useState(true);
-  const [comparePeerImportDocs, setComparePeerImportDocs] = useState(true);
   const pendingInviteRoleRef = useRef<P2PRole | null>(INVITE_BOOTSTRAP.role);
   const activeSessionPeerPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const originalGedcomDataRef = useRef<GedcomData | null>(null);
@@ -1103,7 +1141,12 @@ function App() {
         if (!ok) {
           console.warn('[G2] Manifeste invitation : racines absentes du GEDCOM du bundle', missingRootIds);
         }
-        if (p2pModeRef.current === 'client' && pendingInviteTokenRef.current) {
+        if (
+          p2pModeRef.current === 'client' &&
+          (pendingInviteTokenRef.current ||
+            inviteSharedTreeImportActiveRef.current ||
+            p2pSessionUseCaseRef.current === 'compare')
+        ) {
           setReceivedInviterExchangeManifest(parsedManifest);
           receivedInviterExchangeManifestRef.current = parsedManifest;
           const labels = parsedManifest.rootIndividualIds.map((rid) => {
@@ -1277,13 +1320,16 @@ function App() {
       setDocumentsByIndividualId((prev) => ({ ...prev, ...pendingIncomingDocumentsRef.current! }));
       pendingIncomingDocumentsRef.current = null;
     }
-    const targetId = pendingInviteTargetIndividualId;
     const pendingTok =
       pendingInviteTokenRef.current ?? inviteSharedTreeSessionTokenRef.current;
     if (!pendingTok) return;
     const inviteForSession = pendingTok
       ? p2pInvitesRef.current.find((i) => i.token === pendingTok)
       : undefined;
+    const targetId =
+      pendingInviteTargetIndividualId ??
+      inviteForSession?.individualId ??
+      null;
     const linkKindForSession = resolveLinkKind(inviteForSession ?? undefined);
     setSessionLinkKind(linkKindForSession);
     activeGuestInviteIdRef.current = inviteForSession?.inviteId ?? null;
@@ -1349,7 +1395,10 @@ function App() {
         } else if (peerInd) {
           setRootIndividual(peerInd);
           setSelectedIndividual(null);
-          setCompareMatchAnchorId(null);
+          const anchorLocal =
+            (localRootId && gedcom?.individuals[localRootId] ? localRootId : null) ??
+            (targetId && gedcom?.individuals[targetId] ? targetId : null);
+          setCompareMatchAnchorId(anchorLocal);
           setCompareMatchPairId(peerInd.id);
         }
         setDisplayMode('2d-grid');
@@ -2339,13 +2388,21 @@ function App() {
       const byId = p2pInvites.find((i) => i.inviteId === guestExchangeScopeFromPeer.inviteId);
       if (byId) return byId;
     }
-    return pendingInviteItem;
+    if (pendingInviteItem) return pendingInviteItem;
+    return (
+      p2pInvites.find(
+        (i) => i.role === 'comparator' && (i.status === 'accepted' || i.status === 'active'),
+      ) ?? null
+    );
   }, [guestExchangeScopeFromPeer, p2pInvites, pendingInviteItem]);
 
   /** Invitant : périmètre effectif pour l’UI (invitation enregistrée ou brouillon du formulaire). */
   const effectiveInviterExchangeScopeForCompare = useMemo(() => {
     if (p2pMode !== 'host') return null;
-    return inviteForCompareHost?.exchangeScope ?? inviterDraftExchangeScope;
+    const fromInvite = inviteForCompareHost?.exchangeScope;
+    if (fromInvite?.rootIndividualId) return fromInvite;
+    if (inviterDraftExchangeScope.rootIndividualId) return inviterDraftExchangeScope;
+    return fromInvite ?? inviterDraftExchangeScope;
   }, [p2pMode, inviteForCompareHost?.exchangeScope, inviterDraftExchangeScope]);
 
   inviterExchangeScopeForBundleRef.current =
@@ -2355,7 +2412,15 @@ function App() {
     if (p2pMode !== 'host') return;
     const inv = inviteForCompareHost;
     if (!inv?.exchangeScope) return;
-    setInviterDraftExchangeScope(inv.exchangeScope);
+    setInviterDraftExchangeScope((prev) => {
+      const next = inv.exchangeScope as InviteExchangeScope;
+      /**
+       * Ne pas écraser une racine explicitement choisie par l’invitant
+       * avec un scope d’invite qui n’a pas (ou plus) de `rootIndividualId`.
+       */
+      if (prev.rootIndividualId && !next.rootIndividualId) return prev;
+      return next;
+    });
   }, [p2pMode, inviteForCompareHost?.inviteId]);
 
   const compareBranchImportManifest = useMemo((): InviteExchangeManifest | null => {
@@ -2460,33 +2525,49 @@ function App() {
     [],
   );
 
-  const compareBranchImportPlanAncestors = useMemo((): BranchImportPlan | null => {
-    if (!originalGedcomData || !peerCompareGedcom || !compareBranchImportManifest) return null;
-    return buildBranchImportPlan(originalGedcomData, peerCompareGedcom, compareBranchImportManifest, {
-      ...branchImportPlanOpts,
-      direction: 'ancestors',
-    });
-  }, [originalGedcomData, peerCompareGedcom, compareBranchImportManifest, branchImportPlanOpts]);
+  const compareMaxAncestorsDepth = useMemo(
+    () => Math.max(1, compareBranchImportManifest?.maxGenUp ?? 1),
+    [compareBranchImportManifest?.maxGenUp],
+  );
+  const compareMaxDescendantsDepth = useMemo(
+    () => Math.max(1, compareBranchImportManifest?.maxGenDown ?? 1),
+    [compareBranchImportManifest?.maxGenDown],
+  );
 
-  const compareBranchImportPlanDescendants = useMemo((): BranchImportPlan | null => {
-    if (!originalGedcomData || !peerCompareGedcom || !compareBranchImportManifest) return null;
-    return buildBranchImportPlan(originalGedcomData, peerCompareGedcom, compareBranchImportManifest, {
-      ...branchImportPlanOpts,
-      direction: 'descendants',
-    });
-  }, [originalGedcomData, peerCompareGedcom, compareBranchImportManifest, branchImportPlanOpts]);
-
-  const formatBranchImportDirectionDetail = useCallback(
-    (plan: BranchImportPlan | null) => {
-      if (!plan) return t('app.compare.branchImportPlanUnavailable');
-      return t('app.compare.branchImportDirectionDetail')
-        .replace('{{scope}}', String(plan.scopePeerIds.length))
-        .replace('{{create}}', String(plan.summary.create))
-        .replace('{{merge}}', String(plan.summary.merge))
-        .replace('{{conflict}}', String(plan.summary.conflict))
-        .replace('{{skip}}', String(plan.summary.skip));
+  const buildCompareBranchImportPlan = useCallback(
+    (direction: 'ancestors' | 'descendants', depthLimit: number): BranchImportPlan | null => {
+      if (!originalGedcomData || !peerCompareGedcom || !compareBranchImportManifest) return null;
+      const maxAllowed =
+        direction === 'ancestors' ? compareMaxAncestorsDepth : compareMaxDescendantsDepth;
+      const cappedDepth = Math.max(1, Math.min(depthLimit, maxAllowed));
+      const manifestForDepth = createInviteExchangeManifest({
+        inviteId: compareBranchImportManifest.inviteId,
+        rootIndividualIds: compareBranchImportManifest.rootIndividualIds,
+        maxGenDown:
+          direction === 'descendants'
+            ? Math.min(compareBranchImportManifest.maxGenDown, cappedDepth)
+            : compareBranchImportManifest.maxGenDown,
+        maxGenUp:
+          direction === 'ancestors'
+            ? Math.min(compareBranchImportManifest.maxGenUp, cappedDepth)
+            : compareBranchImportManifest.maxGenUp,
+        includeSpouses: compareBranchImportManifest.includeSpouses,
+        data: compareBranchImportManifest.data,
+        generatedAt: compareBranchImportManifest.generatedAt,
+      });
+      return buildBranchImportPlan(originalGedcomData, peerCompareGedcom, manifestForDepth, {
+        ...branchImportPlanOpts,
+        direction,
+      });
     },
-    [t],
+    [
+      originalGedcomData,
+      peerCompareGedcom,
+      compareBranchImportManifest,
+      branchImportPlanOpts,
+      compareMaxAncestorsDepth,
+      compareMaxDescendantsDepth,
+    ],
   );
 
   const branchImportModalEnabled =
@@ -2497,6 +2578,7 @@ function App() {
       setGuestExchangeScopeFromPeer(null);
       compareExchangeRootsAutoAppliedRef.current = false;
       inviteeExchangeScopeAnnouncedRef.current = false;
+      hostCompareSessionInviteIdRef.current = null;
       setCompareOperationHighlight(null);
       setCompareGridRecallDismissed(false);
     }
@@ -2510,23 +2592,57 @@ function App() {
     if (inviteeExchangeScopeSetupDone) setCompareGridRecallDismissed(false);
   }, [inviteeExchangeScopeSetupDone]);
 
+  /** Nouvelle validation de périmètre (invité ou reçu côté hôte) : réautoriser l’auto-focalisation racines. */
+  useEffect(() => {
+    compareExchangeRootsAutoAppliedRef.current = false;
+  }, [
+    guestExchangeScopeFromPeer?.rootIndividualWireId,
+    inviteeExchangeScopeSetupDone,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+  ]);
+
   /** Invité → hôte : annoncer la racine et les plafonds (une fois par session connectée) pour l’import branche et la grille. */
   useEffect(() => {
     if (p2pMode !== 'client' || p2pStatus !== 'connected' || p2pSessionUseCase !== 'compare') return;
     if (!inviteeExchangeScopeSetupDone) return;
     if (inviteeExchangeScopeAnnouncedRef.current) return;
-    if (!gedcomData || !pendingInviteTargetIndividualId) return;
+    if (!gedcomData) return;
+    const comparatorInvite =
+      pendingInviteItem ??
+      p2pInvites.find(
+        (i) => i.role === 'comparator' && (i.status === 'active' || i.status === 'accepted'),
+      ) ??
+      null;
+    const rawGuestTarget =
+      pendingInviteTargetIndividualId ??
+      (comparatorInvite?.individualId && gedcomData.individuals[comparatorInvite.individualId]
+        ? comparatorInvite.individualId
+        : null);
+    const guestTargetId = rawGuestTarget;
+    if (!guestTargetId) return;
     const inviteId =
       receivedInviterExchangeManifest?.inviteId ||
-      (pendingInviteToken ? parseInviteClaimsUnsafe(pendingInviteToken)?.inviteId : null);
+      (pendingInviteToken ? parseInviteClaimsUnsafe(pendingInviteToken)?.inviteId : null) ||
+      inviteIntroductionContextRef.current?.inviteId ||
+      comparatorInvite?.inviteId ||
+      null;
     if (!inviteId) return;
     const rootWire = resolveExchangeRootIndividualId(
       gedcomData,
       inviteeExchangeScope,
-      pendingInviteTargetIndividualId,
+      guestTargetId,
     );
     if (!rootWire || !gedcomData.individuals[rootWire]) return;
     inviteeExchangeScopeAnnouncedRef.current = true;
+    compareExchangeDebugLog('invité → envoi INVITEE_EXCHANGE_SCOPE', {
+      inviteId,
+      guestTargetId,
+      rootIndividualWireId: rootWire,
+      pendingInviteTargetIndividualId,
+      pendingInviteItemIndividualId: pendingInviteItem?.individualId ?? null,
+      maxGenDown: inviteeExchangeScope.maxGenDown,
+      maxGenUp: inviteeExchangeScope.maxGenUp,
+    });
     p2pService.sendMessage('INVITEE_EXCHANGE_SCOPE', {
       inviteId,
       rootIndividualWireId: rootWire,
@@ -2549,33 +2665,43 @@ function App() {
     gedcomData,
     inviteeExchangeScope,
     pendingInviteTargetIndividualId,
+    pendingInviteItem?.individualId,
     receivedInviterExchangeManifest?.inviteId,
     pendingInviteToken,
     peerId,
+    p2pInvites,
   ]);
 
   /** Invité : dès racine + périmètre validés, focaliser la grille 2D sur les deux « mêmes » racines (local ↔ hôte). */
   useEffect(() => {
     if (!compareDualViewActive || p2pMode !== 'client' || p2pSessionUseCase !== 'compare') return;
+    if (compareExchangeRootsAutoAppliedRef.current) return;
     if (!inviteeExchangeScopeSetupDone) return;
     if (!gedcomData || !peerCompareGedcom || !receivedInviterExchangeManifest?.rootIndividualIds?.length)
       return;
-    if (!pendingInviteTargetIndividualId) return;
-    if (compareExchangeRootsAutoAppliedRef.current) return;
+    const guestTargetId = pendingInviteTargetIndividualId ?? pendingInviteItem?.individualId ?? null;
+    if (!guestTargetId) return;
     const localRoot = resolveExchangeRootIndividualId(
       gedcomData,
       inviteeExchangeScope,
-      pendingInviteTargetIndividualId,
+      guestTargetId,
     );
     if (!localRoot || !gedcomData.individuals[localRoot]) return;
     const hostWire = receivedInviterExchangeManifest.rootIndividualIds[0];
     const peerPc = wireIndividualIdToPeerCompareId(hostWire);
     if (!peerCompareGedcom.individuals[peerPc]) return;
     compareExchangeRootsAutoAppliedRef.current = true;
+    compareExchangeDebugLog('invité → focalisation racines grille', {
+      localRoot,
+      hostWire,
+      peerPc,
+      guestTargetId,
+    });
     setCompareMatchAnchorId(localRoot);
     setCompareMatchPairId(peerPc);
     setSelectedIndividual(gedcomData.individuals[localRoot]);
-    setSelectedIdsFor2D(new Set([localRoot]));
+    setSelectedIdsFor2D(new Set([localRoot, peerPc]));
+    setDisplayMode('2d-grid');
   }, [
     compareDualViewActive,
     p2pMode,
@@ -2586,29 +2712,38 @@ function App() {
     receivedInviterExchangeManifest,
     inviteeExchangeScope,
     pendingInviteTargetIndividualId,
+    pendingInviteItem?.individualId,
   ]);
 
   /** Hôte : à réception du périmètre invité — même focalisation (racine locale ↔ racine pair). */
   useEffect(() => {
     if (!compareDualViewActive || p2pMode !== 'host' || p2pSessionUseCase !== 'compare') return;
+    if (compareExchangeRootsAutoAppliedRef.current) return;
     if (!guestExchangeScopeFromPeer) return;
     if (!gedcomData || !peerCompareGedcom) return;
-    if (compareExchangeRootsAutoAppliedRef.current) return;
     const inv = inviteForCompareHost;
-    if (!inv?.exchangeScope) return;
+    const hostScope = effectiveInviterExchangeScopeForCompare ?? inv?.exchangeScope ?? null;
+    if (!hostScope) return;
     const hostLocal = resolveExchangeRootIndividualId(
       gedcomData,
-      inv.exchangeScope,
-      pendingInviteTargetIndividualId ?? inv.individualId,
+      hostScope,
+      pendingInviteTargetIndividualId ?? inv?.individualId ?? null,
     );
     if (!hostLocal || !gedcomData.individuals[hostLocal]) return;
     const peerPc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
     if (!peerCompareGedcom.individuals[peerPc]) return;
     compareExchangeRootsAutoAppliedRef.current = true;
+    compareExchangeDebugLog('hôte → focalisation racines grille', {
+      hostLocal,
+      rootIndividualWireId: guestExchangeScopeFromPeer.rootIndividualWireId,
+      peerPc,
+      inviteId: guestExchangeScopeFromPeer.inviteId,
+    });
     setCompareMatchAnchorId(hostLocal);
     setCompareMatchPairId(peerPc);
     setSelectedIndividual(gedcomData.individuals[hostLocal]);
-    setSelectedIdsFor2D(new Set([hostLocal]));
+    setSelectedIdsFor2D(new Set([hostLocal, peerPc]));
+    setDisplayMode('2d-grid');
   }, [
     compareDualViewActive,
     p2pMode,
@@ -2617,6 +2752,7 @@ function App() {
     gedcomData,
     peerCompareGedcom,
     inviteForCompareHost,
+    effectiveInviterExchangeScopeForCompare,
     pendingInviteTargetIndividualId,
   ]);
 
@@ -2660,11 +2796,216 @@ function App() {
     t,
   ]);
 
+  /** Filet de sécurité : si l’ancre/paire ont été perdues, on retombe sur les 2 racines validées. */
+  const compareReadyRootPairIds = useMemo((): [string, string] | null => {
+    if (!compareDualViewActive || p2pSessionUseCase !== 'compare') return null;
+    if (!gedcomData || !peerCompareGedcom) return null;
+    if (Object.keys(peerCompareGedcom.individuals).length === 0) return null;
+    if (p2pMode === 'host') {
+      const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+      const targetId =
+        pendingInviteTargetIndividualId ??
+        inviteForCompareHost?.individualId ??
+        pendingInviteItem?.individualId ??
+        null;
+      const localRoot = resolveExchangeRootIndividualId(gedcomData, scope, targetId);
+      const localFallback =
+        (scope.rootIndividualId && gedcomData.individuals[scope.rootIndividualId]
+          ? scope.rootIndividualId
+          : null) ??
+        (targetId && gedcomData.individuals[targetId] ? targetId : null);
+      const localId = localRoot ?? localFallback;
+      const peerWire = guestExchangeScopeFromPeer?.rootIndividualWireId;
+      if (!localId || !peerWire || !gedcomData.individuals[localId]) return null;
+      const peerPc = wireIndividualIdToPeerCompareId(peerWire);
+      if (!peerCompareGedcom.individuals[peerPc]) return null;
+      return [localId, peerPc];
+    }
+    if (p2pMode === 'client') {
+      const comparatorInvite =
+        pendingInviteItem ??
+        p2pInvites.find(
+          (i) => i.role === 'comparator' && (i.status === 'active' || i.status === 'accepted'),
+        ) ??
+        null;
+      const targetId =
+        pendingInviteTargetIndividualId ??
+        (comparatorInvite?.individualId && gedcomData.individuals[comparatorInvite.individualId]
+          ? comparatorInvite.individualId
+          : null);
+      let hostWire = receivedInviterExchangeManifest?.rootIndividualIds?.[0] ?? null;
+      if (
+        !hostWire &&
+        compareMatchPairId?.startsWith(PEER_COMPARE_ID_PREFIX) &&
+        peerCompareGedcom.individuals[compareMatchPairId]
+      ) {
+        hostWire = compareMatchPairId.slice(PEER_COMPARE_ID_PREFIX.length);
+      }
+      if (!targetId || !hostWire) return null;
+      const localRoot = resolveExchangeRootIndividualId(gedcomData, inviteeExchangeScope, targetId);
+      const localFallback = targetId && gedcomData.individuals[targetId] ? targetId : null;
+      const localId = localRoot ?? localFallback;
+      if (!localId || !gedcomData.individuals[localId]) return null;
+      const peerPc = wireIndividualIdToPeerCompareId(hostWire);
+      if (!peerCompareGedcom.individuals[peerPc]) return null;
+      return [localId, peerPc];
+    }
+    return null;
+  }, [
+    compareDualViewActive,
+    p2pSessionUseCase,
+    gedcomData,
+    peerCompareGedcom,
+    p2pMode,
+    effectiveInviterExchangeScopeForCompare,
+    pendingInviteTargetIndividualId,
+    inviteForCompareHost?.individualId,
+    guestExchangeScopeFromPeer?.rootIndividualWireId,
+    inviteeExchangeScope,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+    pendingInviteItem,
+    p2pInvites,
+    compareMatchPairId,
+  ]);
+
+  useEffect(() => {
+    if (!compareDualViewActive || p2pSessionUseCase !== 'compare') return;
+    let rootPairBlockReason: string | null = null;
+    if (!compareReadyRootPairIds) {
+      if (!gedcomData || !peerCompareGedcom || Object.keys(peerCompareGedcom.individuals).length === 0) {
+        rootPairBlockReason = 'pas-de-données-pair-ou-vide';
+      } else if (p2pMode === 'host') {
+        if (!guestExchangeScopeFromPeer?.rootIndividualWireId) {
+          rootPairBlockReason = 'hôte:pas-de-INVITEE_EXCHANGE_SCOPE-(guestExchangeScopeFromPeer)';
+        } else {
+          const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+          const targetId =
+            pendingInviteTargetIndividualId ??
+            inviteForCompareHost?.individualId ??
+            pendingInviteItem?.individualId ??
+            null;
+          const localRoot = resolveExchangeRootIndividualId(gedcomData, scope, targetId);
+          const localFallback =
+            (scope.rootIndividualId && gedcomData.individuals[scope.rootIndividualId]
+              ? scope.rootIndividualId
+              : null) ??
+            (targetId && gedcomData.individuals[targetId] ? targetId : null);
+          const localId = localRoot ?? localFallback;
+          if (!localId || !gedcomData.individuals[localId]) {
+            rootPairBlockReason = 'hôte:racine-locale-introuvable';
+          } else {
+            const pc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
+            if (!peerCompareGedcom.individuals[pc]) {
+              rootPairBlockReason = 'hôte:pc-introuvable-dans-snapshot-invité';
+            }
+          }
+        }
+      } else if (p2pMode === 'client') {
+        const comparatorInvite =
+          pendingInviteItem ??
+          p2pInvites.find(
+            (i) => i.role === 'comparator' && (i.status === 'active' || i.status === 'accepted'),
+          ) ??
+          null;
+        const targetId =
+          pendingInviteTargetIndividualId ??
+          (comparatorInvite?.individualId && gedcomData.individuals[comparatorInvite.individualId]
+            ? comparatorInvite.individualId
+            : null);
+        let hostWire = receivedInviterExchangeManifest?.rootIndividualIds?.[0] ?? null;
+        if (
+          !hostWire &&
+          compareMatchPairId?.startsWith(PEER_COMPARE_ID_PREFIX) &&
+          peerCompareGedcom.individuals[compareMatchPairId]
+        ) {
+          hostWire = compareMatchPairId.slice(PEER_COMPARE_ID_PREFIX.length);
+        }
+        if (!targetId) rootPairBlockReason = 'invité:pas-de-cible-(targetId)';
+        else if (!hostWire) {
+          rootPairBlockReason = 'invité:manifeste-sans-rootIndividualIds-ni-paire-pc';
+        } else {
+          const localRoot = resolveExchangeRootIndividualId(gedcomData, inviteeExchangeScope, targetId);
+          const localFallback = targetId && gedcomData.individuals[targetId] ? targetId : null;
+          const localId = localRoot ?? localFallback;
+          if (!localId || !gedcomData.individuals[localId]) {
+            rootPairBlockReason = 'invité:racine-locale-introuvable';
+          } else {
+            const pc = wireIndividualIdToPeerCompareId(hostWire);
+            if (!peerCompareGedcom.individuals[pc]) {
+              rootPairBlockReason = 'invité:pc-introuvable-dans-snapshot-hôte';
+            }
+          }
+        }
+      }
+    }
+    compareExchangeDebugLog('paire racines prête (compareReadyRootPairIds)', {
+      p2pMode,
+      pair: compareReadyRootPairIds,
+      guestRootWire: guestExchangeScopeFromPeer?.rootIndividualWireId ?? null,
+      compareMatchAnchorId,
+      compareMatchPairId,
+      selectedIdsFor2DSize: selectedIdsFor2D.size,
+      rootPairBlockReason,
+      inviteeExchangeScopeSetupDone,
+    });
+  }, [
+    compareDualViewActive,
+    p2pSessionUseCase,
+    p2pMode,
+    compareReadyRootPairIds,
+    guestExchangeScopeFromPeer?.rootIndividualWireId,
+    compareMatchAnchorId,
+    compareMatchPairId,
+    selectedIdsFor2D.size,
+    gedcomData,
+    peerCompareGedcom,
+    effectiveInviterExchangeScopeForCompare,
+    pendingInviteTargetIndividualId,
+    inviteForCompareHost?.individualId,
+    pendingInviteItem,
+    p2pInvites,
+    receivedInviterExchangeManifest?.rootIndividualIds,
+    inviteeExchangeScope,
+    inviteeExchangeScopeSetupDone,
+  ]);
+
   /** Grille unifiée : exploration complète sans ancre ; pistes + ancre ; puis uniquement la paire retenue. Sans ancre : même filtre 2D que la barre latérale (ex. après fusion : fiche locale seule). */
   const compareUnifiedGridSelectedIds = useMemo(() => {
     if (!compareDualViewActive) return selectedIdsFor2D;
+    /** Grille 2 cellules « racines d’échange » uniquement tant que l’ancre/paire UI correspondent encore à cette paire (sinon navigation parent/enfant resterait bloquée sur les 2 racines). */
+    const compareExchangeRootsTwoCellLocked =
+      !!compareReadyRootPairIds &&
+      !!compareMatchPairId &&
+      !!compareMatchAnchorId &&
+      ((compareMatchAnchorId === compareReadyRootPairIds[0] &&
+        compareMatchPairId === compareReadyRootPairIds[1]) ||
+        (compareMatchAnchorId === compareReadyRootPairIds[1] &&
+          compareMatchPairId === compareReadyRootPairIds[0]));
+    if (
+      compareExchangeRootsTwoCellLocked &&
+      compareReadyRootPairIds &&
+      (selectedIndividual?.id == null ||
+        selectedIndividual.id === compareReadyRootPairIds[0] ||
+        selectedIndividual.id === compareReadyRootPairIds[1])
+    ) {
+      return new Set<string>(compareReadyRootPairIds);
+    }
     if (compareMatchPairId && compareMatchAnchorId) {
-      return new Set<string>([compareMatchAnchorId, compareMatchPairId]);
+      if (
+        selectedIndividual?.id == null ||
+        selectedIndividual.id === compareMatchAnchorId ||
+        selectedIndividual.id === compareMatchPairId
+      ) {
+        return new Set<string>([compareMatchAnchorId, compareMatchPairId]);
+      }
+    }
+    if (compareMatchPairId && !compareMatchAnchorId && p2pMode === 'client' && gedcomData) {
+      const gid = pendingInviteTargetIndividualId ?? pendingInviteItem?.individualId ?? null;
+      if (gid && gedcomData.individuals[gid]) {
+        const lr = resolveExchangeRootIndividualId(gedcomData, inviteeExchangeScope, gid);
+        const lid = (lr && gedcomData.individuals[lr] ? lr : null) ?? gid;
+        return new Set<string>([lid, compareMatchPairId]);
+      }
     }
     if (compareMatchAnchorId) {
       /** Sans piste auto : ne pas réduire à l’ancre seule (invité après import, etc.). Grille = tous (Set vide côté Scene2DGrid). */
@@ -2682,6 +3023,13 @@ function App() {
     compareMatchPairId,
     compareMatchAnchorId,
     compareUnifiedMatchSuggestions,
+    compareReadyRootPairIds,
+    p2pMode,
+    gedcomData,
+    inviteeExchangeScope,
+    pendingInviteTargetIndividualId,
+    pendingInviteItem?.individualId,
+    selectedIndividual?.id,
   ]);
 
   /** En comparaison, local + pair forment deux composantes connexes : ascendants/descendants par rapport à la sélection excluent les pistes de l’autre base. */
@@ -2797,12 +3145,26 @@ function App() {
     };
     if (p2pMode === 'host') {
       const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
+      const hostTargetId =
+        pendingInviteTargetIndividualId ??
+        inviteForCompareHost?.individualId ??
+        pendingInviteItem?.individualId ??
+        null;
       const localR = resolveExchangeRootIndividualId(
         gd,
         scope,
-        pendingInviteTargetIndividualId ?? inviteForCompareHost?.individualId ?? null,
+        hostTargetId,
       );
-      const localLabel = localR ? labelOf(localR) : '—';
+      const fallbackLocalId =
+        (scope.rootIndividualId && gd.individuals[scope.rootIndividualId]
+          ? scope.rootIndividualId
+          : null) ??
+        (hostTargetId && gd.individuals[hostTargetId] ? hostTargetId : null);
+      const localLabel = localR
+        ? labelOf(localR)
+        : fallbackLocalId
+          ? labelOf(fallbackLocalId)
+          : '—';
       if (guestExchangeScopeFromPeer?.rootIndividualWireId) {
         const pc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
         return t('app.compare.exchangeRootsBarBoth')
@@ -2812,13 +3174,27 @@ function App() {
       return t('app.compare.exchangeRootsBarLocalOnly').replace('{{local}}', localLabel);
     }
     if (p2pMode === 'client' && inviteeExchangeScopeSetupDone) {
-      const localR = resolveExchangeRootIndividualId(gd, inviteeExchangeScope, pendingInviteTargetIndividualId);
+      const guestTargetId = pendingInviteTargetIndividualId ?? pendingInviteItem?.individualId ?? null;
+      const localR = resolveExchangeRootIndividualId(gd, inviteeExchangeScope, guestTargetId);
+      const fallbackLocalLabel = guestTargetId && gd.individuals[guestTargetId] ? labelOf(guestTargetId) : '—';
       const hw = receivedInviterExchangeManifest?.rootIndividualIds?.[0];
       const pc = hw ? wireIndividualIdToPeerCompareId(hw) : null;
-      if (localR && pc) {
+      const fallbackPeerLabel =
+        inviterHostExchangeRootLabels[0] ??
+        pendingInviteExchangeRootName ??
+        pendingInviteItem?.individualName ??
+        '—';
+      const peerLabel = pc ? labelOf(pc) : fallbackPeerLabel;
+      if ((localR || fallbackLocalLabel !== '—') && peerLabel !== '—') {
         return t('app.compare.exchangeRootsBarBoth')
-          .replace('{{local}}', labelOf(localR))
-          .replace('{{peer}}', labelOf(pc));
+          .replace('{{local}}', localR ? labelOf(localR) : fallbackLocalLabel)
+          .replace('{{peer}}', peerLabel);
+      }
+      if (localR || fallbackLocalLabel !== '—') {
+        return t('app.compare.exchangeRootsBarLocalOnly').replace(
+          '{{local}}',
+          localR ? labelOf(localR) : fallbackLocalLabel,
+        );
       }
     }
     return null;
@@ -2833,10 +3209,14 @@ function App() {
     effectiveInviterExchangeScopeForCompare,
     pendingInviteTargetIndividualId,
     inviteForCompareHost?.individualId,
+    pendingInviteItem?.individualId,
+    pendingInviteItem?.individualName,
     guestExchangeScopeFromPeer,
     inviteeExchangeScopeSetupDone,
     inviteeExchangeScope,
     receivedInviterExchangeManifest?.rootIndividualIds,
+    inviterHostExchangeRootLabels,
+    pendingInviteExchangeRootName,
   ]);
 
   const compareBothExchangeRootsReady = useMemo(() => {
@@ -4206,6 +4586,13 @@ function App() {
                     typeof payload.data.media === 'boolean' &&
                     typeof payload.data.notes === 'boolean'
                   ) {
+                    compareExchangeDebugLog('hôte ← INVITEE_EXCHANGE_SCOPE accepté', {
+                      inviteId: payload.inviteId,
+                      rootIndividualWireId: payload.rootIndividualWireId,
+                      maxGenDown: payload.maxGenDown,
+                      maxGenUp: payload.maxGenUp,
+                      senderPeerId: data.senderPeerId ?? null,
+                    });
                     setGuestExchangeScopeFromPeer({
                       inviteId: payload.inviteId,
                       rootIndividualWireId: payload.rootIndividualWireId,
@@ -4221,6 +4608,10 @@ function App() {
                       payload.inviteId,
                       data.senderPeerId || 'remote',
                     );
+                  } else {
+                    compareExchangeDebugLog('hôte ← INVITEE_EXCHANGE_SCOPE rejeté (payload invalide)', {
+                      payload: data.payload,
+                    });
                   }
               }
               if (data.type === 'INVITE_CREATE' && data.payload) {
@@ -4294,12 +4685,16 @@ function App() {
                        * du pair peut arriver en premier et passer par handleDataLoaded (écrasement du GEDCOM local). */
                       setP2PSessionUseCase(inviteUseCase);
                       p2pSessionUseCaseRef.current = inviteUseCase;
+                      if (inviteUseCase === 'compare') {
+                        hostCompareSessionInviteIdRef.current = payload.inviteId ?? null;
+                      }
                       verifyInviteToken(payload.token, secret).then((claims) => {
                         if (!claims || claims.inviteId !== payload.inviteId) {
                           logP2PActivity('invite.accept.rejected', 'invite', payload.inviteId!, payload.claimantPeerId || 'remote');
                           showTransientToast('error', 'Token d’invitation invalide.', 2200);
                           setP2PSessionUseCase(null);
                           p2pSessionUseCaseRef.current = null;
+                          hostCompareSessionInviteIdRef.current = null;
                           return;
                         }
                         setSessionLinkKind(resolveLinkKind(targetInvite));
@@ -4352,6 +4747,7 @@ function App() {
                         showTransientToast('error', 'Validation du token échouée.', 2200);
                         setP2PSessionUseCase(null);
                         p2pSessionUseCaseRef.current = null;
+                        hostCompareSessionInviteIdRef.current = null;
                       });
                     }
                   }
@@ -5150,6 +5546,13 @@ function App() {
       console.warn('[App] royalsDemoPreset: Louis XIV (I1341) introuvable dans les données — focus par défaut.');
     }
     const initialFocus = royalsFocus || inviteTarget || bestCandidate;
+    /** Ouverture locale GEDCOM / archive : grille 2D, fiche par défaut au milieu du tri A→Z (nom puis prénom). */
+    const blankGridOnLoad = !options?.royalsDemoPreset && !inviteTarget;
+    const sortedByName = applySortMode(Object.values(data.individuals), 'name');
+    const alphabeticalMidIndividual =
+      sortedByName.length > 0
+        ? sortedByName[Math.floor((sortedByName.length - 1) / 2)]
+        : null;
 
     if (initialFocus) {
       setRootIndividual(initialFocus);
@@ -5160,8 +5563,11 @@ function App() {
         !options?.royalsDemoPreset &&
         p2pModeRef.current === 'client' &&
         useCompareGrid;
+      const openBlankGrid = blankGridOnLoad || compareGuestSkipSelection;
       if (compareGuestSkipSelection) {
         setSelectedIndividual(null);
+      } else if (blankGridOnLoad) {
+        setSelectedIndividual(alphabeticalMidIndividual ?? initialFocus);
       } else {
         setSelectedIndividual(initialFocus);
       }
@@ -5188,6 +5594,10 @@ function App() {
           setRightPanelOpen(true);
           setDocumentsTabSignal((n) => n + 1);
         }
+      } else if (openBlankGrid) {
+        setDisplayMode('2d-grid');
+        setRightPanelOpen(false);
+        setSortMode('name');
       } else {
         setDisplayMode(useCompareGrid ? '2d-grid' : '2d-individual');
         setRightPanelOpen(true);
@@ -5200,6 +5610,14 @@ function App() {
       setSceneExtras([]);
       // Force Scene2DIndividual centering to avoid stale focus after sync.
       setCenterRequest((prev) => prev + 1);
+    } else {
+      setRootIndividual(null);
+      setSelectedIndividual(null);
+      setSortMode('name');
+      setDisplayMode('2d-grid');
+      setRightPanelOpen(false);
+      setSelectedIdsFor2D(new Set());
+      setSceneExtras([]);
     }
 
     // Notify peer about local GEDCOM availability/state.
@@ -5362,6 +5780,33 @@ function App() {
     ],
   );
 
+  /** Panneau détails : parent / enfant — aligner ancre comparaison + racine comme un clic ruban (évite grille figée sur les 2 racines d’échange). */
+  const handleCompareRelationNavigate = useCallback(
+    (indi: Individual) => {
+      if (isCreating) setIsCreating(false);
+      const id = indi.id;
+      const inLocal = !!gedcomData?.individuals[id];
+      const inPeer = !!peerCompareGedcom?.individuals[id];
+      if (!inLocal && !inPeer) return;
+      const currentIndi = (inLocal ? gedcomData! : peerCompareGedcom!).individuals[id];
+      if (selectedIndividual) {
+        setSelectedIdsFor2D((prev) => {
+          const next = new Set(prev);
+          next.add(selectedIndividual.id);
+          next.add(id);
+          return next;
+        });
+      } else {
+        setSelectedIdsFor2D((prev) => new Set(prev).add(id));
+      }
+      setRootIndividual(currentIndi);
+      setSceneExtras([]);
+      setCenterRequest((p) => p + 1);
+      handleCompareInspectUnified(currentIndi);
+    },
+    [isCreating, gedcomData, peerCompareGedcom, selectedIndividual, handleCompareInspectUnified],
+  );
+
   const handleCompareIgnorePair = useCallback(() => {
     compareSuppressAutoInviteAnchorRef.current = true;
     setCompareMatchPairId(null);
@@ -5418,7 +5863,7 @@ function App() {
   }, [handleSetDisplayMode]);
 
   const handleBranchImportDirection = useCallback(
-    (direction: 'ancestors' | 'descendants') => {
+    (direction: 'ancestors' | 'descendants', depthLimit: number) => {
       setCompareMergeModalOpen(false);
       if (ephemeralGuestActive) {
         showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
@@ -5433,8 +5878,7 @@ function App() {
         showTransientToast('warning', t('app.compare.branchImportNeedsMergePair'), 3200);
         return;
       }
-      const plan =
-        direction === 'ancestors' ? compareBranchImportPlanAncestors : compareBranchImportPlanDescendants;
+      const plan = buildCompareBranchImportPlan(direction, depthLimit);
       if (!plan || plan.scopePeerIds.length === 0) {
         showTransientToast('warning', t('app.compare.branchImportEmptyScope'), 3200);
         return;
@@ -5480,8 +5924,7 @@ function App() {
       originalGedcomData,
       peerCompareGedcom,
       compareMergeImportIntent,
-      compareBranchImportPlanAncestors,
-      compareBranchImportPlanDescendants,
+      buildCompareBranchImportPlan,
       setOriginalGedcomData,
       setNormalizedGedcomData,
       handleSetDisplayMode,
@@ -5489,7 +5932,7 @@ function App() {
   );
 
   const handleCompareMergeConfirm = useCallback(
-    (mode: CompareImportMode) => {
+    (request: CompareImportRequest) => {
       setCompareMergeModalOpen(false);
       if (ephemeralGuestActive) {
         showTransientToast('error', t('app.alerts.ephemeralReadOnly'), 2200);
@@ -5506,10 +5949,13 @@ function App() {
         return;
       }
 
-      const mergeFields =
-        mode === 'full' || (mode === 'partial' && comparePeerImportFields);
-      const mergeDocuments =
-        mode === 'full' || (mode === 'partial' && comparePeerImportDocs);
+      if (request.scope === 'ancestors' || request.scope === 'descendants') {
+        handleBranchImportDirection(request.scope, request.depth);
+        return;
+      }
+
+      const mergeFields = request.includeFields;
+      const mergeDocuments = request.includeDocuments;
 
       const peerInd = peerCompareGedcom.individuals[intent.peerPcId];
       if (!peerInd) {
@@ -5585,10 +6031,10 @@ function App() {
       handleSetDisplayMode('2d-grid');
       const toastKey =
         intent.kind === 'create'
-          ? mode === 'partial'
+          ? !mergeFields || !mergeDocuments
             ? 'app.compare.importPairCreatePartialDone'
             : 'app.compare.importPairCreateDone'
-          : mode === 'partial'
+          : !mergeFields || !mergeDocuments
             ? 'app.compare.importPairPartialDone'
             : 'app.compare.importPairSelectionDone';
       showTransientToast('success', t(toastKey), 4800);
@@ -5600,8 +6046,6 @@ function App() {
       originalGedcomData,
       peerCompareGedcom,
       compareMergeImportIntent,
-      comparePeerImportFields,
-      comparePeerImportDocs,
       documentsByIndividualId,
       peerCompareDocumentsByIndividualId,
       setOriginalGedcomData,
@@ -5610,6 +6054,7 @@ function App() {
       handleToggleCompareLocalProcessed,
       handleToggleCompareRemoteProcessed,
       handleSetDisplayMode,
+      handleBranchImportDirection,
     ],
   );
 
@@ -5913,8 +6358,8 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    // Use the current database name for the file, sanitizing it a bit
-    const safeName = databaseName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const nameForExport = databaseName.trim() || 'export';
+    const safeName = nameForExport.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     link.download = `${safeName}_${new Date().toISOString().slice(0, 10)}.ged`;
     document.body.appendChild(link);
     link.click();
@@ -5956,10 +6401,11 @@ function App() {
     }
     try {
       const gedcomString = generateGedcom(gedcomData);
-      const safeName = databaseName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const nameForExport = databaseName.trim() || 'export';
+      const safeName = nameForExport.replace(/[^a-z0-9]/gi, '_').toLowerCase();
       const bundleBlob = await createG2Bundle(gedcomString, {
         version: '1.0',
-        databaseName,
+        databaseName: nameForExport,
         exportedAt: new Date().toISOString(),
         documentsByIndividualId,
         selfIdentity,
@@ -8053,6 +8499,9 @@ function App() {
         data={gedcomData} 
         onDataLoaded={handleDataLoaded} 
         onImportBundle={handleImportBundle}
+        databaseName={databaseName}
+        onDatabaseNameChange={setDatabaseName}
+        disableProjectRename={ephemeralGuestActive}
         onDownloadGedcom={handleDownloadGedcom}
         onDownloadBundle={handleDownloadBundle}
         onSelectIndividual={handleNavigateToIndividual}
@@ -8104,9 +8553,7 @@ function App() {
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
         {compareDualViewActive &&
-          (compareExchangeRootsBarText ||
-            showCompareGridRecallBanner ||
-            compareOperationHighlight) && (
+          (compareExchangeRootsBarText || showCompareGridRecallBanner) && (
           <div
             className="pointer-events-none absolute left-1/2 top-3 z-[116] flex max-w-[min(100%,32rem)] -translate-x-1/2 flex-col gap-1.5 px-2"
             role="region"
@@ -8116,8 +8563,8 @@ function App() {
               <div
                 className={`pointer-events-none rounded-lg border px-3 py-1.5 text-center text-[11px] font-medium leading-snug shadow-md ${
                   isDarkMode
-                    ? 'border-slate-600 bg-slate-950/90 text-slate-100'
-                    : 'border-slate-300 bg-white/95 text-slate-800'
+                    ? 'border-slate-600 bg-slate-950 text-slate-100'
+                    : 'border-slate-300 bg-white text-slate-800'
                 }`}
               >
                 {compareExchangeRootsBarText}
@@ -8127,7 +8574,7 @@ function App() {
               <div
                 className={`pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] shadow-md ${
                   isDarkMode
-                    ? 'border-amber-700/80 bg-amber-950/90 text-amber-50'
+                    ? 'border-amber-700 bg-amber-950 text-amber-50'
                     : 'border-amber-400 bg-amber-50 text-amber-950'
                 }`}
               >
@@ -8150,37 +8597,39 @@ function App() {
                 </button>
               </div>
             )}
-            {compareOperationHighlight && (
-              <div
-                className={`pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] shadow-md ${
-                  isDarkMode
-                    ? 'border-sky-700/80 bg-slate-950/92 text-sky-100'
-                    : 'border-sky-400 bg-white/96 text-sky-950'
+          </div>
+        )}
+        {compareOperationHighlight && (
+          <div className="pointer-events-none absolute inset-0 z-[116] flex items-center justify-center px-3">
+            <div
+              className={`pointer-events-auto flex max-w-[min(100%,42rem)] flex-wrap items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] shadow-md ${
+                isDarkMode
+                  ? 'border-sky-700 bg-slate-950 text-sky-100'
+                  : 'border-sky-400 bg-white text-sky-950'
+              }`}
+            >
+              <span>
+                {t('app.compare.operationHighlightLine')
+                  .replace('{{count}}', String(compareOperationHighlight.individualIds.length))
+                  .replace('{{merge}}', String(compareOperationHighlight.mergeCount))
+                  .replace('{{create}}', String(compareOperationHighlight.createCount))
+                  .replace(
+                    '{{families}}',
+                    compareOperationHighlight.familyCount != null
+                      ? String(compareOperationHighlight.familyCount)
+                      : '0',
+                  )}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCompareOperationHighlight(null)}
+                className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                  isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-200 hover:bg-slate-300'
                 }`}
               >
-                <span>
-                  {t('app.compare.operationHighlightLine')
-                    .replace('{{count}}', String(compareOperationHighlight.individualIds.length))
-                    .replace('{{merge}}', String(compareOperationHighlight.mergeCount))
-                    .replace('{{create}}', String(compareOperationHighlight.createCount))
-                    .replace(
-                      '{{families}}',
-                      compareOperationHighlight.familyCount != null
-                        ? String(compareOperationHighlight.familyCount)
-                        : '0',
-                    )}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setCompareOperationHighlight(null)}
-                  className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
-                    isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-200 hover:bg-slate-300'
-                  }`}
-                >
-                  {t('app.compare.dismissBanner')}
-                </button>
-              </div>
-            )}
+                {t('app.compare.dismissBanner')}
+              </button>
+            </div>
           </div>
         )}
 
@@ -8298,10 +8747,10 @@ function App() {
                   documentsByIndividualId={mergedDocumentsForCompareUi}
                   onIndividualClick={handleCompareInspectUnified}
                   onExpandAndSwitch3D={handleExpandAndSwitch3D}
-                  onRequest2DModeSwitch={undefined}
+                  onRequest2DModeSwitch={handle2DViewModeSwitch}
                   onOrthoZoomSample={handle2DOrthoZoomSample}
-                  orthoZoomHandoff={null}
-                  onOrthoZoomHandoffConsumed={undefined}
+                  orthoZoomHandoff={twoDOrthoHandoff}
+                  onOrthoZoomHandoffConsumed={clearTwoDOrthoHandoff}
                   isDarkMode={isDarkMode}
                   relationshipRevealEnabled={relationshipRevealEnabled}
                   sortMode={sortMode}
@@ -8346,52 +8795,27 @@ function App() {
                   ? t('app.compare.importPairModalTitleCreate')
                   : t('app.compare.importPairModalTitle')
               }
-              optionFull={
-                compareMergeImportIntent?.kind === 'create'
-                  ? t('app.compare.importPairOptionFullCreate')
-                  : t('app.compare.importPairOptionFull')
-              }
-              optionPartial={
-                compareMergeImportIntent?.kind === 'create'
-                  ? t('app.compare.importPairOptionPartialCreate')
-                  : t('app.compare.importPairOptionPartial')
-              }
+              scopeSingleLabel={t('app.compare.importScopeSingle')}
+              scopeAncestorsLabel={t('app.compare.importScopeAncestors')}
+              scopeDescendantsLabel={t('app.compare.importScopeDescendants')}
+              depthLabel={t('app.compare.importDepthLabel')}
+              depthHelp={t('app.compare.importDepthHelp')}
+              dataModeAllLabel={t('app.compare.importDataModeAll')}
+              dataModeCustomLabel={t('app.compare.importDataModeCustom')}
+              dataOptionsTitle={t('app.compare.importDataOptionsTitle')}
+              dataOptionFields={t('app.compare.importDataFields')}
+              dataOptionDocuments={t('app.compare.importDataDocuments')}
               validateLabel={t('app.compare.importPairConfirm')}
               cancelLabel={t('app.compare.importPairCancel')}
               ignoreLabel={t('app.compare.importPairDecline')}
+              invalidSelectionHint={t('app.compare.importDataSelectionRequired')}
+              allowBranchScopes={branchImportModalEnabled}
               onCancel={() => setCompareMergeModalOpen(false)}
               onConfirm={handleCompareMergeConfirm}
               onIgnorePair={handleCompareIgnorePair}
               branchImportHint={compareMergeBranchPreviewHint}
-              branchImportSectionTitle={
-                branchImportModalEnabled ? t('app.compare.branchImportSectionTitle') : undefined
-              }
-              branchImportAncestorsLabel={t('app.compare.branchImportAncestorsLabel')}
-              branchImportDescendantsLabel={t('app.compare.branchImportDescendantsLabel')}
-              branchImportAncestorsSummary={
-                branchImportModalEnabled
-                  ? formatBranchImportDirectionDetail(compareBranchImportPlanAncestors)
-                  : undefined
-              }
-              branchImportDescendantsSummary={
-                branchImportModalEnabled
-                  ? formatBranchImportDirectionDetail(compareBranchImportPlanDescendants)
-                  : undefined
-              }
-              onBranchImportAncestors={
-                branchImportModalEnabled ? () => handleBranchImportDirection('ancestors') : undefined
-              }
-              onBranchImportDescendants={
-                branchImportModalEnabled ? () => handleBranchImportDirection('descendants') : undefined
-              }
-              branchImportAncestorsDisabled={
-                !compareBranchImportPlanAncestors ||
-                compareBranchImportPlanAncestors.scopePeerIds.length === 0
-              }
-              branchImportDescendantsDisabled={
-                !compareBranchImportPlanDescendants ||
-                compareBranchImportPlanDescendants.scopePeerIds.length === 0
-              }
+              maxAncestorsDepth={branchImportModalEnabled ? compareMaxAncestorsDepth : 1}
+              maxDescendantsDepth={branchImportModalEnabled ? compareMaxDescendantsDepth : 1}
             />
           </>
         ) : is2dIndividual ? (
@@ -8764,7 +9188,11 @@ function App() {
         onToggle={() => setRightPanelOpen(!rightPanelOpen)}
         isCreating={isCreating}
         onClose={closeRightPanel}
-        onSelectIndividual={handleRelationNavigate}
+        onSelectIndividual={
+          compareDualViewActive && viewMode === '2D'
+            ? handleCompareRelationNavigate
+            : handleRelationNavigate
+        }
         onUpdateIndividual={handleUpdateIndividual}
         onUpdateFamily={handleUpdateFamily}
         onCreateIndividual={handleCreateIndividual}
@@ -8812,10 +9240,6 @@ function App() {
           compareDualViewActive &&
           (selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ?? false)
         }
-        comparePeerImportFields={compareDualViewActive ? comparePeerImportFields : undefined}
-        comparePeerImportDocs={compareDualViewActive ? comparePeerImportDocs : undefined}
-        onComparePeerImportFieldsChange={compareDualViewActive ? setComparePeerImportFields : undefined}
-        onComparePeerImportDocsChange={compareDualViewActive ? setComparePeerImportDocs : undefined}
       />
 
       {/* --- Top Panel (Share) --- */}

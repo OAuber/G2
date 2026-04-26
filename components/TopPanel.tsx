@@ -1144,7 +1144,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
                   setNewInviteIndividualId('');
                   setNewInviteRole('viewer');
                   setNewInviteExpiresAt('');
-                  setInviteExchangeScope(defaultInviteExchangeScope());
                 }}
                 className={`text-sm rounded px-3 py-1.5 font-semibold ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
               >

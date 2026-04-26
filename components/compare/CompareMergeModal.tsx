@@ -1,78 +1,112 @@
 import React, { useState, useEffect } from 'react';
 
-/** Import depuis le pair : fiche complète ou blocs cochés (panneau Détails, à venir). */
-export type CompareImportMode = 'full' | 'partial';
+export type CompareImportScope = 'single' | 'ancestors' | 'descendants';
+export type CompareImportDataMode = 'all' | 'custom';
+export type CompareImportRequest = {
+  scope: CompareImportScope;
+  depth: number;
+  dataMode: CompareImportDataMode;
+  includeFields: boolean;
+  includeDocuments: boolean;
+};
 
 type Props = {
   isOpen: boolean;
   isDarkMode: boolean;
   title: string;
-  optionFull: string;
-  optionPartial: string;
+  scopeSingleLabel: string;
+  scopeAncestorsLabel: string;
+  scopeDescendantsLabel: string;
+  depthLabel: string;
+  depthHelp: string;
+  dataModeAllLabel: string;
+  dataModeCustomLabel: string;
+  dataOptionsTitle: string;
+  dataOptionFields: string;
+  dataOptionDocuments: string;
   validateLabel: string;
   cancelLabel: string;
   ignoreLabel?: string;
+  invalidSelectionHint: string;
+  allowBranchScopes?: boolean;
   onCancel: () => void;
-  onConfirm: (mode: CompareImportMode) => void;
+  onConfirm: (request: CompareImportRequest) => void;
   onIgnorePair?: () => void;
-  /** Aperçu indicatif périmètre ascendance/descendance (Phase E). */
   branchImportHint?: string | null;
-  /** Titre de la zone import de branche (périmètre manifeste / invitation). */
-  branchImportSectionTitle?: string;
-  /** Résumé + action : ascendants du pair dans le périmètre. */
-  branchImportAncestorsSummary?: string | null;
-  branchImportDescendantsSummary?: string | null;
-  branchImportAncestorsLabel?: string;
-  branchImportDescendantsLabel?: string;
-  onBranchImportAncestors?: () => void;
-  onBranchImportDescendants?: () => void;
-  branchImportAncestorsDisabled?: boolean;
-  branchImportDescendantsDisabled?: boolean;
+  maxAncestorsDepth: number;
+  maxDescendantsDepth: number;
 };
 
 const CompareMergeModal: React.FC<Props> = ({
   isOpen,
   isDarkMode,
   title,
-  optionFull,
-  optionPartial,
+  scopeSingleLabel,
+  scopeAncestorsLabel,
+  scopeDescendantsLabel,
+  depthLabel,
+  depthHelp,
+  dataModeAllLabel,
+  dataModeCustomLabel,
+  dataOptionsTitle,
+  dataOptionFields,
+  dataOptionDocuments,
   validateLabel,
   cancelLabel,
   ignoreLabel,
+  invalidSelectionHint,
+  allowBranchScopes = true,
   onCancel,
   onConfirm,
   onIgnorePair,
   branchImportHint,
-  branchImportSectionTitle,
-  branchImportAncestorsSummary,
-  branchImportDescendantsSummary,
-  branchImportAncestorsLabel,
-  branchImportDescendantsLabel,
-  onBranchImportAncestors,
-  onBranchImportDescendants,
-  branchImportAncestorsDisabled,
-  branchImportDescendantsDisabled,
+  maxAncestorsDepth,
+  maxDescendantsDepth,
 }) => {
-  const [mode, setMode] = useState<CompareImportMode>('full');
+  const [scope, setScope] = useState<CompareImportScope>('single');
+  const [dataMode, setDataMode] = useState<CompareImportDataMode>('all');
+  const [includeFields, setIncludeFields] = useState(true);
+  const [includeDocuments, setIncludeDocuments] = useState(true);
+  const [depth, setDepth] = useState(1);
+  const [selectionError, setSelectionError] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      setMode('full');
+      setScope('single');
+      setDataMode('all');
+      setIncludeFields(true);
+      setIncludeDocuments(true);
+      setDepth(1);
+      setSelectionError(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!allowBranchScopes && scope !== 'single') setScope('single');
+  }, [allowBranchScopes, scope]);
 
   if (!isOpen) return null;
 
   const panel = isDarkMode ? 'bg-slate-900 border-slate-600 text-slate-100' : 'bg-white border-slate-300 text-slate-900';
-  const inputCls = isDarkMode ? 'border-slate-600 text-slate-100' : 'border-slate-300 text-slate-900';
-  const branchBtnBase = `w-full text-left rounded border px-3 py-2 text-xs transition-colors ${
-    isDarkMode
-      ? 'border-slate-600 hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed'
-      : 'border-slate-300 hover:bg-slate-50 disabled:opacity-45 disabled:cursor-not-allowed'
-  }`;
+  const inputCls = isDarkMode ? 'border-slate-600 text-slate-100 bg-slate-950/60' : 'border-slate-300 text-slate-900 bg-white';
+  const currentDepthMax = scope === 'ancestors' ? maxAncestorsDepth : scope === 'descendants' ? maxDescendantsDepth : 1;
+  const depthOptions = Array.from({ length: Math.max(1, currentDepthMax) }, (_, i) => i + 1);
 
-  const showBranchBlock =
-    !!branchImportSectionTitle && (onBranchImportAncestors || onBranchImportDescendants);
+  const submit = () => {
+    const hasAnyData = dataMode === 'all' || includeFields || includeDocuments;
+    if (!hasAnyData) {
+      setSelectionError(true);
+      return;
+    }
+    setSelectionError(false);
+    onConfirm({
+      scope,
+      depth: scope === 'single' ? 1 : Math.min(depth, Math.max(1, currentDepthMax)),
+      dataMode,
+      includeFields: dataMode === 'all' ? true : includeFields,
+      includeDocuments: dataMode === 'all' ? true : includeDocuments,
+    });
+  };
 
   return (
     <div
@@ -81,7 +115,7 @@ const CompareMergeModal: React.FC<Props> = ({
       aria-modal="true"
       aria-labelledby="compare-merge-title"
     >
-      <div className={`max-w-md w-full max-h-[min(92vh,720px)] overflow-y-auto rounded-lg border shadow-xl p-4 ${panel}`}>
+      <div className={`max-w-md w-full max-h-[min(92vh,720px)] overflow-y-auto rounded-lg border shadow-xl p-4 space-y-3 ${panel}`}>
         <h2 id="compare-merge-title" className="text-sm font-semibold mb-3">
           {title}
         </h2>
@@ -92,62 +126,111 @@ const CompareMergeModal: React.FC<Props> = ({
             {branchImportHint}
           </p>
         ) : null}
-        <div className="space-y-2 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
             <input
               type="radio"
-              name="compare-import-mode"
-              checked={mode === 'full'}
-              onChange={() => setMode('full')}
+              name="compare-import-scope"
+              checked={scope === 'single'}
+              onChange={() => setScope('single')}
               className="shrink-0 mt-0.5"
             />
-            <span>{optionFull}</span>
+            <span className="text-xs leading-snug">{scopeSingleLabel}</span>
           </label>
           <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
             <input
               type="radio"
-              name="compare-import-mode"
-              checked={mode === 'partial'}
-              onChange={() => setMode('partial')}
+              name="compare-import-scope"
+              checked={scope === 'ancestors'}
+              onChange={() => setScope('ancestors')}
+              disabled={!allowBranchScopes}
               className="shrink-0 mt-0.5"
             />
-            <span>{optionPartial}</span>
+            <span className={`text-xs leading-snug ${!allowBranchScopes ? 'opacity-50' : ''}`}>{scopeAncestorsLabel}</span>
+          </label>
+          <label className={`flex items-start gap-2 cursor-pointer text-sm p-2 rounded border ${inputCls}`}>
+            <input
+              type="radio"
+              name="compare-import-scope"
+              checked={scope === 'descendants'}
+              onChange={() => setScope('descendants')}
+              disabled={!allowBranchScopes}
+              className="shrink-0 mt-0.5"
+            />
+            <span className={`text-xs leading-snug ${!allowBranchScopes ? 'opacity-50' : ''}`}>{scopeDescendantsLabel}</span>
           </label>
         </div>
 
-        {showBranchBlock ? (
-          <div className={`mb-4 rounded-lg border p-3 ${inputCls}`}>
-            <h3 className="text-[11px] font-bold uppercase tracking-wide mb-2 opacity-90">{branchImportSectionTitle}</h3>
-            <div className="flex flex-col gap-2">
-              {onBranchImportAncestors ? (
-                <button
-                  type="button"
-                  disabled={branchImportAncestorsDisabled}
-                  onClick={() => onBranchImportAncestors()}
-                  className={branchBtnBase}
-                >
-                  <span className="block font-semibold">{branchImportAncestorsLabel}</span>
-                  <span className={`mt-1 block text-[10px] leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                    {branchImportAncestorsSummary ?? '—'}
-                  </span>
-                </button>
-              ) : null}
-              {onBranchImportDescendants ? (
-                <button
-                  type="button"
-                  disabled={branchImportDescendantsDisabled}
-                  onClick={() => onBranchImportDescendants()}
-                  className={branchBtnBase}
-                >
-                  <span className="block font-semibold">{branchImportDescendantsLabel}</span>
-                  <span className={`mt-1 block text-[10px] leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                    {branchImportDescendantsSummary ?? '—'}
-                  </span>
-                </button>
-              ) : null}
-            </div>
+        {scope !== 'single' && (
+          <div className={`rounded-lg border p-2.5 ${inputCls}`}>
+            <label className="text-[11px] font-semibold block mb-1.5">{depthLabel}</label>
+            <select
+              value={Math.min(depth, Math.max(1, currentDepthMax))}
+              onChange={(e) => setDepth(Number(e.target.value))}
+              className={`w-full rounded border px-2 py-1.5 text-xs ${inputCls}`}
+            >
+              {depthOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            <p className={`text-[10px] mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>{depthHelp}</p>
           </div>
-        ) : null}
+        )}
+
+        <div className={`rounded-lg border p-2.5 space-y-2 ${inputCls}`}>
+          <div className="text-[11px] font-semibold">{dataOptionsTitle}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label className="flex items-start gap-2 cursor-pointer text-xs">
+              <input
+                type="radio"
+                name="compare-import-data-mode"
+                checked={dataMode === 'all'}
+                onChange={() => setDataMode('all')}
+                className="shrink-0 mt-0.5"
+              />
+              <span>{dataModeAllLabel}</span>
+            </label>
+            <label className="flex items-start gap-2 cursor-pointer text-xs">
+              <input
+                type="radio"
+                name="compare-import-data-mode"
+                checked={dataMode === 'custom'}
+                onChange={() => setDataMode('custom')}
+                className="shrink-0 mt-0.5"
+              />
+              <span>{dataModeCustomLabel}</span>
+            </label>
+          </div>
+          {dataMode === 'custom' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label className="flex items-center gap-2 cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={includeFields}
+                  onChange={(e) => setIncludeFields(e.target.checked)}
+                  className="h-3.5 w-3.5 shrink-0"
+                />
+                <span>{dataOptionFields}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={includeDocuments}
+                  onChange={(e) => setIncludeDocuments(e.target.checked)}
+                  className="h-3.5 w-3.5 shrink-0"
+                />
+                <span>{dataOptionDocuments}</span>
+              </label>
+            </div>
+          )}
+          {selectionError && (
+            <div className={`text-[10px] font-medium ${isDarkMode ? 'text-rose-300' : 'text-rose-700'}`}>
+              {invalidSelectionHint}
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-wrap justify-end gap-2">
           {onIgnorePair && ignoreLabel && (
@@ -175,7 +258,7 @@ const CompareMergeModal: React.FC<Props> = ({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(mode)}
+            onClick={submit}
             className={`text-xs px-3 py-1.5 rounded font-semibold ${
               isDarkMode ? 'bg-sky-700 text-white hover:bg-sky-600' : 'bg-sky-600 text-white hover:bg-sky-500'
             }`}

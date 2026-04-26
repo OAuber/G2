@@ -185,6 +185,35 @@ describe('branchImportFromManifest', () => {
     expect(new Set(f.childrenIds).size).toBe(4);
   });
 
+  it('merges duplicate peer unions when husband/wife order differs (no duplicate spouse families)', () => {
+    const localData: GedcomData = { individuals: {}, families: {} };
+    const peerData: GedcomData = {
+      individuals: {
+        '@I1@': shell('@I1@', { givenName: 'A', familySpouseIds: ['@F1@', '@F2@'] }),
+        '@I2@': shell('@I2@', { givenName: 'B', familySpouseIds: ['@F1@', '@F2@'] }),
+        '@I3@': shell('@I3@', { givenName: 'Child', familyChildId: '@F1@' }),
+      },
+      families: {
+        '@F1@': { id: '@F1@', husbandId: '@I1@', wifeId: '@I2@', childrenIds: ['@I3@'] },
+        '@F2@': { id: '@F2@', husbandId: '@I2@', wifeId: '@I1@', childrenIds: ['@I3@'] },
+      },
+    };
+    const manifest = createInviteExchangeManifest({
+      inviteId: 'inv-swap-dup',
+      rootIndividualIds: ['@I1@'],
+      maxGenDown: 2,
+      maxGenUp: 0,
+      includeSpouses: true,
+    });
+    const plan = buildBranchImportPlan(localData, peerData, manifest, { direction: 'descendants' });
+    const applied = applyBranchImportPlan(localData, peerData, plan);
+    const famKeys = Object.keys(applied.data.families);
+    expect(famKeys.length).toBe(1);
+    const only = applied.data.families[famKeys[0]!];
+    expect(only.childrenIds.length).toBe(1);
+    expect(only.childrenIds[0]).toBeDefined();
+  });
+
   it('includes co-parents in descendant scope so imported children keep FAMC links', () => {
     /** Racine + enfants en descendance ; le conjoint n’est pas descendant de la racine — doit être ajouté si includeSpouses. */
     const localData: GedcomData = { individuals: {}, families: {} };

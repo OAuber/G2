@@ -179,14 +179,33 @@ function allocateLocalFamilyId(peerFamId: string, used: Set<string>): string {
   return allocateXref('F', used);
 }
 
+/**
+ * Clé stable pour une union importée : (H,W) et (W,H) → même chaîne ; un seul parent connu → `single:id`
+ * (aligné sur l’ancienne égalité stricte pour le cas un parent).
+ */
+function familyPartnershipKey(husbandId?: string, wifeId?: string): string | null {
+  const h = husbandId?.trim();
+  const w = wifeId?.trim();
+  const hasH = !!h;
+  const hasW = !!w;
+  if (hasH && hasW) {
+    return [h!, w!].sort((a, b) => a.localeCompare(b)).join('|');
+  }
+  if (hasH) return `single:${h}`;
+  if (hasW) return `single:${w}`;
+  return null;
+}
+
 /** Repère une famille locale déjà unissant les mêmes parents (évite doublons à l’import branche). */
 function findExistingFamilyByParents(
   data: GedcomData,
   husbandId: string | undefined,
   wifeId: string | undefined,
 ): string | undefined {
+  const key = familyPartnershipKey(husbandId, wifeId);
+  if (!key) return undefined;
   for (const [fid, fam] of Object.entries(data.families)) {
-    if (fam.husbandId === husbandId && fam.wifeId === wifeId) return fid;
+    if (familyPartnershipKey(fam.husbandId, fam.wifeId) === key) return fid;
   }
   return undefined;
 }

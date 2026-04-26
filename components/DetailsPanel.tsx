@@ -182,11 +182,6 @@ interface DetailsPanelProps {
   guestInviteTargetDisplayName?: string | null;
   /** Fiche du pair en lecture seule (détail plein panneau, fond gris). */
   comparePeerReadOnly?: boolean;
-  /** Import pair (modal) : coches pilotées par App en session comparaison. */
-  comparePeerImportFields?: boolean;
-  comparePeerImportDocs?: boolean;
-  onComparePeerImportFieldsChange?: (value: boolean) => void;
-  onComparePeerImportDocsChange?: (value: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,10 +463,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   originalGedcomForIdentity = null,
   guestInviteTargetDisplayName = null,
   comparePeerReadOnly = false,
-  comparePeerImportFields: comparePeerImportFieldsProp,
-  comparePeerImportDocs: comparePeerImportDocsProp,
-  onComparePeerImportFieldsChange,
-  onComparePeerImportDocsChange,
 }) => {
   const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
@@ -530,12 +521,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const [showExportPassword, setShowExportPassword] = useState(false);
   const [showImportPassword, setShowImportPassword] = useState(false);
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
-  const [peerImportFieldsInternal, setPeerImportFieldsInternal] = useState(true);
-  const [peerImportDocsInternal, setPeerImportDocsInternal] = useState(true);
-  const peerImportFields =
-    comparePeerImportFieldsProp !== undefined ? comparePeerImportFieldsProp : peerImportFieldsInternal;
-  const peerImportDocs =
-    comparePeerImportDocsProp !== undefined ? comparePeerImportDocsProp : peerImportDocsInternal;
   const prevRightPanelOpenRef = useRef(false);
 
   useEffect(() => {
@@ -652,8 +637,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const bgClass = comparePeerReadOnly
     ? isDarkMode
-      ? 'bg-slate-800 border-slate-600'
-      : 'bg-slate-200 border-slate-400'
+      ? 'bg-indigo-950/35 border-indigo-700/65'
+      : 'bg-indigo-50 border-indigo-200'
     : isDarkMode
       ? 'bg-black border-slate-800'
       : 'bg-slate-50 border-slate-300';
@@ -1358,43 +1343,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             {t('details.tabIdentity')}
           </button>
         </div>
-
-        {comparePeerReadOnly && individual && (
-          <div
-            className={`rounded border p-2.5 text-[11px] space-y-2 ${
-              isDarkMode ? 'border-slate-600 bg-slate-900/50' : 'border-slate-300 bg-slate-100/80'
-            }`}
-          >
-            <div className={`font-semibold ${textClass}`}>{t('details.compareImportTitle')}</div>
-            <p className={`${subTextClass} leading-snug`}>{t('details.compareImportHint')}</p>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={peerImportFields}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  if (onComparePeerImportFieldsChange) onComparePeerImportFieldsChange(v);
-                  else setPeerImportFieldsInternal(v);
-                }}
-                className="h-3.5 w-3.5 shrink-0"
-              />
-              <span className={textClass}>{t('details.compareImportFields')}</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={peerImportDocs}
-                onChange={(e) => {
-                  const v = e.target.checked;
-                  if (onComparePeerImportDocsChange) onComparePeerImportDocsChange(v);
-                  else setPeerImportDocsInternal(v);
-                }}
-                className="h-3.5 w-3.5 shrink-0"
-              />
-              <span className={textClass}>{t('details.compareImportDocuments')}</span>
-            </label>
-          </div>
-        )}
 
         {(isCreating || isEditing) ? (
           <form onSubmit={(e) => {
@@ -2291,6 +2239,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 </div>
                 <div className="text-xs text-slate-500 font-mono mb-2 flex items-center gap-2">
                     {individual.id}
+                    {comparePeerReadOnly && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          isDarkMode
+                            ? 'bg-indigo-900/70 text-indigo-100 border border-indigo-700/60'
+                            : 'bg-indigo-100 text-indigo-900 border border-indigo-300'
+                        }`}
+                      >
+                        {t('details.peerRecordBadge')}
+                      </span>
+                    )}
                     {individual.gender === Gender.Female ? (
                       <span className="text-pink-500 font-bold">♀</span>
                     ) : individual.gender === Gender.Male ? (

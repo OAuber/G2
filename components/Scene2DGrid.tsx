@@ -131,11 +131,20 @@ export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
  * au moment du switch. Chaque cran = {@link WHEEL_ZOOM_IN_STEP_FACTOR}.
  */
 const GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS = 4;
-const GRID_TO_INDIVIDUAL_SWITCH_ZOOM =
-  (GRID_DEFAULT_ZOOM * 1.2) / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS);
 const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
-const GRID_REVEAL_START_ZOOM =
-  GRID_TO_INDIVIDUAL_SWITCH_ZOOM / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
+
+/** Seuils zoom grille → individuel / rampe reveal, proportionnels au zoom par défaut de la grille. */
+export function computeGridZoomSwitchThresholds(baseZoom: number): {
+  switchZoom: number;
+  revealStartZoom: number;
+} {
+  const switchZoom =
+    (baseZoom * 1.2) / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS);
+  const revealStartZoom =
+    switchZoom / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
+  return { switchZoom, revealStartZoom };
+}
+
 const GRID_REVEAL_START_OPACITY = 1;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;
 const SINGLE_VIEW_UPWARD_OFFSET = 3.8 * YEAR;
@@ -583,6 +592,10 @@ const GridContent: React.FC<GridContentProps> = ({
   comparePeerRibbonBackdrop = false,
 }) => {
   const effectiveGridDefaultZoom = gridDefaultZoom ?? GRID_DEFAULT_ZOOM;
+  const gridZoomSwitchThresholds = useMemo(
+    () => computeGridZoomSwitchThresholds(effectiveGridDefaultZoom),
+    [effectiveGridDefaultZoom],
+  );
   const { t } = useI18n();
   const ribbonMeshRef = useRef<THREE.InstancedMesh>(null);
   const ribbonBackdropMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -687,15 +700,16 @@ const GridContent: React.FC<GridContentProps> = ({
   const clearSelectedRevealOpacity = useCallback(() => {
     applyRevealOpacityToIndices([], 1);
   }, [applyRevealOpacityToIndices]);
-  const getRevealRamp = useCallback((zoom: number) => {
-    return Math.max(
-      0,
-      Math.min(
-        1,
-        (zoom - GRID_REVEAL_START_ZOOM) / Math.max(1e-6, GRID_TO_INDIVIDUAL_SWITCH_ZOOM - GRID_REVEAL_START_ZOOM),
-      ),
-    );
-  }, []);
+  const getRevealRamp = useCallback(
+    (zoom: number) => {
+      const { revealStartZoom, switchZoom } = gridZoomSwitchThresholds;
+      return Math.max(
+        0,
+        Math.min(1, (zoom - revealStartZoom) / Math.max(1e-6, switchZoom - revealStartZoom)),
+      );
+    },
+    [gridZoomSwitchThresholds],
+  );
   const getRevealOpacity = useCallback((widthProgressRaw: number, blendToReveal: number) => {
     const clampedWidthProgress = Math.max(0, Math.min(1, widthProgressRaw));
     const baseOpacity = clampedWidthProgress >= 0.97
@@ -2702,13 +2716,17 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
   const individualDefaultZoomRef = useRef<number | null>(null);
   const contextLostNotifiedRef = useRef(false);
   const overlayBg = sceneBackdropColor ?? (isDarkMode ? '#000000' : '#f0f9ff');
+  const gridZoomSwitchThresholds = useMemo(
+    () => computeGridZoomSwitchThresholds(gridDefaultZoom ?? GRID_DEFAULT_ZOOM),
+    [gridDefaultZoom],
+  );
   const modeSwitchLockRef = useRef(false);
   useEffect(() => {
     modeSwitchLockRef.current = false;
   }, [singleIndividual, selectedId]);
   const handleWheelZoomIntent = useCallback(({ deltaY, currentZoom }: { deltaY: number; currentZoom: number }) => {
     if (modeSwitchLockRef.current || !onRequest2DModeSwitch) return false;
-    if (!singleIndividual && deltaY < 0 && currentZoom >= GRID_TO_INDIVIDUAL_SWITCH_ZOOM) {
+    if (!singleIndividual && deltaY < 0 && currentZoom >= gridZoomSwitchThresholds.switchZoom) {
       modeSwitchLockRef.current = true;
       onRequest2DModeSwitch?.('2d-individual', { orthoZoom: currentZoom });
       return true;
@@ -2725,7 +2743,7 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       return false;
     }
     return false;
-  }, [onRequest2DModeSwitch, singleIndividual]);
+  }, [onRequest2DModeSwitch, singleIndividual, gridZoomSwitchThresholds.switchZoom]);
   const handleIndividualDefaultZoomChange = useCallback((zoom: number) => {
     individualDefaultZoomRef.current = zoom;
   }, []);
