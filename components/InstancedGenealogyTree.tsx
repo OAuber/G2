@@ -53,8 +53,12 @@ const COLORS = {
   hover:   { [Gender.Female]: '#ec4899', [Gender.Male]: '#38bdf8', [Gender.Unknown]: '#94a3b8' },
   select:  { [Gender.Female]: '#dc2626', [Gender.Male]: '#2563eb', [Gender.Unknown]: '#f59e0b' },
 };
-const DEFAULT_RIBBON_OPACITY = 0.9;
+const DEFAULT_RIBBON_OPACITY = 0.93;
 const TOP_VIEW_RIBBON_OPACITY = 0.68;
+/** Épaisseur locale du ruban path (axe Z du mesh). Trop fin → sous-pixel + transparence : disparition visuelle à l’éloignement. */
+const PATH_SLAB_DEPTH = 0.58;
+/** Légèrement plus large que le layout : un peu plus de pixels à l’écran. Garder aligné avec `RIBBON_PATH_THICKNESS_PAD` dans Scene3D (photos). */
+const PATH_THICKNESS_SCREEN_PAD = 1.045;
 const DATE_X_FACTOR_TOP = 0.75;
 const DATE_X_FACTOR_SIDE = 0.67;
 const TOP_VIEW_UNION_LINE_SPACING_X = 4; // tweak this for top-view union line spacing
@@ -154,15 +158,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       color: '#ffffff',
       roughness: 0.5,
       metalness: 0.1,
-      opacity: 0.5,
+      opacity: 0.56,
       transparent: true,
       // Same as path ribbons: avoid depth veil that hides troika labels in free/close-up views.
       depthWrite: false,
       side: THREE.DoubleSide,
-      // Léger décalage profondeur vs le ruban pour limiter le scintillement transparence (tri approximatif).
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
+      // Émissif très léger : un peu de lisibilité sans halo / liseré coloré aux bords.
+      emissive: new THREE.Color('#ffffff'),
+      emissiveIntensity: 0.06,
     });
     mat.onBeforeCompile = (shader) => {
       shader.vertexShader = `
@@ -193,9 +196,6 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
           opacity: DEFAULT_RIBBON_OPACITY,
           depthWrite: false,
           side: THREE.DoubleSide,
-          polygonOffset: true,
-          polygonOffsetFactor: 1,
-          polygonOffsetUnits: 2,
       });
 
       mat.onBeforeCompile = (shader) => {
@@ -389,7 +389,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       pathQuat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), rotationX);
       pathQuat.premultiply(tempQuat);
 
-      pathScale.set(thickness, diagonalLength, 0.2);
+      pathScale.set(thickness * PATH_THICKNESS_SCREEN_PAD, diagonalLength, PATH_SLAB_DEPTH);
       pathMatrix.compose(tempPos, pathQuat, pathScale);
       
       pathMesh.setMatrixAt(i, pathMatrix);

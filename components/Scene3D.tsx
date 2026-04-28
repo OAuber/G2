@@ -29,6 +29,10 @@ const PHOTO_MIN_PROJECTED_PX_3D = 18;
 const PHOTO_TOP_SORT_WORLD_ZOOM_K = 0.12;
 const PHOTO_RECALC_MS_3D = 90;
 const PHOTO_RECALC_MS_TOP_3D = 110;
+/** Même facteur que `PATH_THICKNESS_SCREEN_PAD` dans InstancedGenealogyTree (pathScale.x). */
+const RIBBON_PATH_THICKNESS_PAD = 1.045;
+/** Couvre la face du calque sans dépasser (0.98 laissait un liseré). */
+const RIBBON_PHOTO_FACE_INSET = 1;
 
 /** Priorise les clics sur les libellés nom (vue de côté) devant le ruban instancié. */
 function preferNameLabelIntersections(items: Intersection[]): Intersection[] {
@@ -685,13 +689,14 @@ const RibbonPhotoOverlays3D: React.FC<{
       const h = s.y;
       const d = s.z;
       const diagonal = Math.sqrt(h * h + d * d);
+      const effThickness = thickness * RIBBON_PATH_THICKNESS_PAD;
       const angle = Math.atan2(d, h);
       const rotationX = node.gender === Gender.Female ? angle : -angle;
       rot.setFromAxisAngle(xAxis, rotationX);
       pathQ.copy(rot).premultiply(q);
 
-      left.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(-thickness / 2).add(p).project(cam);
-      right.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(thickness / 2).add(p).project(cam);
+      left.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(-effThickness / 2).add(p).project(cam);
+      right.copy(xAxis).applyQuaternion(pathQ).multiplyScalar(effThickness / 2).add(p).project(cam);
       top.copy(yAxis).applyQuaternion(pathQ).multiplyScalar(diagonal / 2).add(p).project(cam);
       bottom.copy(yAxis).applyQuaternion(pathQ).multiplyScalar(-diagonal / 2).add(p).project(cam);
 
@@ -701,7 +706,7 @@ const RibbonPhotoOverlays3D: React.FC<{
       // Vue top : pas de seuil min en px (ortho + angle → sous-estimation fréquente, photos qui clignotent au zoom/pan).
       if (cameraMode !== 'top' && projectedPx < PHOTO_MIN_PROJECTED_PX_3D) continue;
 
-      const worldSpan = Math.max(thickness, diagonal);
+      const worldSpan = Math.max(effThickness, diagonal);
       const orthoZoom =
         (cam as unknown as { isOrthographicCamera?: boolean; zoom?: number }).isOrthographicCamera === true
           ? ((cam as unknown as { zoom: number }).zoom ?? 1)
@@ -720,7 +725,11 @@ const RibbonPhotoOverlays3D: React.FC<{
         sortScore,
         position: [pos.x, pos.y, pos.z],
         quaternion: [pathQ.x, pathQ.y, pathQ.z, pathQ.w],
-        scale: [thickness * 0.98, diagonal * 0.98, 1],
+        scale: [
+          effThickness * RIBBON_PHOTO_FACE_INSET,
+          diagonal * RIBBON_PHOTO_FACE_INSET,
+          1,
+        ],
       });
     }
 

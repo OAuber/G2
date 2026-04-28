@@ -5908,6 +5908,22 @@ function App() {
       setCompareFusionCompleted(true);
       setCompareMatchAnchorId(null);
       setCompareMatchPairId(null);
+      /** Même repère « traité » que la fusion simple : coches liste + grille pour tout le scope importé. */
+      setCompareProcessedLocalIds((prev) => {
+        const s = new Set(prev);
+        for (const id of applied.mergedIndividualIds) s.add(id);
+        for (const id of applied.importedIndividualIds) s.add(id);
+        return [...s];
+      });
+      setCompareProcessedRemoteIds((prev) => {
+        const s = new Set(prev);
+        for (const item of plan.items) {
+          if (item.action === 'merge' || item.action === 'create') {
+            s.add(item.peerId);
+          }
+        }
+        return [...s];
+      });
       showTransientToast(
         'success',
         t('app.compare.branchImportDone')
