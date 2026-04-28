@@ -1,5 +1,6 @@
 import type { Family, GedcomData, Individual } from '../types';
 import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
+import { dedupeFamiliesBySymmetricPartnership, findExistingFamilyIdByParentPair } from './familyPartnership';
 import { collectIndividualIdsForManifest, type InviteExchangeManifest } from './inviteExchangeManifest';
 import {
   collectAncestorIndividualIds,
@@ -179,37 +180,6 @@ function allocateLocalFamilyId(peerFamId: string, used: Set<string>): string {
   return allocateXref('F', used);
 }
 
-/**
- * Clé stable pour une union importée : (H,W) et (W,H) → même chaîne ; un seul parent connu → `single:id`
- * (aligné sur l’ancienne égalité stricte pour le cas un parent).
- */
-function familyPartnershipKey(husbandId?: string, wifeId?: string): string | null {
-  const h = husbandId?.trim();
-  const w = wifeId?.trim();
-  const hasH = !!h;
-  const hasW = !!w;
-  if (hasH && hasW) {
-    return [h!, w!].sort((a, b) => a.localeCompare(b)).join('|');
-  }
-  if (hasH) return `single:${h}`;
-  if (hasW) return `single:${w}`;
-  return null;
-}
-
-/** Repère une famille locale déjà unissant les mêmes parents (évite doublons à l’import branche). */
-function findExistingFamilyByParents(
-  data: GedcomData,
-  husbandId: string | undefined,
-  wifeId: string | undefined,
-): string | undefined {
-  const key = familyPartnershipKey(husbandId, wifeId);
-  if (!key) return undefined;
-  for (const [fid, fam] of Object.entries(data.families)) {
-    if (familyPartnershipKey(fam.husbandId, fam.wifeId) === key) return fid;
-  }
-  return undefined;
-}
-
 function unionChildIds(a: string[], b: string[]): string[] {
   const out: string[] = [...a];
   const seen = new Set(out);
@@ -241,6 +211,7 @@ export function applyBranchImportPlan(
   plan: BranchImportPlan,
 ): BranchImportApplyResult {
   const next = cloneData(localData);
+  dedupeFamiliesBySymmetricPartnership(next);
   const usedIndividuals = new Set(Object.keys(next.individuals));
   const usedFamilies = new Set(Object.keys(next.families));
   const peerToLocal = new Map<string, string>();
@@ -284,7 +255,7 @@ export function applyBranchImportPlan(
     const mappedChildren = fam.childrenIds
       .map((id) => peerToLocal.get(id))
       .filter((id): id is string => !!id);
-    const existingFamId = findExistingFamilyByParents(next, mappedH, mappedW);
+    const existingFamId = findExistingFamilyIdByParentPair(next, mappedH, mappedW);
     if (existingFamId) {
       famPeerToLocal.set(fam.id, existingFamId);
       const ex = next.families[existingFamId];
@@ -337,6 +308,8 @@ export function applyBranchImportPlan(
       familySpouseIds,
     };
   }
+
+  dedupeFamiliesBySymmetricPartnership(next);
 
   return {
     data: next,

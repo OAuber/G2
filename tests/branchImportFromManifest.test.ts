@@ -3,6 +3,7 @@ import { Gender, type GedcomData, type Individual } from '../types';
 import {
   applyBranchImportPlan,
   buildBranchImportPlan,
+  type BranchImportPlan,
 } from '../services/branchImportFromManifest';
 import { createInviteExchangeManifest } from '../services/inviteExchangeManifest';
 import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
@@ -183,6 +184,33 @@ describe('branchImportFromManifest', () => {
     const f = applied.data.families[fams[0]!];
     expect(f.childrenIds.length).toBe(4);
     expect(new Set(f.childrenIds).size).toBe(4);
+  });
+
+  it('dedupes pre-existing local mirror families (same union, two FAM records)', () => {
+    const localData: GedcomData = {
+      individuals: {
+        '@I1@': shell('@I1@', { givenName: 'A', familySpouseIds: ['@FA@', '@FB@'] }),
+        '@I2@': shell('@I2@', { givenName: 'B', familySpouseIds: ['@FA@', '@FB@'] }),
+        '@I3@': shell('@I3@', { givenName: 'Child', familyChildId: '@FA@' }),
+      },
+      families: {
+        '@FA@': { id: '@FA@', husbandId: '@I1@', wifeId: '@I2@', childrenIds: ['@I3@'] },
+        '@FB@': { id: '@FB@', husbandId: '@I2@', wifeId: '@I1@', childrenIds: ['@I3@'] },
+      },
+    };
+    const peerData: GedcomData = { individuals: {}, families: {} };
+    const emptyPlan: BranchImportPlan = {
+      direction: 'both',
+      scopePeerIds: [],
+      items: [],
+      summary: { create: 0, merge: 0, conflict: 0, skip: 0 },
+    };
+    const applied = applyBranchImportPlan(localData, peerData, emptyPlan);
+    expect(Object.keys(applied.data.families).length).toBe(1);
+    const onlyFam = Object.values(applied.data.families)[0]!;
+    expect(onlyFam.childrenIds.length).toBe(1);
+    expect(applied.data.individuals['@I1@']?.familySpouseIds?.length).toBe(1);
+    expect(applied.data.individuals['@I3@']?.familyChildId).toBe(onlyFam.id);
   });
 
   it('merges duplicate peer unions when husband/wife order differs (no duplicate spouse families)', () => {

@@ -1,5 +1,6 @@
 import { GedcomData, Family, Individual, Gender, DateInfo } from '../types';
 import { parseDate } from './gedcomParser';
+import { familyMatchesSpousePairForUpdate } from './familyPartnership';
 
 /** Formulaire édition / création — évite une dépendance circulaire avec DetailsPanel. */
 export interface SpouseChildrenForm {
@@ -127,8 +128,8 @@ export function applySpouseAndChildrenOnUpdate(
 
   const sameChildFams = Object.values(data.families).filter((f) => sameChildSets(f.childrenIds, wantCh));
 
-  let survivor: Family | undefined = sameChildFams.find(
-    (f) => (f.husbandId || '') === (husbandId || '') && (f.wifeId || '') === (wifeId || '')
+  let survivor: Family | undefined = sameChildFams.find((f) =>
+    familyMatchesSpousePairForUpdate(f, husbandId, wifeId),
   );
 
   if (!survivor) {

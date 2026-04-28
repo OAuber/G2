@@ -1146,11 +1146,15 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       const indi = data.individuals[selectedId];
       if (!indi?.familySpouseIds) return [];
       const ids: string[] = [];
+      const seen = new Set<string>();
       for (const famId of indi.familySpouseIds) {
           const fam = data.families[famId];
           if (!fam) continue;
           const spouseId = fam.husbandId === selectedId ? fam.wifeId : fam.husbandId;
-          if (spouseId) ids.push(spouseId);
+          if (spouseId && !seen.has(spouseId)) {
+              seen.add(spouseId);
+              ids.push(spouseId);
+          }
       }
       return ids;
   }, [data, selectedId]);

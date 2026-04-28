@@ -33,6 +33,7 @@ import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } fr
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
 import { applySpouseAndChildrenOnUpdate, findMergeableFamilyForNewIndividual } from './services/spouseFamilySync';
+import { findExistingFamilyIdByParentPair } from './services/familyPartnership';
 import { ActivityLogEvent } from './services/p2pDomain';
 import { createG2Bundle, parseG2Bundle } from './services/bundleService';
 import {
@@ -6252,15 +6253,9 @@ function App() {
 
         // Find or create the target family
         let targetFamId: string | null = null;
-        const existingFam = Object.values(newData.families).find(f => {
-          if (wantedFatherId && wantedMotherId) return f.husbandId === wantedFatherId && f.wifeId === wantedMotherId;
-          if (wantedFatherId && !wantedMotherId) return f.husbandId === wantedFatherId && !f.wifeId;
-          if (!wantedFatherId && wantedMotherId) return !f.husbandId && f.wifeId === wantedMotherId;
-          return false;
-        });
-
-        if (existingFam) {
-          targetFamId = existingFam.id;
+        const existingFamId = findExistingFamilyIdByParentPair(newData, wantedFatherId, wantedMotherId);
+        if (existingFamId) {
+          targetFamId = existingFamId;
         } else {
           targetFamId = getNextId('F', newData);
           newData.families[targetFamId] = {
@@ -7900,16 +7895,15 @@ function App() {
        console.log('[App] Linking parents:', { fatherId: formData.fatherId, motherId: formData.motherId });
        
        let familyId = null;
-       const existingFam = Object.values(newData.families).find(f => {
-           if (formData.fatherId && formData.motherId) return f.husbandId === formData.fatherId && f.wifeId === formData.motherId;
-           if (formData.fatherId && !formData.motherId) return f.husbandId === formData.fatherId && !f.wifeId;
-           if (!formData.fatherId && formData.motherId) return !f.husbandId && f.wifeId === formData.motherId;
-           return false; 
-       });
+       const existingFamId = findExistingFamilyIdByParentPair(
+         newData,
+         formData.fatherId || undefined,
+         formData.motherId || undefined,
+       );
 
-       if (existingFam) {
-         console.log('[App] ✓ Found existing family:', existingFam.id, 'children:', existingFam.childrenIds.length);
-         familyId = existingFam.id;
+       if (existingFamId) {
+         console.log('[App] ✓ Found existing family:', existingFamId, 'children:', newData.families[existingFamId]?.childrenIds.length);
+         familyId = existingFamId;
        } else {
          familyId = getNextId('F', newData);
          console.log('[App] ✓ Creating new family:', familyId);
