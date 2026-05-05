@@ -2241,6 +2241,7 @@ function App() {
   const [compareNoMatchFlash, setCompareNoMatchFlash] = useState<string | null>(null);
   /** Périmètre invité validé : rappel si l’utilisateur a quitté la grille 2D de comparaison. */
   const [compareGridRecallDismissed, setCompareGridRecallDismissed] = useState(false);
+  const [compareExchangeRootsBarDismissed, setCompareExchangeRootsBarDismissed] = useState(false);
   /** Après fusion / création / import de branche : fiches concernées + comptages (bandeau). */
   const [compareOperationHighlight, setCompareOperationHighlight] = useState<{
     individualIds: string[];
@@ -8391,21 +8392,28 @@ function App() {
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
         {compareDualViewActive &&
-          (compareExchangeRootsBarText || showCompareGridRecallBanner) && (
+          ((!compareExchangeRootsBarDismissed && compareExchangeRootsBarText) || showCompareGridRecallBanner) && (
           <div
-            className="pointer-events-none absolute left-1/2 top-3 z-[116] flex max-w-[min(100%,32rem)] -translate-x-1/2 flex-col gap-1.5 px-2"
+            className="pointer-events-none absolute left-1/2 top-20 z-[116] flex max-w-[min(100%,32rem)] -translate-x-1/2 flex-col gap-1.5 px-2"
             role="region"
             aria-label={t('app.compare.compareSessionBannersAria')}
           >
-            {compareExchangeRootsBarText && (
+            {!compareExchangeRootsBarDismissed && compareExchangeRootsBarText && (
               <div
-                className={`pointer-events-none rounded-lg border px-3 py-1.5 text-center text-[11px] font-medium leading-snug shadow-md ${
+                className={`pointer-events-auto flex items-center justify-center gap-2 rounded-lg border px-3 py-1.5 text-center text-[11px] font-medium leading-snug shadow-md ${
                   isDarkMode
-                    ? 'border-slate-600 bg-slate-950 text-slate-100'
-                    : 'border-slate-300 bg-white text-slate-800'
+                    ? 'border-emerald-700 bg-emerald-300 text-black'
+                    : 'border-emerald-400 bg-emerald-300 text-black'
                 }`}
               >
-                {compareExchangeRootsBarText}
+                <span className="flex-1">{compareExchangeRootsBarText}</span>
+                <button
+                  type="button"
+                  onClick={() => setCompareExchangeRootsBarDismissed(true)}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-bold bg-black/10 hover:bg-black/20"
+                >
+                  {t('app.compare.dismissBanner')}
+                </button>
               </div>
             )}
             {showCompareGridRecallBanner && (
@@ -9166,13 +9174,13 @@ function App() {
       />
 
       {bundleToast && (
-        <div className="fixed bottom-4 right-4 z-[220] pointer-events-none">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[220] pointer-events-none">
           <div
             className={`px-3 py-2 rounded-lg border shadow-lg text-xs font-semibold ${
               bundleToast.kind === 'success'
-                ? 'bg-emerald-600/95 border-emerald-500 text-white'
+                ? 'bg-emerald-300/95 border-emerald-500 text-black'
                 : bundleToast.kind === 'warning'
-                  ? 'bg-amber-600/95 border-amber-500 text-white'
+                  ? 'bg-amber-300/95 border-amber-500 text-black'
                   : 'bg-rose-600/95 border-rose-500 text-white'
             }`}
           >

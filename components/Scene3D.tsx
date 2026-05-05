@@ -890,8 +890,15 @@ const Scene3D: React.FC<Scene3DProps> = ({
         if (autoLayoutMode === 'all') filtered = allNodes;
         else if (autoLayoutMode === 'ancestors') filtered = allNodes.filter(n => n.generation <= 0);
         else if (autoLayoutMode === 'descendants') filtered = allNodes.filter(n => n.generation >= 0);
+
+        // Defensive dedupe: some datasets / first-load transitions can transiently
+        // yield duplicate nodes for the same individual id, which visually stacks
+        // translucent ribbon layers.
+        const byId = new Map<string, LayoutNode>();
+        for (const node of filtered) byId.set(node.id, node);
+        const deduped = Array.from(byId.values());
         
-        return { allLayoutNodes: filtered };
+        return { allLayoutNodes: deduped };
     } catch (e) {
         console.error("Layout Engine Error:", e);
         return { allLayoutNodes: [] };

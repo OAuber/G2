@@ -89,7 +89,7 @@ const fr = {
       processedLocalAria: 'Individus déjà traités — base locale',
       processedRemoteAria: 'Individus déjà traités — base du pair',
       sidebarLocal: 'Local',
-      sidebarRemote: 'Pair',
+      sidebarRemote: 'PAIR',
       importLocalHint:
         'Aucun GEDCOM local : importez un fichier ou une archive depuis l’onglet Données pour afficher votre arbre ici. La zone du bas montre la base de l’hôte.',
       waitingPeerGedcom:
@@ -696,7 +696,7 @@ const fr = {
       'Cochez ce qui doit être repris lors d’un import partiel depuis la barre d’import (modal). L’import total reprend tout.',
     compareImportFields: 'État civil et notes',
     compareImportDocuments: 'Documents et photos',
-    peerRecordBadge: 'Fiche pair',
+    peerRecordBadge: 'Fiche PAIR',
     peerDocumentsReadOnly: 'Documents du pair en lecture seule.',
     noIndividualCreatedOrSelected: 'Aucun individu créé ou sélectionné',
     cancel: 'Annuler',

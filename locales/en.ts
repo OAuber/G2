@@ -89,7 +89,7 @@ const en = {
       processedLocalAria: 'Already processed — local tree',
       processedRemoteAria: 'Already processed — peer tree',
       sidebarLocal: 'Local',
-      sidebarRemote: 'Peer',
+      sidebarRemote: 'PEER',
       importLocalHint:
         'No local GEDCOM: import a file or archive from the Data tab to show your tree here. The lower pane shows the host’s tree.',
       waitingPeerGedcom:
@@ -694,7 +694,7 @@ const en = {
       'Choose what to include for a partial import from the import bar (modal). Full import includes everything.',
     compareImportFields: 'Vital info and notes',
     compareImportDocuments: 'Documents and photos',
-    peerRecordBadge: 'Peer record',
+    peerRecordBadge: 'PEER record',
     peerDocumentsReadOnly: 'Peer documents are read-only here.',
     noIndividualCreatedOrSelected: 'No individual created nor selected',
     cancel: 'Cancel',

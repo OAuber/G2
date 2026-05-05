@@ -565,8 +565,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   const menuItemHover = isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100';
 
   const getSourceIcon = (source?: string) => {
-      if (source === 'manual') return <span title={t('sidebar.labels.sourceManual')}><UserIcon className="w-3 h-3 text-green-500" /></span>;
-      if (source === 'p2p') return <span title={t('sidebar.labels.sourceP2P')}><Globe className="w-3 h-3 text-purple-500" /></span>;
+      if (source === 'manual') return <span title={t('sidebar.labels.sourceManual')}><UserIcon className="w-3 h-3 text-slate-500" /></span>;
+      if (source === 'p2p') return <span title={t('sidebar.labels.sourceP2P')}><Globe className="w-3 h-3 text-emerald-500" /></span>;
       return <span title={t('sidebar.labels.sourceImported')}><FileText className="w-3 h-3 text-slate-500" /></span>;
   };
 
@@ -1114,8 +1114,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                             : 'border-l-violet-600 bg-violet-100'
                           : isPeer
                             ? isDarkMode
-                              ? 'border-l-slate-500 bg-slate-900/70'
-                              : 'border-l-slate-400 bg-slate-200/90'
+                              ? 'border-l-emerald-500 bg-emerald-950/35'
+                              : 'border-l-emerald-500 bg-emerald-50/95'
                             : isDarkMode
                               ? 'border-l-sky-600/80 bg-slate-950/60'
                               : 'border-l-sky-500 bg-sky-50/95'
@@ -1129,9 +1129,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         <span
                           className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase ${
                             isPeer
-                              ? isDarkMode
-                                ? 'bg-slate-600 text-slate-100'
-                                : 'bg-slate-400 text-white'
+                              ? 'bg-emerald-600 text-white border border-emerald-700'
                               : isDarkMode
                                 ? 'bg-sky-800 text-sky-100'
                                 : 'bg-sky-500 text-white'
@@ -1153,17 +1151,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 />
                               )}
                             </div>
-                            {isProcessed && (
-                              <span
-                                className="shrink-0 inline-flex"
-                                title={t('app.compare.listProcessedMarkTitle')}
-                              >
-                                <Check
-                                  className="w-3.5 h-3.5 text-emerald-500"
-                                  aria-label={t('app.compare.listProcessedMarkTitle')}
-                                />
-                              </span>
-                            )}
+                            <span
+                              className={`shrink-0 inline-flex text-xs leading-none ${isPeer ? 'text-emerald-500' : (isDarkMode ? 'text-slate-300' : 'text-slate-500')}`}
+                              title={t('app.compare.listProcessedMarkTitle')}
+                              aria-label={t('app.compare.listProcessedMarkTitle')}
+                            >
+                              {isProcessed ? '●' : '○'}
+                            </span>
                             <div className="opacity-70">{getSourceIcon(indi.source)}</div>
                           </div>
                           <div className={`text-xs truncate ${subTextClass}`}>

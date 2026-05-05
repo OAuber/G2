@@ -2588,66 +2588,41 @@ const GridContent: React.FC<GridContentProps> = ({
           const cx = col * STEP_X;
           const cy = -row * STEP_Y;
           const rH = (rd.lifespan / maxLifespan) * CELL_H;
-          /** Haut du ruban — remonté pour ne pas chevaucher le trait de décès en projection. */
-          const overlayAnchorY = cy + rH / 2 + 0.34 * YEAR;
+          /**
+           * Sur-élévation en unités visuelles fixes : `YEAR` est très petit, donc
+           * les offsets précédents étaient quasi imperceptibles à l'écran.
+           */
+          const overlayAnchorY = cy + rH / 2 + 0.08;
+          const isPeerRibbon = id.startsWith(PEER_COMPARE_ID_PREFIX);
           const isSuggestion = !!compareSuggestionIds?.has(id);
           const score = compareSuggestionScores?.get(id);
-          const anySuggestionRibbonSelected = !!(selectedId && compareSuggestionIds?.has(selectedId));
-          const showPct = isSuggestion && score !== undefined && !anySuggestionRibbonSelected;
-          const isSelected = selectedId === id;
+          const showPct = isPeerRibbon && isSuggestion && score !== undefined && !compareFusionCompleted;
           const isProcessed = !!compareProcessedIds?.has(id);
-          /** Pas de case « traitée » sur chaque piste : uniquement sur la sélection (cocher) ou pastille si déjà traité ailleurs. */
-          const showTraitCheckbox =
-            !!compareFusionCompleted && !!onCompareProcessedToggle && isSelected;
-          const showTraitDoneDot =
-            !!compareFusionCompleted && !!onCompareProcessedToggle && isProcessed && !isSelected;
-          if (!showPct && !showTraitCheckbox && !showTraitDoneDot) return null;
-          const traitLabel =
-            showTraitCheckbox || showTraitDoneDot ? t('app.compare.traitCheckbox') : '';
-          const pctY = showTraitCheckbox || showTraitDoneDot ? 0.2 * YEAR : 0;
-          const traitDoneY = showPct ? -0.2 * YEAR : 0.12 * YEAR;
-          const traitCheckboxY = showPct ? -0.26 * YEAR : 0.18 * YEAR;
+          // Pastille unique : toujours visible sauf sur pistes pair pré-fusion où le % la remplace.
+          const showStatusDot =
+            !!onCompareProcessedToggle &&
+            (!isPeerRibbon || compareFusionCompleted || !isSuggestion);
+          if (!showPct && !showStatusDot) return null;
+          const dotY = -0.03;
+          const pctX = 0;
+          const pctY = -0.03;
+          const statusDotY = -0.03;
           return (
             <group key={`ribbon-cmp-overlay-${id}`} position={[cx, overlayAnchorY, 0.35]}>
-              {showPct && (
+              {showStatusDot && (
                 <Text
-                  position={[0, pctY, 0]}
-                  fontSize={3 * YEAR}
-                  color={isDarkMode ? '#fde68a' : '#a16207'}
-                  outlineWidth={isDarkMode ? 0.05 * YEAR : 0.02 * YEAR}
-                  outlineColor={isDarkMode ? '#000000' : '#ffffff'}
-                  anchorX="center"
-                  anchorY="middle"
-                >
-                  {`${Math.round((score as number) * 100)}%`}
-                </Text>
-              )}
-              {showTraitDoneDot && (
-                <Text
-                  position={[0, traitDoneY, 0]}
-                  fontSize={2.55 * YEAR}
-                  letterSpacing={0.025}
-                  color={isDarkMode ? '#6ee7b7' : '#047857'}
-                  outlineWidth={isDarkMode ? 0.028 * YEAR : 0.018 * YEAR}
-                  outlineColor={isDarkMode ? '#0f172a' : '#ecfdf5'}
-                  anchorX="center"
-                  anchorY="middle"
-                  characters={traitLabel}
-                >
-                  {traitLabel}
-                </Text>
-              )}
-              {showTraitCheckbox && (
-                <Text
-                  position={[0, traitCheckboxY, 0]}
-                  fontSize={2.5 * YEAR}
-                  letterSpacing={0.03}
-                  color={isDarkMode ? '#f1f5f9' : '#475569'}
-                  outlineWidth={isDarkMode ? 0.025 * YEAR : 0.016 * YEAR}
+                  position={[0, showPct ? dotY : statusDotY, 0]}
+                  fontSize={showPct ? 3.1 * YEAR : 2.7 * YEAR}
+                  color={
+                    isPeerRibbon
+                      ? (isDarkMode ? '#34d399' : '#059669')
+                      : (isDarkMode ? '#cbd5e1' : '#64748b')
+                  }
+                  outlineWidth={isDarkMode ? 0.028 * YEAR : 0.016 * YEAR}
                   outlineColor={isDarkMode ? '#0f172a' : '#f8fafc'}
                   anchorX="center"
                   anchorY="middle"
-                  characters={`☑☐ ${traitLabel}`}
+                  characters="●○"
                   onPointerDown={(e: SceneMouseEvent) => {
                     e.stopPropagation();
                   }}
@@ -2662,7 +2637,20 @@ const GridContent: React.FC<GridContentProps> = ({
                     document.body.style.cursor = 'default';
                   }}
                 >
-                  {`${isProcessed ? '☑ ' : '☐ '}${traitLabel}`}
+                  {isProcessed ? '●' : '○'}
+                </Text>
+              )}
+              {showPct && (
+                <Text
+                  position={[pctX, pctY, 0]}
+                  fontSize={2.25 * YEAR}
+                  color={isDarkMode ? '#34d399' : '#059669'}
+                  outlineWidth={isDarkMode ? 0.04 * YEAR : 0.018 * YEAR}
+                  outlineColor={isDarkMode ? '#022c22' : '#ecfdf5'}
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  {`${Math.round((score as number) * 100)}%`}
                 </Text>
               )}
             </group>

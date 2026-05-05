@@ -637,7 +637,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   const bgClass = comparePeerReadOnly
     ? isDarkMode
-      ? 'bg-indigo-950/35 border-indigo-700/65'
+      ? 'bg-neutral-950 border-slate-800'
       : 'bg-indigo-50 border-indigo-200'
     : isDarkMode
       ? 'bg-black border-slate-800'
@@ -645,7 +645,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const textClass = isDarkMode ? 'text-slate-200' : 'text-slate-800';
   const subTextClass = isDarkMode ? 'text-slate-400' : 'text-slate-500';
   const inputBg = isDarkMode ? 'bg-neutral-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800';
-  const cardBg = isDarkMode ? 'bg-neutral-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
+  const cardBg =
+    comparePeerReadOnly && isDarkMode
+      ? 'bg-neutral-900 border-slate-800'
+      : isDarkMode
+        ? 'bg-neutral-900/50 border-slate-800'
+        : 'bg-white border-slate-200 shadow-sm';
   const actionBtnClass = isDarkMode ? 'bg-neutral-700 hover:bg-neutral-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white';
 
   const handleBg = isDarkMode 
@@ -2240,13 +2245,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 <div className="text-xs text-slate-500 font-mono mb-2 flex items-center gap-2">
                     {individual.id}
                     {comparePeerReadOnly && (
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                          isDarkMode
-                            ? 'bg-indigo-900/70 text-indigo-100 border border-indigo-700/60'
-                            : 'bg-indigo-100 text-indigo-900 border border-indigo-300'
-                        }`}
-                      >
+                      <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-600 text-white border border-emerald-700">
                         {t('details.peerRecordBadge')}
                       </span>
                     )}
