@@ -26,6 +26,8 @@ interface InstancedTreeProps {
   showTopViewLabels?: boolean;
   labelFontSize?: number;
   topViewLabelMaxZSpan?: number;
+  /** Écriture Z-buffer sur boîte + path pour que le plan du présent respecte avant/arrière (sans changer couleurs/opacité des rubans). */
+  presentPlaneDepthOcclusion?: boolean;
 }
 
 // Helper to store trait mapping for interaction
@@ -94,6 +96,7 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
   showTopViewLabels = true,
   labelFontSize = 3,
   topViewLabelMaxZSpan = 500,
+  presentPlaneDepthOcclusion = false,
 }) => {
   const { camera } = useThree();
   const boxMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -259,6 +262,14 @@ const InstancedGenealogyTree: React.FC<InstancedTreeProps> = ({
       pathMaterial.opacity = isTopView ? TOP_VIEW_RIBBON_OPACITY : DEFAULT_RIBBON_OPACITY;
       pathMaterial.needsUpdate = true;
   }, [isTopView, pathMaterial]);
+
+  useLayoutEffect(() => {
+    const dw = presentPlaneDepthOcclusion;
+    boxMaterial.depthWrite = dw;
+    pathMaterial.depthWrite = dw;
+    boxMaterial.needsUpdate = true;
+    pathMaterial.needsUpdate = true;
+  }, [presentPlaneDepthOcclusion, boxMaterial, pathMaterial]);
 
   const traitMaterial = useMemo(() => new THREE.MeshBasicMaterial({ color: 0xffffff }), []);
   

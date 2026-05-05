@@ -7,6 +7,7 @@ import { Individual, GedcomData, Gender, DragMode, RenderedPerson, CameraMode, L
 import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geometryService';
 import { LayoutNode, GenealogyLayoutEngineB } from '../services/layoutEngineB';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
+import PresentPlanPoietic3D from './PresentPlanPoietic3D';
 
 // --- Camera Controller ---
 // Handles animated transitions between 3 camera modes: top, individual, free.
@@ -824,6 +825,8 @@ interface Scene3DProps {
   onTopViewEntryFrom2DComplete?: () => void;
   /** Arbre affiché = copie pair (comparaison) : fond de scène légèrement différent. */
   peerTreeVisualContext?: boolean;
+  /** Plan horizontal « présent » (Poietic) sous l’emprise 3D, vues générales uniquement. */
+  showPresentPlane?: boolean;
 }
 
 const Scene3D: React.FC<Scene3DProps> = ({ 
@@ -857,6 +860,7 @@ const Scene3D: React.FC<Scene3DProps> = ({
   topViewEntryFrom2D = null,
   onTopViewEntryFrom2DComplete,
   peerTreeVisualContext = false,
+  showPresentPlane = false,
 }) => {
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const contextLostNotifiedRef = useRef(false);
@@ -1433,7 +1437,17 @@ const Scene3D: React.FC<Scene3DProps> = ({
             topViewLabelMaxZSpan={topViewLabelMaxZSpan}
             labelFontSize={labelFontSize}
             onTopViewFadedIdsChange={handleTopViewFadedIdsChange}
+            presentPlaneDepthOcclusion={showPresentPlane}
         />
+
+        {showPresentPlane && (
+          <PresentPlanPoietic3D
+            nodes={allLayoutNodes}
+            cameraMode={cameraMode}
+            isDarkMode={isDarkMode}
+            enabled={showPresentPlane}
+          />
+        )}
     </Canvas>
   );
 };

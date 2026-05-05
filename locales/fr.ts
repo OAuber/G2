@@ -196,6 +196,10 @@ const fr = {
     shortcuts: 'Raccourcis',
     shortcutReveal: 'Ctrl/⌘ + Survol — révéler les liens de parenté entre la sélection et le survol.',
     shortcutBoxes: 'Ctrl/⌘ + B — afficher/masquer les boîtes individuelles en vue 3D.',
+    presentPlane:
+      'Plan du présent (Poietic) — plan horizontal translucide sous l’emprise 3D de l’arbre, avec le viewer en direct.',
+    presentPlaneHint:
+      'Affiché dans toutes les vues 3D (libre, dessus et gros plan). Le motif est intégré via iframe (pas une texture WebGL) ; si le site refuse l’embarquement, seul le plan coloré apparaîtra.',
     shortcutCompareFullGrid:
       'Échap (comparaison 2D) — revenir à la grille complète des deux bases et lever l’ancre de pistes.',
     appearance: 'Apparence',

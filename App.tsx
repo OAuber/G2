@@ -185,6 +185,7 @@ function App() {
   const [sceneExtras, setSceneExtras] = useState<RenderedPerson[]>([]);
 
   const [showBoxes, setShowBoxes] = useState(true);
+  const [showPresentPlane, setShowPresentPlane] = useState(false);
   const [showAxes] = useState(false);
   
   // Panels closed by default
@@ -8237,6 +8238,19 @@ function App() {
                   <span>{t('help.shortcutBoxes')}</span>
                 </label>
 
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={showPresentPlane}
+                    onChange={(e) => setShowPresentPlane(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>{t('help.presentPlane')}</span>
+                </label>
+                <p className={`ps-7 text-xs leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {t('help.presentPlaneHint')}
+                </p>
+
                 <p className={`ps-7 text-xs leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                   {t('help.shortcutCompareFullGrid')}
                 </p>
@@ -8526,6 +8540,7 @@ function App() {
                 rootIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX)
               )
             }
+            showPresentPlane={showPresentPlane}
           />
           </Suspense>
         ) : compareDualViewActive && viewMode === '2D' && !is2dIndividual ? (

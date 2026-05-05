@@ -196,6 +196,10 @@ const en = {
     shortcuts: 'Shortcuts',
     shortcutReveal: 'Ctrl/⌘ + Hover — reveal relationship links between selected and hovered individuals.',
     shortcutBoxes: 'Ctrl/⌘ + B — toggle individual boxes in 3D view.',
+    presentPlane:
+      'Present plane (Poietic) — translucent horizontal square under the 3D tree footprint, with the live viewer.',
+    presentPlaneHint:
+      'Shown in all 3D views (free, top, and individual close-up). The pattern uses an iframe (not a raw WebGL texture); if the site blocks embedding, only the tinted plane will show.',
     shortcutCompareFullGrid:
       'Escape (2D compare) — return to the full two-tree grid and clear the match anchor.',
     appearance: 'Appearance',
