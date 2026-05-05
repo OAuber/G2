@@ -145,15 +145,6 @@ function individualDisplayLabel(indi: Individual | undefined): string {
   return (`${indi.givenName || ''} ${indi.surname || ''}`.trim() || indi.name || indi.id);
 }
 
-/** Journalisation session comparaison / périmètre invité (filtre console : `[compare-exchange]`). */
-function compareExchangeDebugLog(message: string, payload?: Record<string, unknown>) {
-  if (payload !== undefined) {
-    console.log(`[compare-exchange] ${message}`, payload);
-  } else {
-    console.log(`[compare-exchange] ${message}`);
-  }
-}
-
 function App() {
   const { language, toggleLanguage, t } = useI18n();
   const {
@@ -2218,24 +2209,6 @@ function App() {
     }
     return map;
   }, [documentsByIndividualId]);
-  useEffect(() => {
-    if (p2pMode !== 'client') return;
-    const allDocs = Object.values(documentsByIndividualId).flat();
-    const photoDocs = allDocs.filter((d) => d.kind === 'photo' || isImageLikeUrl(d.url));
-    const firstPrefixes = photoDocs.slice(0, 3).map((d) => {
-      if (d.url.startsWith('data:')) return 'data:';
-      if (d.url.startsWith('blob:')) return 'blob:';
-      if (d.url.startsWith('http://') || d.url.startsWith('https://')) return 'http(s):';
-      return 'other';
-    });
-    console.info('[G2][INVITE_PHOTO_DEBUG]', {
-      docsIndividuals: Object.keys(documentsByIndividualId).length,
-      docsTotal: allDocs.length,
-      photosDetected: photoDocs.length,
-      primaryPhotoMapSize: Object.keys(primaryPhotoUrlById).length,
-      firstPhotoUrlPrefixes: firstPrefixes,
-    });
-  }, [p2pMode, documentsByIndividualId, primaryPhotoUrlById]);
   const shouldDeferInviteMediaRendering =
     false;
   /** Comparateur : pas de suspension — sinon la vue double 2D / split ne s’affiche jamais. */
@@ -2635,15 +2608,6 @@ function App() {
     );
     if (!rootWire || !gedcomData.individuals[rootWire]) return;
     inviteeExchangeScopeAnnouncedRef.current = true;
-    compareExchangeDebugLog('invité → envoi INVITEE_EXCHANGE_SCOPE', {
-      inviteId,
-      guestTargetId,
-      rootIndividualWireId: rootWire,
-      pendingInviteTargetIndividualId,
-      pendingInviteItemIndividualId: pendingInviteItem?.individualId ?? null,
-      maxGenDown: inviteeExchangeScope.maxGenDown,
-      maxGenUp: inviteeExchangeScope.maxGenUp,
-    });
     p2pService.sendMessage('INVITEE_EXCHANGE_SCOPE', {
       inviteId,
       rootIndividualWireId: rootWire,
@@ -2692,12 +2656,6 @@ function App() {
     const peerPc = wireIndividualIdToPeerCompareId(hostWire);
     if (!peerCompareGedcom.individuals[peerPc]) return;
     compareExchangeRootsAutoAppliedRef.current = true;
-    compareExchangeDebugLog('invité → focalisation racines grille', {
-      localRoot,
-      hostWire,
-      peerPc,
-      guestTargetId,
-    });
     setCompareMatchAnchorId(localRoot);
     setCompareMatchPairId(peerPc);
     setSelectedIndividual(gedcomData.individuals[localRoot]);
@@ -2734,12 +2692,6 @@ function App() {
     const peerPc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
     if (!peerCompareGedcom.individuals[peerPc]) return;
     compareExchangeRootsAutoAppliedRef.current = true;
-    compareExchangeDebugLog('hôte → focalisation racines grille', {
-      hostLocal,
-      rootIndividualWireId: guestExchangeScopeFromPeer.rootIndividualWireId,
-      peerPc,
-      inviteId: guestExchangeScopeFromPeer.inviteId,
-    });
     setCompareMatchAnchorId(hostLocal);
     setCompareMatchPairId(peerPc);
     setSelectedIndividual(gedcomData.individuals[hostLocal]);
@@ -2867,107 +2819,6 @@ function App() {
     pendingInviteItem,
     p2pInvites,
     compareMatchPairId,
-  ]);
-
-  useEffect(() => {
-    if (!compareDualViewActive || p2pSessionUseCase !== 'compare') return;
-    let rootPairBlockReason: string | null = null;
-    if (!compareReadyRootPairIds) {
-      if (!gedcomData || !peerCompareGedcom || Object.keys(peerCompareGedcom.individuals).length === 0) {
-        rootPairBlockReason = 'pas-de-données-pair-ou-vide';
-      } else if (p2pMode === 'host') {
-        if (!guestExchangeScopeFromPeer?.rootIndividualWireId) {
-          rootPairBlockReason = 'hôte:pas-de-INVITEE_EXCHANGE_SCOPE-(guestExchangeScopeFromPeer)';
-        } else {
-          const scope = effectiveInviterExchangeScopeForCompare ?? defaultInviteExchangeScope();
-          const targetId =
-            pendingInviteTargetIndividualId ??
-            inviteForCompareHost?.individualId ??
-            pendingInviteItem?.individualId ??
-            null;
-          const localRoot = resolveExchangeRootIndividualId(gedcomData, scope, targetId);
-          const localFallback =
-            (scope.rootIndividualId && gedcomData.individuals[scope.rootIndividualId]
-              ? scope.rootIndividualId
-              : null) ??
-            (targetId && gedcomData.individuals[targetId] ? targetId : null);
-          const localId = localRoot ?? localFallback;
-          if (!localId || !gedcomData.individuals[localId]) {
-            rootPairBlockReason = 'hôte:racine-locale-introuvable';
-          } else {
-            const pc = wireIndividualIdToPeerCompareId(guestExchangeScopeFromPeer.rootIndividualWireId);
-            if (!peerCompareGedcom.individuals[pc]) {
-              rootPairBlockReason = 'hôte:pc-introuvable-dans-snapshot-invité';
-            }
-          }
-        }
-      } else if (p2pMode === 'client') {
-        const comparatorInvite =
-          pendingInviteItem ??
-          p2pInvites.find(
-            (i) => i.role === 'comparator' && (i.status === 'active' || i.status === 'accepted'),
-          ) ??
-          null;
-        const targetId =
-          pendingInviteTargetIndividualId ??
-          (comparatorInvite?.individualId && gedcomData.individuals[comparatorInvite.individualId]
-            ? comparatorInvite.individualId
-            : null);
-        let hostWire = receivedInviterExchangeManifest?.rootIndividualIds?.[0] ?? null;
-        if (
-          !hostWire &&
-          compareMatchPairId?.startsWith(PEER_COMPARE_ID_PREFIX) &&
-          peerCompareGedcom.individuals[compareMatchPairId]
-        ) {
-          hostWire = compareMatchPairId.slice(PEER_COMPARE_ID_PREFIX.length);
-        }
-        if (!targetId) rootPairBlockReason = 'invité:pas-de-cible-(targetId)';
-        else if (!hostWire) {
-          rootPairBlockReason = 'invité:manifeste-sans-rootIndividualIds-ni-paire-pc';
-        } else {
-          const localRoot = resolveExchangeRootIndividualId(gedcomData, inviteeExchangeScope, targetId);
-          const localFallback = targetId && gedcomData.individuals[targetId] ? targetId : null;
-          const localId = localRoot ?? localFallback;
-          if (!localId || !gedcomData.individuals[localId]) {
-            rootPairBlockReason = 'invité:racine-locale-introuvable';
-          } else {
-            const pc = wireIndividualIdToPeerCompareId(hostWire);
-            if (!peerCompareGedcom.individuals[pc]) {
-              rootPairBlockReason = 'invité:pc-introuvable-dans-snapshot-hôte';
-            }
-          }
-        }
-      }
-    }
-    compareExchangeDebugLog('paire racines prête (compareReadyRootPairIds)', {
-      p2pMode,
-      pair: compareReadyRootPairIds,
-      guestRootWire: guestExchangeScopeFromPeer?.rootIndividualWireId ?? null,
-      compareMatchAnchorId,
-      compareMatchPairId,
-      selectedIdsFor2DSize: selectedIdsFor2D.size,
-      rootPairBlockReason,
-      inviteeExchangeScopeSetupDone,
-    });
-  }, [
-    compareDualViewActive,
-    p2pSessionUseCase,
-    p2pMode,
-    compareReadyRootPairIds,
-    guestExchangeScopeFromPeer?.rootIndividualWireId,
-    compareMatchAnchorId,
-    compareMatchPairId,
-    selectedIdsFor2D.size,
-    gedcomData,
-    peerCompareGedcom,
-    effectiveInviterExchangeScopeForCompare,
-    pendingInviteTargetIndividualId,
-    inviteForCompareHost?.individualId,
-    pendingInviteItem,
-    p2pInvites,
-    receivedInviterExchangeManifest?.rootIndividualIds,
-    inviteeExchangeScope,
-    inviteeExchangeScopeSetupDone,
   ]);
 
   /** Grille unifiée : exploration complète sans ancre ; pistes + ancre ; puis uniquement la paire retenue. Sans ancre : même filtre 2D que la barre latérale (ex. après fusion : fiche locale seule). */
@@ -4587,13 +4438,6 @@ function App() {
                     typeof payload.data.media === 'boolean' &&
                     typeof payload.data.notes === 'boolean'
                   ) {
-                    compareExchangeDebugLog('hôte ← INVITEE_EXCHANGE_SCOPE accepté', {
-                      inviteId: payload.inviteId,
-                      rootIndividualWireId: payload.rootIndividualWireId,
-                      maxGenDown: payload.maxGenDown,
-                      maxGenUp: payload.maxGenUp,
-                      senderPeerId: data.senderPeerId ?? null,
-                    });
                     setGuestExchangeScopeFromPeer({
                       inviteId: payload.inviteId,
                       rootIndividualWireId: payload.rootIndividualWireId,
@@ -4609,10 +4453,6 @@ function App() {
                       payload.inviteId,
                       data.senderPeerId || 'remote',
                     );
-                  } else {
-                    compareExchangeDebugLog('hôte ← INVITEE_EXCHANGE_SCOPE rejeté (payload invalide)', {
-                      payload: data.payload,
-                    });
                   }
               }
               if (data.type === 'INVITE_CREATE' && data.payload) {
@@ -6114,7 +5954,6 @@ function App() {
           // IMPORTANT: If Set becomes empty after removing, it means "show all"
           // But user wanted to HIDE this last one, so add "__NONE__" instead
           if (next.size === 0) {
-            console.log('[App] Last individual unchecked, entering None mode');
             return new Set(['__NONE__']);
           }
         } else {
@@ -6133,8 +5972,6 @@ function App() {
       // So when switching to 3D, the correct person is centered
       const clickedIndi = gedcomData.individuals[startId];
       if (clickedIndi) {
-          console.log('[App] handleExpandFamily: Setting selectedIndividual to', 
-              `${clickedIndi.givenName} ${clickedIndi.surname}`);
           setSelectedIndividual(clickedIndi);
           setRootIndividual(clickedIndi); // Also sync rootIndividual
       }
@@ -6293,6 +6130,7 @@ function App() {
       applySpouseAndChildrenOnUpdate(newData, updatedIndi.id, formData, updatedIndi.gender, (d) =>
         getNextId('F', d)
       );
+      pruneDanglingFamiliesAndRefs(newData);
     }
 
     setOriginalGedcomData(newData);
@@ -6899,6 +6737,32 @@ function App() {
     }
   };
 
+  const pruneDanglingFamiliesAndRefs = (data: GedcomData) => {
+    for (const fam of Object.values(data.families)) {
+      if (fam.husbandId && !data.individuals[fam.husbandId]) fam.husbandId = undefined;
+      if (fam.wifeId && !data.individuals[fam.wifeId]) fam.wifeId = undefined;
+      fam.childrenIds = (fam.childrenIds || []).filter((childId) => !!data.individuals[childId]);
+    }
+
+    for (const [famId, fam] of Object.entries(data.families)) {
+      const hasChildren = (fam.childrenIds?.length || 0) > 0;
+      const hasBothParents = !!fam.husbandId && !!fam.wifeId;
+      // Une union sans enfants avec conjoint manquant (ou sans parents) est un artefact.
+      if (!hasChildren && !hasBothParents) {
+        delete data.families[famId];
+      }
+    }
+
+    for (const indi of Object.values(data.individuals)) {
+      if (indi.familyChildId && !data.families[indi.familyChildId]) {
+        indi.familyChildId = undefined;
+      }
+      if (indi.familySpouseIds) {
+        indi.familySpouseIds = [...new Set(indi.familySpouseIds.filter((famId) => !!data.families[famId]))];
+      }
+    }
+  };
+
   const applyProposalAcceptMerge = (mergedData: GedcomData, proposal: P2PProposalItem): GedcomData => {
     const next = JSON.parse(JSON.stringify(mergedData)) as GedcomData;
     if (proposal.operation === 'create_individual' && proposal.proposedIndividual) {
@@ -6916,21 +6780,7 @@ function App() {
         if (fam.wifeId === proposal.individualId) fam.wifeId = undefined;
         fam.childrenIds = fam.childrenIds.filter((id) => id !== proposal.individualId);
       });
-      Object.values(next.individuals).forEach((indi) => {
-        if (indi.familyChildId && next.families[indi.familyChildId]) {
-          const fam = next.families[indi.familyChildId];
-          if (!fam.husbandId && !fam.wifeId && fam.childrenIds.length === 0) {
-            delete next.families[indi.familyChildId];
-            indi.familyChildId = undefined;
-          }
-        }
-        if (indi.familySpouseIds) {
-          indi.familySpouseIds = indi.familySpouseIds.filter((famId) => {
-            const fam = next.families[famId];
-            return !!fam;
-          });
-        }
-      });
+      pruneDanglingFamiliesAndRefs(next);
     } else if (proposal.individualId in next.individuals) {
       next.individuals[proposal.individualId] = {
         ...next.individuals[proposal.individualId],
@@ -7047,21 +6897,7 @@ function App() {
             if (fam.wifeId === proposal.individualId) fam.wifeId = undefined;
             fam.childrenIds = fam.childrenIds.filter((id) => id !== proposal.individualId);
           });
-          Object.values(mergedData.individuals).forEach((indi) => {
-            if (indi.familyChildId && mergedData.families[indi.familyChildId]) {
-              const fam = mergedData.families[indi.familyChildId];
-              if (!fam.husbandId && !fam.wifeId && fam.childrenIds.length === 0) {
-                delete mergedData.families[indi.familyChildId];
-                indi.familyChildId = undefined;
-              }
-            }
-            if (indi.familySpouseIds) {
-              indi.familySpouseIds = indi.familySpouseIds.filter((famId) => {
-                const fam = mergedData.families[famId];
-                return !!fam;
-              });
-            }
-          });
+          pruneDanglingFamiliesAndRefs(mergedData);
         } else if (proposal.individualId in mergedData.individuals) {
           mergedData.individuals[proposal.individualId] = {
             ...mergedData.individuals[proposal.individualId],
@@ -7892,8 +7728,6 @@ function App() {
 
     // 2. Link Parents
     if (formData.fatherId || formData.motherId) {
-       console.log('[App] Linking parents:', { fatherId: formData.fatherId, motherId: formData.motherId });
-       
        let familyId = null;
        const existingFamId = findExistingFamilyIdByParentPair(
          newData,
@@ -7902,12 +7736,9 @@ function App() {
        );
 
        if (existingFamId) {
-         console.log('[App] ✓ Found existing family:', existingFamId, 'children:', newData.families[existingFamId]?.childrenIds.length);
          familyId = existingFamId;
        } else {
          familyId = getNextId('F', newData);
-         console.log('[App] ✓ Creating new family:', familyId);
-         
          newData.families[familyId] = {
            id: familyId,
            husbandId: formData.fatherId || undefined,
@@ -7935,12 +7766,6 @@ function App() {
            newData.families[familyId].childrenIds.push(newId);
        }
        newData.individuals[newId].familyChildId = familyId;
-       
-       console.log('[App] ✓ Family created/linked:', {
-           familyId,
-           childrenCount: newData.families[familyId].childrenIds.length,
-           childAdded: newId
-       });
     }
 
     // 3. Link Spouse & Children (fusion avec une FAM mono-parentale même enfants si possible)
@@ -7997,6 +7822,8 @@ function App() {
          newData.individuals[newId].familySpouseIds = [famsId];
        }
     }
+
+    pruneDanglingFamiliesAndRefs(newData);
 
     setOriginalGedcomData(newData);
     setTimeout(() => {
@@ -8083,6 +7910,7 @@ function App() {
       if (fam.wifeId === id) fam.wifeId = undefined;
       fam.childrenIds = fam.childrenIds.filter((childId) => childId !== id);
     });
+    pruneDanglingFamiliesAndRefs(newData);
     setOriginalGedcomData(newData);
     setTimeout(() => {
         setNormalizedGedcomData(normalizeGedcom(newData));
