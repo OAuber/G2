@@ -182,6 +182,10 @@ interface DetailsPanelProps {
   guestInviteTargetDisplayName?: string | null;
   /** Fiche du pair en lecture seule (détail plein panneau, fond gris). */
   comparePeerReadOnly?: boolean;
+  onOpenYourIdentityTab?: () => void;
+  onOpenPeerIdentitiesTab?: () => void;
+  onTogglePeerCertifiedByMe?: (peerId: string, next: boolean) => void;
+  knownPeerIdentityByPeerId?: Record<string, { certifiedByMe?: boolean }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -463,6 +467,10 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   originalGedcomForIdentity = null,
   guestInviteTargetDisplayName = null,
   comparePeerReadOnly = false,
+  onOpenYourIdentityTab,
+  onOpenPeerIdentitiesTab,
+  onTogglePeerCertifiedByMe,
+  knownPeerIdentityByPeerId = {},
 }) => {
   const { t } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
@@ -588,12 +596,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   }, [recordsTabSignal]);
 
   useEffect(() => {
-    if (identityTabSignal > 0) setActiveTab('identity');
+    if (identityTabSignal > 0) setActiveTab('records');
   }, [identityTabSignal]);
 
   useEffect(() => {
     if (!isIdentifyingSelf) return;
-    setActiveTab('identity');
+    setActiveTab('records');
     if (selfIdentity?.individualId) {
       setIdentityCandidateId(selfIdentity.individualId);
       return;
@@ -660,6 +668,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const parentFamily = (individual && data && individual.familyChildId) ? data.families[individual.familyChildId] : null;
   const fatherId = parentFamily?.husbandId;
   const motherId = parentFamily?.wifeId;
+  const isLikelyLiving = !!individual && !individual.deathDate?.year;
+  const isSelfRecord = !!(individual && selfIdentity?.individualId && individual.id === selfIdentity.individualId);
+  const remoteClaimForSelected = individual ? remoteIdentityClaimsByIndividualId?.[individual.id] : undefined;
+  const relatedPeerId = remoteClaimForSelected?.actorPeerId || null;
+  const relatedPeerCertState =
+    relatedPeerId ? !!knownPeerIdentityByPeerId?.[relatedPeerId]?.certifiedByMe : false;
   
   const DateDisplay = ({ label, date }: { label: string, date?: { year: number | null, isCalculated?: boolean } }) => (
       <div className="flex justify-between items-center">
@@ -1302,7 +1316,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
           </div>
         </div>
 
-        <div className={`rounded border p-1 grid grid-cols-4 gap-1 ${isDarkMode ? 'border-slate-700' : 'border-slate-300'}`}>
+        <div className={`rounded border p-1 grid grid-cols-3 gap-1 ${isDarkMode ? 'border-slate-700' : 'border-slate-300'}`}>
           <button
             type="button"
             onClick={() => setActiveTab('records')}
@@ -1335,17 +1349,6 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             }`}
           >
             {t('details.tabReview')}
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('identity')}
-            className={`text-[11px] rounded px-2 py-1.5 border flex items-center justify-center ${
-              activeTab === 'identity'
-                ? isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-slate-200 border-slate-300 text-slate-900'
-                : isDarkMode ? 'border-slate-700 text-slate-300 hover:bg-slate-900' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            {t('details.tabIdentity')}
           </button>
         </div>
 
@@ -2249,6 +2252,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         {t('details.peerRecordBadge')}
                       </span>
                     )}
+                    {isSelfRecord && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenYourIdentityTab?.()}
+                        className="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-600 text-white border border-emerald-700"
+                      >
+                        {t('details.youLabel')}
+                      </button>
+                    )}
                     {individual.gender === Gender.Female ? (
                       <span className="text-pink-500 font-bold">♀</span>
                     ) : individual.gender === Gender.Male ? (
@@ -2262,6 +2274,42 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       </span>
                     )}
                 </div>
+                {!isEditing && !isCreating && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {!isSelfRecord && isLikelyLiving && !selfIdentity && (
+                      <button
+                        type="button"
+                        onClick={() => onClaimIdentity(individual.id)}
+                        className="rounded px-2 py-1 text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-500"
+                      >
+                        {t('details.claimThisIdentity')}
+                      </button>
+                    )}
+                    {!isSelfRecord && isLikelyLiving && !!selfIdentity && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenPeerIdentitiesTab?.()}
+                        className={`rounded px-2 py-1 text-[11px] font-semibold ${inputBg}`}
+                      >
+                        {t('details.viewPeerIdentity')}
+                      </button>
+                    )}
+                    {relatedPeerId && onTogglePeerCertifiedByMe && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenPeerIdentitiesTab?.();
+                          onTogglePeerCertifiedByMe(relatedPeerId, !relatedPeerCertState);
+                        }}
+                        className={`rounded px-2 py-1 text-[11px] font-semibold ${
+                          relatedPeerCertState ? 'bg-emerald-600 text-white' : inputBg
+                        }`}
+                      >
+                        {relatedPeerCertState ? t('details.certifiedLabel') : t('details.certifyLabel')}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 type="button"

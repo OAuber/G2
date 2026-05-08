@@ -208,8 +208,20 @@ const en = {
     processing: 'Processing...',
   },
   landing: {
-    subtitle: 'Generation by Generation',
-    tagline: 'For humans, by humans',
+    subtitle: 'a network of humans',
+    tagline: 'Generation by Generation',
+    pasteInviteHint: 'Received an invitation link? Paste it here.',
+    pasteInvitePlaceholder: 'Invitation URL',
+    linkOnlyHint: 'Please paste a full invitation link.',
+    validateInvite: 'Validate',
+    start: 'Start',
+    noInviteHint: "Don't have an invitation link? Explore the pages below.",
+    startOverlayTitle: 'Getting started with G2',
+    startOverlayIntro:
+      'This walkthrough helps you begin: claim your identity, load your tree, then explore and share.',
+    startOverlayStep1: '1. Open or import your GEDCOM in the Data tab.',
+    startOverlayStep2: '2. Claim your identity from the person record that matches you.',
+    startOverlayStep3: '3. Use invitation tabs to share through links.',
     actions: {
       import: 'IMPORT',
       create: 'CREATE',
@@ -220,7 +232,8 @@ const en = {
     },
     links: {
       about: 'About',
-      help: 'Help',
+      start: 'Start',
+      settings: 'Settings',
       contribute: 'Contribute',
       contact: 'Contact',
     },
@@ -506,6 +519,8 @@ const en = {
     ownDeviceInviteTitle: 'Own-device invite (phone or tablet)',
     ownDeviceInviteHint:
       'Long-lived link for the same account as on this PC: leave the PC running at home and capture data on mobile over time. Pick a far expiry or none.',
+    deviceInviteNeedsIdentity:
+      'Claim your identity before creating a link for your smartphone or tablet.',
     ownDeviceRole: 'Role on the second device',
     ownDeviceTtl: 'Token validity (TTL)',
     ownDeviceTtlNone: 'No expiry (recommended for vacations / long capture)',
@@ -521,13 +536,27 @@ const en = {
     inviteLandingOwnDeviceHint:
       'Own-device invitation: same database as the host PC; batch-validate records when you are back, or reject if unsure.',
     tabGuide: 'Guide',
-    tabNetwork: 'Connection',
-    tabSession: 'Sync',
-    tabInvitations: 'Invites',
+    tabDeviceInvites: 'Connect another device',
+    tabAnonymousInvites: 'Anonymous invites',
+    tabPersonalizedInvites: 'Personal invites',
     tabProposals: 'Review',
     tabPrivacy: 'Visibility',
     tabActivity: 'Activity',
     tabWot: 'Identity & trust',
+    tabYourIdentity: 'Your identity',
+    tabPeerIdentities: 'Peer identities',
+    selectTabPrompt: 'Choose a tab above to display its content.',
+    connectionState: 'Physical connection',
+    restartConnection: 'Restart',
+    p2pStatus_disconnected: 'Disconnected',
+    p2pStatus_connecting: 'Connecting…',
+    p2pStatus_connected: 'Connected',
+    p2pStatus_ready: 'Ready',
+    p2pStatus_error: 'Error',
+    anonymousInviteExpirationIntro: 'Choose an expiry date for the invitation.',
+    personalizedInviteFormIntro:
+      "Choose your guest's name, their role, and an expiry date for the invitation.",
+    qrEnlargeAria: 'Open enlarged QR in a new tab (to scan)',
     tabWotPlaceholder:
       'Certifications, validations and trust indicators will live here (WoT G2 milestone).',
     guideTitle: 'What can you do here?',
@@ -546,6 +575,14 @@ const en = {
       'Invitation detected: after connecting to the host, claim your identity if asked; the invite link has a validity window independent of the P2P session.',
     contextMessage_ownDevice:
       '“Second device” session: same database as the main PC; batch-validate proposals when you return to the main screen.',
+    contextMessage_deviceInvites:
+      'Connect a smartphone or tablet to work remotely on your tree.\nKeep the PC on with G2 open.\nIf the computer sleeps, the session can stop: restart it here.',
+    contextMessage_anonymousInvites:
+      'Create anonymous free-visit links.\nSet the visibility profile applied to these invitees before generating links.',
+    contextMessage_personalizedInvites:
+      'Create a named invitation: choose the invited person, role, and expiration.\nExchange scope appears when comparator mode is selected.',
+    ownDeviceResilienceSummary:
+      'Unsynced data stays in the mobile browser session.\nIf the tab is closed or reloaded, it may be lost.\nProposals already sent remain on the host PC pending decision.\nFor long offline work, keep the mobile tab open and the PC reachable.',
     guideScenariosTitle: 'Your situation',
     guideScenarioSoloTitle: 'Solo + phone or tablet',
     guideScenarioSoloDesc:
@@ -622,6 +659,11 @@ const en = {
     completeIdentityBody:
       'You joined via an invitation: claim a living individual and your device keys in the Identity tab (right panel).',
     completeIdentityCta: 'Open Identity tab',
+    peerIdentityHeading: 'Peer identities',
+    peerIdentityEmpty: 'No known peer identities yet.',
+    peerIdentityClaimedAt: 'Claimed identity',
+    peerIdentityCertified: 'Certified',
+    peerIdentityCertify: 'Certify',
     wotHeading: 'Web of Trust (WoT)',
     wotIntro:
       'Local identity, peer attestations, and symmetric relationships: you see who introduced you and which visibility rules apply to each link.',
@@ -699,6 +741,11 @@ const en = {
     compareImportFields: 'Vital info and notes',
     compareImportDocuments: 'Documents and photos',
     peerRecordBadge: 'PEER record',
+    youLabel: 'You',
+    claimThisIdentity: 'Claim this identity',
+    viewPeerIdentity: 'View this identity',
+    certifiedLabel: 'Certified',
+    certifyLabel: 'Certify',
     peerDocumentsReadOnly: 'Peer documents are read-only here.',
     noIndividualCreatedOrSelected: 'No individual created nor selected',
     cancel: 'Cancel',

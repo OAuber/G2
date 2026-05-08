@@ -7,6 +7,11 @@ export interface InviteQrCodeProps {
   label?: string;
   size?: number;
   className?: string;
+  /** Ouvre une nouvelle fenêtre avec un QR agrandi (pour scanner au téléphone). */
+  enlargeOnClick?: boolean;
+  enlargeSize?: number;
+  /** Libellé accessibilité du bouton (titre + aria-label). */
+  enlargeAriaLabel?: string;
 }
 
 /** QR code pour une URL d’invitation (même contenu que le lien cliquable). */
@@ -16,6 +21,9 @@ export const InviteQrCode: React.FC<InviteQrCodeProps> = ({
   label,
   size = 120,
   className = '',
+  enlargeOnClick = false,
+  enlargeSize = 320,
+  enlargeAriaLabel,
 }) => {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -55,9 +63,44 @@ export const InviteQrCode: React.FC<InviteQrCodeProps> = ({
     );
   }
 
+  const openEnlarged = async () => {
+    if (!enlargeOnClick) return;
+    try {
+      const enlargedDataUrl = await QRCode.toDataURL(url, {
+        width: enlargeSize,
+        margin: 1,
+        color: {
+          dark: isDarkMode ? '#e2e8f0' : '#0f172a',
+          light: isDarkMode ? '#0f172a' : '#ffffff',
+        },
+      });
+      window.open(enlargedDataUrl, '_blank');
+    } catch {
+      // Fallback: ouvrir quand même la version déjà rendue dans un nouvel onglet.
+      window.open(dataUrl, '_blank');
+    }
+  };
+
+  const qrImg = (
+    <img src={dataUrl} width={size} height={size} alt="" className="rounded border border-slate-500/30" />
+  );
+
   return (
     <div className={`flex flex-col items-center gap-1 ${className}`}>
-      <img src={dataUrl} width={size} height={size} alt="" className="rounded border border-slate-500/30" />
+      {enlargeOnClick ? (
+        <button
+          type="button"
+          onClick={openEnlarged}
+          {...(enlargeAriaLabel
+            ? { title: enlargeAriaLabel, 'aria-label': enlargeAriaLabel }
+            : {})}
+          className="p-0 m-0 border-0 bg-transparent rounded cursor-pointer hover:opacity-90"
+        >
+          {qrImg}
+        </button>
+      ) : (
+        qrImg
+      )}
       {label ? (
         <span className={`text-[10px] text-center max-w-[140px] ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
           {label}

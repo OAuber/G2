@@ -208,8 +208,20 @@ const fr = {
     processing: 'Traitement...',
   },
   landing: {
-    subtitle: 'Génération par Génération',
-    tagline: 'Pour les humains, par les humains',
+    subtitle: "un réseau d'humains",
+    tagline: 'Génération par Génération',
+    pasteInviteHint: 'Vous avez reçu un lien d’invitation ? Collez-le ici.',
+    pasteInvitePlaceholder: 'URL d’invitation',
+    linkOnlyHint: 'Veuillez coller un lien d’invitation complet.',
+    validateInvite: 'Valider',
+    start: 'Démarrer',
+    noInviteHint: "Vous n'avez pas de lien d’invitation ? Explorez les pages ci-dessous.",
+    startOverlayTitle: 'Démarrer avec G2',
+    startOverlayIntro:
+      'Cet espace vous guide pour prendre en main l’application : identifiez-vous, chargez votre base, puis explorez et partagez.',
+    startOverlayStep1: '1. Ouvrez ou importez votre GEDCOM dans Données.',
+    startOverlayStep2: '2. Revendiquez votre identité via la fiche qui vous correspond.',
+    startOverlayStep3: '3. Utilisez les onglets d’invitation pour partager par lien.',
     actions: {
       import: 'IMPORTER',
       create: 'CRÉER',
@@ -220,7 +232,8 @@ const fr = {
     },
     links: {
       about: 'À propos',
-      help: 'Aide',
+      start: 'Démarrer',
+      settings: 'Paramètres',
       contribute: 'Contribuer',
       contact: 'Contact',
     },
@@ -507,6 +520,8 @@ const fr = {
     ownDeviceInviteTitle: 'Auto-invitation (mon téléphone ou tablette)',
     ownDeviceInviteHint:
       'Lien durable pour le même compte que sur ce PC : PC laissé allumé à la maison, saisie sur mobile au fil du temps. Choisissez une expiration lointaine ou aucune.',
+    deviceInviteNeedsIdentity:
+      'Revendiquez votre identité pour créer un lien vers votre smartphone ou tablette.',
     ownDeviceRole: 'Rôle sur le second appareil',
     ownDeviceTtl: "Validité du jeton (TTL)",
     ownDeviceTtlNone: 'Sans expiration (recommandé vacances / collecte longue)',
@@ -522,13 +537,27 @@ const fr = {
     inviteLandingOwnDeviceHint:
       'Invitation « second appareil » : même base que sur le PC hôte ; validez les fiches en lot quand vous rentrez, ou refusez en cas de doute.',
     tabGuide: 'Guide',
-    tabNetwork: 'Connexion',
-    tabSession: 'Échange',
-    tabInvitations: 'Invitations',
+    tabDeviceInvites: 'Connecter un autre appareil',
+    tabAnonymousInvites: 'Invitations anonymes',
+    tabPersonalizedInvites: 'Invitations personnalisées',
     tabProposals: 'À valider',
     tabPrivacy: 'Visibilité',
     tabActivity: 'Activité',
     tabWot: 'Identité & confiance',
+    tabYourIdentity: 'Votre identité',
+    tabPeerIdentities: 'Identité des pairs',
+    selectTabPrompt: "Choisissez un onglet ci-dessus pour afficher son contenu.",
+    connectionState: 'Connexion physique',
+    restartConnection: 'Relancer',
+    p2pStatus_disconnected: 'Déconnecté',
+    p2pStatus_connecting: 'Connexion…',
+    p2pStatus_connected: 'Connecté',
+    p2pStatus_ready: 'Prêt',
+    p2pStatus_error: 'Erreur',
+    anonymousInviteExpirationIntro: "Choisissez une date d'expiration de l'invitation.",
+    personalizedInviteFormIntro:
+      "Choisissez le nom de votre invité, son rôle, et une date d'expiration de l'invitation.",
+    qrEnlargeAria: 'Ouvrir le QR en grand dans un nouvel onglet (pour le flasher)',
     tabWotPlaceholder:
       'Certifications, validations et indicateurs de confiance seront regroupés ici (jalon WoT G2).',
     guideTitle: 'Que pouvez-vous faire ici ?',
@@ -547,6 +576,14 @@ const fr = {
       'Invitation détectée : après connexion au hôte, revendiquez votre identité si demandé ; le lien d’invitation a une durée de validité indépendante de la session P2P.',
     contextMessage_ownDevice:
       'Session « second appareil » : même base que le PC hôte ; validez les propositions en lot quand vous revenez sur l’écran principal.',
+    contextMessage_deviceInvites:
+      'Connectez un smartphone ou une tablette pour travailler à distance sur votre base.\nLe PC doit rester allumé avec G2 ouvert.\nEn veille prolongée, la session peut être interrompue : relancez-la ici.',
+    contextMessage_anonymousInvites:
+      'Créez des liens anonymes de visite libre.\nDéfinissez le profil de visibilité appliqué à ces invités avant de générer les liens.',
+    contextMessage_personalizedInvites:
+      'Créez une invitation nominative : choisissez la personne invitée, le rôle et l’expiration.\nLe périmètre d’échange apparaît en mode comparateur.',
+    ownDeviceResilienceSummary:
+      "Les données non encore synchronisées restent dans la session du navigateur mobile.\nSi l'onglet est fermé ou rechargé, elles peuvent être perdues.\nLes propositions déjà envoyées restent côté PC en attente de décision.\nPour un travail hors ligne prolongé, gardez l'onglet mobile ouvert et le PC joignable.",
     guideScenariosTitle: 'Votre situation',
     guideScenarioSoloTitle: 'Seul + mobile ou tablette',
     guideScenarioSoloDesc:
@@ -624,6 +661,11 @@ const fr = {
     completeIdentityBody:
       'Vous avez rejoint une session via invitation : revendiquez une fiche vivante et vos clés dans l’onglet Identité du panneau de droite.',
     completeIdentityCta: 'Ouvrir l’onglet Identité',
+    peerIdentityHeading: 'Identité des pairs',
+    peerIdentityEmpty: 'Aucun pair identifié pour le moment.',
+    peerIdentityClaimedAt: 'Identité revendiquée',
+    peerIdentityCertified: 'Certifié',
+    peerIdentityCertify: 'Certifier',
     wotHeading: 'Toile de confiance (WoT)',
     wotIntro:
       'Identité locale, attestations entre pairs et relations symétriques : vous voyez qui vous a introduit et quelles règles de visibilité s’appliquent à chaque lien.',
@@ -701,6 +743,11 @@ const fr = {
     compareImportFields: 'État civil et notes',
     compareImportDocuments: 'Documents et photos',
     peerRecordBadge: 'Fiche PAIR',
+    youLabel: 'Vous',
+    claimThisIdentity: 'Revendiquer cette identité',
+    viewPeerIdentity: 'Voir cette identité',
+    certifiedLabel: 'Certifié',
+    certifyLabel: 'Certifier',
     peerDocumentsReadOnly: 'Documents du pair en lecture seule.',
     noIndividualCreatedOrSelected: 'Aucun individu créé ou sélectionné',
     cancel: 'Annuler',

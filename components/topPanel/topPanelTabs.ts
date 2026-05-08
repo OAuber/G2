@@ -1,36 +1,33 @@
-/** Onglets du panneau Partager (guide pédagogique en premier). */
+/** Onglets actifs du panneau Partager. */
 
 export type TopPanelTabId =
-  | 'guide'
-  | 'network'
-  | 'session'
-  | 'invitations'
+  | 'deviceInvites'
+  | 'anonymousInvites'
+  | 'personalizedInvites'
   | 'proposals'
-  | 'privacy'
   | 'activity'
-  | 'wot';
+  | 'yourIdentity'
+  | 'peerIdentities';
 
 /** Niveau d’état pour le témoin lumineux */
 export type TabIndicatorLevel = 'ok' | 'warning' | 'error' | 'idle' | 'future';
 
 export const TOP_PANEL_TAB_ORDER: TopPanelTabId[] = [
-  'guide',
-  'network',
-  'session',
-  'invitations',
+  'deviceInvites',
+  'anonymousInvites',
+  'personalizedInvites',
   'proposals',
-  'privacy',
   'activity',
-  'wot',
+  'yourIdentity',
+  'peerIdentities',
 ];
 
 export const TOP_PANEL_TAB_I18N: Record<TopPanelTabId, string> = {
-  guide: 'topPanel.tabGuide',
-  network: 'topPanel.tabNetwork',
-  session: 'topPanel.tabSession',
-  invitations: 'topPanel.tabInvitations',
+  deviceInvites: 'topPanel.tabDeviceInvites',
+  anonymousInvites: 'topPanel.tabAnonymousInvites',
+  personalizedInvites: 'topPanel.tabPersonalizedInvites',
   proposals: 'topPanel.tabProposals',
-  privacy: 'topPanel.tabPrivacy',
   activity: 'topPanel.tabActivity',
-  wot: 'topPanel.tabWot',
+  yourIdentity: 'topPanel.tabYourIdentity',
+  peerIdentities: 'topPanel.tabPeerIdentities',
 };

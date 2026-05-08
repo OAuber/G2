@@ -43,7 +43,7 @@ export const DEFAULT_LAYOUT_PARAMS: LayoutParams = {
   leafWidthRatio: 1.6,
 };
 
-export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type P2PStatus = 'disconnected' | 'connecting' | 'connected' | 'ready' | 'error';
 export type P2PMode = 'host' | 'client' | null;
 export type SelfIdentityStatus = 'unidentified' | 'claimed' | 'witnessed';
 

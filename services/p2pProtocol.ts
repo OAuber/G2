@@ -32,6 +32,7 @@ export type P2PMessageType =
   | 'MATCH_FOUND'
   | 'CONTACT_REQUEST'
   | 'CONTACT_RESPONSE'
+  | 'PEER_IDENTITY_CERTIFY'
   | 'ACK';
 
 export type P2PErrorCode =

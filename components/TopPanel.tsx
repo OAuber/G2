@@ -1,26 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Network,
-  Copy,
-  Check,
   WifiOff,
-  BookOpen,
-  Link2,
-  RefreshCw,
-  Send,
-  ListChecks,
-  Shield,
-  BarChart3,
-  Fingerprint,
-  Smartphone,
-  UserPlus,
-  Users,
-  Share2,
 } from 'lucide-react';
 import { P2PStatus, P2PMode, IdentityIntroductionContext } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
 import { useI18n } from '../i18n';
-import { TOP_PANEL_TAB_I18N, type TopPanelTabId, type TabIndicatorLevel } from './topPanel/topPanelTabs';
+import { type TopPanelTabId, type TabIndicatorLevel } from './topPanel/topPanelTabs';
 import { TopPanelTabList } from './topPanel/TopPanelTabList';
 import type { InviteExchangeScope, P2PVisibilitySettings } from '../app/p2pAppTypes';
 import { defaultInviteExchangeScope } from '../services/inviteExchangeManifest';
@@ -142,17 +128,8 @@ interface TopPanelProps {
   // P2P Props
   p2pStatus: P2PStatus;
   p2pMode: P2PMode;
-  localHasData: boolean;
-  remoteHasData: boolean | null;
   peerId: string | null;
   onInitP2P: () => void;
-  onConnectP2P: (hostId: string) => void;
-  onStartShare: () => void;
-  onStartCompare: () => void;
-  transferMode: 'progressive' | 'bundle';
-  onChangeTransferMode: (mode: 'progressive' | 'bundle') => void;
-  bundleContentMode: 'gedcom-only' | 'gedcom-and-documents';
-  onChangeBundleContentMode: (mode: 'gedcom-only' | 'gedcom-and-documents') => void;
   activityEvents: ActivityLogEvent[];
   proposals: Array<{
     proposalId: string;
@@ -188,15 +165,10 @@ interface TopPanelProps {
     linkKind?: InviteLinkKind;
     exchangeScope?: InviteExchangeScope;
   }>;
-  /** Partage/comparaison : session issue d’une invitation nominative (type 2). */
-  shareCompareAllowed?: boolean;
   /** Lien visite libre anonyme (1.2), sans individu ciblé. `expiresAt` = ISO optionnel. */
   onCreateEphemeralInvite?: (expiresAt?: string) => void;
   pendingInviteToken?: string | null;
   pendingProposalsCount: number;
-  syncStatusText?: string | null;
-  initialCompareStatusText?: string | null;
-  buildLabel?: string;
   onChangeVisibilitySettings: (next: P2PVisibilitySettings) => void;
   onCreateInvite: (
     individualId: string,
@@ -233,6 +205,17 @@ interface TopPanelProps {
   /** Hôte : périmètre d’échange (formulaire) — état piloté par `App` pour l’aligner avec la liste comparaison. */
   inviterExchangeScopeDraft?: InviteExchangeScope;
   onInviterExchangeScopeDraftChange?: (scope: InviteExchangeScope) => void;
+  /** Pilotage externe optionnel de l’onglet actif (redirections depuis Fiche). */
+  activeTabOverride?: TopPanelTabId | null;
+  onActiveTabChange?: (tab: TopPanelTabId | null) => void;
+  peerIdentityRows?: Array<{
+    peerId: string;
+    label: string;
+    claimedAt?: string;
+    certifiedByMe?: boolean;
+    certifiedByPeer?: boolean;
+  }>;
+  onTogglePeerCertifiedByMe?: (peerId: string, next: boolean) => void;
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -243,17 +226,8 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onMouseLeave,
   p2pStatus,
   p2pMode,
-  localHasData,
-  remoteHasData,
   peerId,
   onInitP2P,
-  onConnectP2P,
-  onStartShare,
-  onStartCompare,
-  transferMode,
-  onChangeTransferMode,
-  bundleContentMode,
-  onChangeBundleContentMode,
   activityEvents,
   proposals,
   visibilitySettings,
@@ -262,9 +236,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
   invites,
   pendingInviteToken,
   pendingProposalsCount,
-  syncStatusText,
-  initialCompareStatusText,
-  buildLabel,
   onChangeVisibilitySettings,
   onCreateInvite,
   onCreateOwnDeviceInvite,
@@ -280,7 +251,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
   identityIntroduction,
   onOpenIdentityPanel,
   showCompleteIdentityHint = false,
-  shareCompareAllowed = true,
   onCreateEphemeralInvite,
   compareSessionExtraHint = null,
   onOpenInviteeExchangeScope,
@@ -288,10 +258,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
   inviteeExchangeScopeSetupDone = false,
   inviterExchangeScopeDraft,
   onInviterExchangeScopeDraftChange,
+  activeTabOverride,
+  onActiveTabChange,
+  peerIdentityRows = [],
+  onTogglePeerCertifiedByMe,
 }) => {
   const { t } = useI18n();
-  const [targetHostId, setTargetHostId] = useState('');
-  const [copied, setCopied] = useState(false);
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
   const [newInviteRole, setNewInviteRole] = useState<'viewer' | 'contributor' | 'editor' | 'comparator'>('viewer');
   const [newInviteExpiresAt, setNewInviteExpiresAt] = useState('');
@@ -307,7 +279,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
       ? onInviterExchangeScopeDraftChange
       : setInternalInviteExchangeScope;
   const [ephemeralInviteExpiresAt, setEphemeralInviteExpiresAt] = useState('');
-  const [ownDeviceRole, setOwnDeviceRole] = useState<'viewer' | 'contributor' | 'editor'>('contributor');
   const [ownDeviceTtlPreset, setOwnDeviceTtlPreset] = useState<'none' | '365' | '730' | '1825' | 'custom'>('none');
   const [ownDeviceExpiresCustom, setOwnDeviceExpiresCustom] = useState('');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -315,7 +286,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
-  const [activeTab, setActiveTab] = useState<TopPanelTabId>('guide');
+  const [activeTab, setActiveTab] = useState<TopPanelTabId | null>(null);
+  useEffect(() => {
+    if (activeTabOverride === undefined) return;
+    setActiveTab(activeTabOverride);
+  }, [activeTabOverride]);
 
   const inviteExpiringSoon = useMemo(() => {
     const week = 7 * 24 * 60 * 60 * 1000;
@@ -326,46 +301,52 @@ const TopPanel: React.FC<TopPanelProps> = ({
     });
   }, [invites]);
 
+  const ownDeviceInvites = useMemo(
+    () => invites.filter((invite) => invite.inviteIntent === 'own_device'),
+    [invites],
+  );
+  const anonymousInvites = useMemo(
+    () => invites.filter((invite) => invite.linkKind === 'ephemeral_free'),
+    [invites],
+  );
+  const personalizedInvites = useMemo(
+    () =>
+      invites.filter(
+        (invite) => invite.inviteIntent !== 'own_device' && invite.linkKind !== 'ephemeral_free',
+      ),
+    [invites],
+  );
+
   const tabIndicators = useMemo((): Record<TopPanelTabId, TabIndicatorLevel> => {
-    let network: TabIndicatorLevel = 'idle';
-    if (!isOnline) network = 'error';
-    else if (p2pStatus === 'connected') network = 'ok';
-    else if (p2pStatus === 'connecting') network = 'warning';
-    else network = 'idle';
+    let deviceInvitesLevel: TabIndicatorLevel = ownDeviceInvites.length > 0 ? 'ok' : 'idle';
+    if (ownDevicePendingCount > 0) deviceInvitesLevel = 'warning';
+    if (!isOnline) deviceInvitesLevel = 'error';
 
-    let session: TabIndicatorLevel = 'idle';
-    if (p2pStatus === 'connected') {
-      if (syncStatusText || initialCompareStatusText) session = 'warning';
-      else session = 'ok';
-    }
+    let anonymousInvitesLevel: TabIndicatorLevel = anonymousInvites.length > 0 ? 'ok' : 'idle';
+    if (inviteExpiringSoon) anonymousInvitesLevel = 'warning';
 
-    let invitations: TabIndicatorLevel = 'idle';
-    if (invites.length > 0 || pendingInviteToken) invitations = 'ok';
-    if (ownDevicePendingCount > 0 || inviteExpiringSoon) invitations = 'warning';
+    let personalizedInvitesLevel: TabIndicatorLevel = personalizedInvites.length > 0 ? 'ok' : 'idle';
+    if (pendingInviteToken) personalizedInvitesLevel = 'warning';
 
     const proposalsTab: TabIndicatorLevel =
       pendingProposalsCount > 0 ? 'error' : proposals.length > 0 ? 'ok' : 'idle';
 
-    const privacy: TabIndicatorLevel = 'ok';
-
     const activity: TabIndicatorLevel = activityEvents.length > 0 ? 'ok' : 'idle';
 
     return {
-      guide: 'idle',
-      network,
-      session,
-      invitations,
+      deviceInvites: deviceInvitesLevel,
+      anonymousInvites: anonymousInvitesLevel,
+      personalizedInvites: personalizedInvitesLevel,
       proposals: proposalsTab,
-      privacy,
       activity,
-      wot: isIdentityClaimed ? 'ok' : 'warning',
+      yourIdentity: isIdentityClaimed ? 'ok' : 'warning',
+      peerIdentities: peerIdentityRows.length > 0 ? 'ok' : 'idle',
     };
   }, [
     isOnline,
-    p2pStatus,
-    syncStatusText,
-    initialCompareStatusText,
-    invites.length,
+    ownDeviceInvites.length,
+    anonymousInvites.length,
+    personalizedInvites.length,
     pendingInviteToken,
     isIdentityClaimed,
     ownDevicePendingCount,
@@ -373,6 +354,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
     pendingProposalsCount,
     proposals.length,
     activityEvents.length,
+    peerIdentityRows.length,
   ]);
 
   const indicatorDotClass = (level: TabIndicatorLevel): string => {
@@ -403,14 +385,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
     };
   }, []);
 
-  const handleCopyId = () => {
-    if (peerId) {
-      navigator.clipboard.writeText(peerId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-  
   const bgClass = isDarkMode ? 'bg-black/95 border-slate-800' : 'bg-white/95 border-slate-300';
   const textClass = isDarkMode ? 'text-slate-200' : 'text-slate-700';
   const subTextClass = isDarkMode ? 'text-slate-400' : 'text-slate-500';
@@ -464,6 +438,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
     if (role === 'comparator') return t('topPanel.roleComparator');
     return t('topPanel.roleEditor');
   };
+  const formatP2pStatusLabel = (status: P2PStatus): string => {
+    const key = `topPanel.p2pStatus_${status}`;
+    const translated = t(key);
+    return translated === key ? status : translated;
+  };
   const copyInviteLink = async (inviteId: string, link?: string) => {
     if (!link) return;
     await navigator.clipboard.writeText(link);
@@ -471,7 +450,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
     window.setTimeout(() => setCopiedInviteId((current) => (current === inviteId ? null : current)), 1800);
   };
   const isInviteMode = p2pMode === 'client' || !!pendingInviteToken;
-  const showShareAction = p2pMode === 'host';
 
   const sessionContextKey = useMemo(() => {
     if (pendingInviteToken) return 'invitee' as const;
@@ -480,6 +458,13 @@ const TopPanel: React.FC<TopPanelProps> = ({
     if (trustedOwnDevicePeerId) return 'ownDevice' as const;
     return 'solo' as const;
   }, [pendingInviteToken, p2pMode, trustedOwnDevicePeerId]);
+  const contextKey =
+    activeTab === 'deviceInvites' ||
+    activeTab === 'anonymousInvites' ||
+    activeTab === 'personalizedInvites'
+      ? activeTab
+      : sessionContextKey;
+  const canRestartConnection = isOnline && p2pStatus !== 'connected';
 
   const computeOwnDeviceExpiresAt = (): string | undefined => {
     if (ownDeviceTtlPreset === 'none') return undefined;
@@ -494,22 +479,15 @@ const TopPanel: React.FC<TopPanelProps> = ({
     }
     return undefined;
   };
-  // Allow actions when remote state is unknown; handlers perform final checks.
-  const canStartShare = showShareAction && localHasData && remoteHasData !== true && shareCompareAllowed;
-  const canStartCompare = localHasData && remoteHasData !== false && shareCompareAllowed;
-
   useEffect(() => {
     setProposalPage((prev) => Math.min(prev, proposalsPageCount - 1));
   }, [proposalsPageCount]);
 
   return (
     <div className="fixed top-0 left-0 right-0 z-[100] pointer-events-none">
-      <div
-        className="overflow-hidden"
-        style={{ maxHeight: isOpen ? 'calc(100vh - 120px)' : '0px', transition: 'max-height 300ms ease' }}
-      >
+      <div className="overflow-hidden" style={{ maxHeight: isOpen ? 'calc(100vh - 120px)' : '0px', transition: 'max-height 300ms ease' }}>
         <div 
-          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-3 py-1.5 shadow-xl h-[calc(100vh-120px)] overflow-y-auto`}
+          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-3 py-1.5 shadow-xl max-h-[calc(100vh-120px)] overflow-y-auto`}
           style={{ touchAction: 'pan-y' }}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
@@ -517,31 +495,70 @@ const TopPanel: React.FC<TopPanelProps> = ({
           <div className="w-full max-w-5xl mx-auto min-w-0 flex flex-col gap-2">
             <TopPanelTabList
               activeTab={activeTab}
-              onSelectTab={setActiveTab}
+              onSelectTab={(tab) => {
+                setActiveTab(tab);
+                onActiveTabChange?.(tab);
+              }}
               tabIndicators={tabIndicators}
               isDarkMode={isDarkMode}
               indicatorDotClass={indicatorDotClass}
             />
 
             <div
-              className={`rounded-lg border px-3 py-2 ${cardClass}`}
-              role="status"
-              aria-live="polite"
+              className={`rounded-lg border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}
             >
-              <span className={`font-bold uppercase tracking-wide text-[10px] ${subTextClass}`}>
-                {t('topPanel.contextBadge')}
-              </span>
-              <p className={`text-xs mt-1 leading-relaxed ${textClass}`}>
-                {t(`topPanel.contextMessage_${sessionContextKey}`)}
-              </p>
-              {compareSessionExtraHint && (
-                <p
-                  className={`text-[11px] mt-2 leading-relaxed border-t pt-2 ${isDarkMode ? 'border-slate-700 text-amber-200/95' : 'border-amber-200 text-amber-900'}`}
-                >
-                  {compareSessionExtraHint}
-                </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  <Network
+                    className={`w-3.5 h-3.5 shrink-0 ${!isOnline ? 'text-rose-500' : p2pStatus === 'connected' ? 'text-emerald-500' : 'text-amber-500'}`}
+                  />
+                  <span className={`font-medium ${textClass}`}>{t('topPanel.connectionState')}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded shrink-0 ${isDarkMode ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-700'}`}
+                  >
+                    {!isOnline ? t('topPanel.offline') : formatP2pStatusLabel(p2pStatus)}
+                  </span>
+                  {peerId && (
+                    <span className={`font-mono text-[10px] truncate max-w-[min(100%,12rem)] ${subTextClass}`}>
+                      {peerId}
+                    </span>
+                  )}
+                </div>
+                {canRestartConnection && (
+                  <button
+                    type="button"
+                    onClick={onInitP2P}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold shrink-0 ${btnAction}`}
+                  >
+                    {t('topPanel.restartConnection')}
+                  </button>
+                )}
+              </div>
+              {!isOnline && (
+                <div className={`mt-1 flex items-center gap-1 text-[10px] ${subTextClass}`}>
+                  <WifiOff className="w-3 h-3" /> {t('topPanel.localMode')}
+                </div>
               )}
             </div>
+
+            {activeTab && (
+              <div
+                className={`rounded-lg border px-3 py-2 ${cardClass}`}
+                role="status"
+                aria-live="polite"
+              >
+                <p className={`text-xs leading-relaxed whitespace-pre-line ${textClass}`}>
+                  {t(`topPanel.contextMessage_${contextKey}`)}
+                </p>
+                {compareSessionExtraHint && (
+                  <p
+                    className={`text-[11px] mt-2 leading-relaxed border-t pt-2 ${isDarkMode ? 'border-slate-700 text-amber-200/95' : 'border-amber-200 text-amber-900'}`}
+                  >
+                    {compareSessionExtraHint}
+                  </p>
+                )}
+              </div>
+            )}
 
             {isInviteMode && showCompleteIdentityHint && onOpenIdentityPanel && (
               <div
@@ -555,7 +572,11 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 <p className={`text-[11px] mt-1 ${subTextClass}`}>{t('topPanel.completeIdentityBody')}</p>
                 <button
                   type="button"
-                  onClick={onOpenIdentityPanel}
+                  onClick={() => {
+                    onOpenIdentityPanel();
+                    setActiveTab('yourIdentity');
+                    onActiveTabChange?.('yourIdentity');
+                  }}
                   className={`mt-2 text-[11px] px-3 py-1.5 rounded font-bold ${
                     isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
                   }`}
@@ -586,330 +607,242 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
             <div
               className="min-h-0"
-              role="tabpanel"
-              id={`top-panel-${activeTab}`}
-              aria-labelledby={`top-tab-${activeTab}`}
             >
-          {activeTab === 'guide' && (
-            <section className={`rounded-xl border p-4 space-y-4 ${cardClass}`}>
-              <div className="flex items-start gap-3">
-                <BookOpen className={`w-8 h-8 shrink-0 ${isDarkMode ? 'text-sky-400' : 'text-sky-600'}`} aria-hidden />
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.guideTitle')}</h3>
-                  <p className={`text-xs mt-1.5 leading-relaxed ${subTextClass}`}>{t('topPanel.guideIntro')}</p>
-                  <p className={`text-[11px] mt-2 leading-relaxed ${subTextClass} opacity-95`}>
-                    {t('topPanel.guideServerHint')}
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideScenariosTitle')}</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {(
-                    [
-                      {
-                        tab: 'invitations' as const,
-                        Icon: Smartphone,
-                        titleKey: 'guideScenarioSoloTitle',
-                        descKey: 'guideScenarioSoloDesc',
-                      },
-                      {
-                        tab: 'invitations' as const,
-                        Icon: UserPlus,
-                        titleKey: 'guideScenarioHostTitle',
-                        descKey: 'guideScenarioHostDesc',
-                      },
-                      {
-                        tab: 'network' as const,
-                        Icon: Users,
-                        titleKey: 'guideScenarioGuestTitle',
-                        descKey: 'guideScenarioGuestDesc',
-                      },
-                      {
-                        tab: 'wot' as const,
-                        Icon: Share2,
-                        titleKey: 'guideScenarioWotTitle',
-                        descKey: 'guideScenarioWotDesc',
-                      },
-                    ] as const
-                  ).map(({ tab, Icon, titleKey, descKey }, i) => (
-                    <div
-                      key={`${titleKey}-${i}`}
-                      className={`rounded-lg border p-3 flex flex-col gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Icon className={`w-4 h-4 shrink-0 ${isDarkMode ? 'text-violet-400' : 'text-violet-600'}`} aria-hidden />
-                        <span className={`text-xs font-bold ${textClass}`}>{t(`topPanel.${titleKey}`)}</span>
-                      </div>
-                      <p className={`text-[11px] leading-snug flex-1 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab(tab)}
-                        className={`text-[11px] px-2 py-1.5 rounded font-semibold w-full sm:w-auto self-start ${
-                          isDarkMode
-                            ? 'bg-violet-900/80 hover:bg-violet-800 text-violet-100 border border-violet-800'
-                            : 'bg-violet-100 hover:bg-violet-200 text-violet-900 border border-violet-200'
-                        }`}
-                      >
-                        {t('topPanel.guideOpen')} — {t(TOP_PANEL_TAB_I18N[tab])}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideSharingModesTitle')}</h4>
-                <div className={`space-y-2 rounded-lg border p-3 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
-                  {(
-                    [
-                      { Icon: Link2, titleKey: 'guideModePeerTitle', descKey: 'guideModePeerDesc' },
-                      { Icon: Send, titleKey: 'guideModeLinkTitle', descKey: 'guideModeLinkDesc' },
-                      { Icon: Share2, titleKey: 'guideModeWotTitle', descKey: 'guideModeWotDesc' },
-                    ] as const
-                  ).map(({ Icon, titleKey, descKey }) => (
-                    <div key={titleKey} className="flex gap-2 items-start">
-                      <Icon className={`w-4 h-4 shrink-0 mt-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`} aria-hidden />
-                      <div>
-                        <div className={`text-xs font-semibold ${textClass}`}>{t(`topPanel.${titleKey}`)}</div>
-                        <p className={`text-[11px] leading-snug mt-0.5 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.guideQuickLinksTitle')}</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {(
-                    [
-                      { tab: 'network' as const, Icon: Link2, titleKey: 'guideUseNetworkTitle', descKey: 'guideUseNetworkDesc' },
-                      { tab: 'session', Icon: RefreshCw, titleKey: 'guideUseSessionTitle', descKey: 'guideUseSessionDesc' },
-                      { tab: 'invitations', Icon: Send, titleKey: 'guideUseInvitationsTitle', descKey: 'guideUseInvitationsDesc' },
-                      { tab: 'proposals', Icon: ListChecks, titleKey: 'guideUseProposalsTitle', descKey: 'guideUseProposalsDesc' },
-                      { tab: 'privacy', Icon: Shield, titleKey: 'guideUsePrivacyTitle', descKey: 'guideUsePrivacyDesc' },
-                      { tab: 'activity', Icon: BarChart3, titleKey: 'guideUseActivityTitle', descKey: 'guideUseActivityDesc' },
-                      { tab: 'wot', Icon: Fingerprint, titleKey: 'guideUseWotTitle', descKey: 'guideUseWotDesc' },
-                    ] as const
-                  ).map(({ tab, Icon, titleKey, descKey }) => (
-                    <div
-                      key={tab}
-                      className={`rounded-lg border p-3 flex flex-col gap-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Icon className={`w-4 h-4 shrink-0 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`} aria-hidden />
-                        <span className={`text-xs font-bold ${textClass}`}>{t(`topPanel.${titleKey}`)}</span>
-                      </div>
-                      <p className={`text-[11px] leading-snug flex-1 ${subTextClass}`}>{t(`topPanel.${descKey}`)}</p>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab(tab)}
-                        className={`text-[11px] px-2 py-1.5 rounded font-semibold w-full sm:w-auto self-start ${
-                          isDarkMode ? 'bg-sky-900/80 hover:bg-sky-800 text-sky-100 border border-sky-800' : 'bg-sky-100 hover:bg-sky-200 text-sky-900 border border-sky-200'
-                        }`}
-                      >
-                        {t('topPanel.guideOpen')} — {t(TOP_PANEL_TAB_I18N[tab])}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* P2P Network Section — onglet Réseau */}
-          {activeTab === 'network' && (
-          <div className="space-y-2">
-          <div className={`flex flex-wrap items-center gap-2 rounded-lg border p-3 ${isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-            <Network className={`w-3.5 h-3.5 shrink-0 ${!isOnline ? 'text-red-500' : (p2pStatus === 'connected' ? 'text-green-500' : 'text-slate-500')}`} />
-            
-            {!isOnline ? (
-              <span className="text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-500 rounded flex items-center gap-1 shrink-0">
-                <WifiOff className="w-3 h-3" /> {t('topPanel.offline')}
-              </span>
-            ) : (
-              <>
-                {p2pStatus === 'disconnected' && (
-                  <button onClick={onInitP2P} className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold text-[10px] transition-colors shadow-sm shrink-0 ${btnAction}`}>
-                    {t('topPanel.enableP2P')}
+        {activeTab === 'deviceInvites' && (
+          <section className={`rounded-lg border p-3 space-y-2 ${cardClass}`}>
+            {!selfIndividualId && !isInviteMode && (
+              <p className={`text-[11px] ${subTextClass}`}>{t('topPanel.deviceInviteNeedsIdentity')}</p>
+            )}
+            {!isInviteMode && (
+              <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+                {t('topPanel.ownDeviceResilienceSummary')}
+              </p>
+            )}
+            {!isInviteMode && trustedOwnDevicePeerId && (onOwnDeviceAcceptAll || onOwnDeviceRejectAllAndRevoke) && (
+              <div className={`flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 ${isDarkMode ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-white'}`}>
+                <span className={`text-[11px] ${textClass}`}>
+                  {t('topPanel.ownDeviceSessionBadge').replace('{{count}}', String(ownDevicePendingCount))}
+                </span>
+                {onOwnDeviceAcceptAll && (
+                  <button
+                    type="button"
+                    onClick={() => onOwnDeviceAcceptAll()}
+                    disabled={ownDevicePendingCount === 0}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold disabled:opacity-40 ${btnAction}`}
+                  >
+                    {t('topPanel.ownDeviceAcceptAll')}
                   </button>
                 )}
-                {p2pStatus !== 'disconnected' && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${p2pStatus === 'connected' ? 'bg-green-500/20 text-green-500' : 'bg-yellow-500/20 text-yellow-500'}`}>
-                    {p2pStatus}
-                  </span>
-                )}
-              </>
-            )}
-
-            {isOnline && p2pStatus !== 'disconnected' && (
-              <div className="flex items-center gap-1 min-w-0">
-                {peerId ? (
-                  <>
-                    <div className="flex flex-col min-w-0">
-                      <span className={`text-[9px] ${subTextClass}`}>{t('topPanel.myPeerId')}</span>
-                      <input
-                        readOnly
-                        value={peerId}
-                        className={`w-24 text-[9px] font-mono px-1 py-0.5 rounded border ${inputBg} opacity-70`}
-                      />
-                    </div>
-                    <button onClick={handleCopyId} className={`p-0.5 rounded shrink-0 ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'} ${textClass}`}>
-                      {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                    </button>
-                  </>
-                ) : <span className="text-[9px] opacity-50 animate-pulse">{t('topPanel.idLoading')}</span>}
-                
-                {p2pStatus !== 'connected' && (
-                  <>
-                    <div className="flex flex-col min-w-0">
-                      <span className={`text-[9px] ${subTextClass}`}>{t('topPanel.yourPeerId')}</span>
-                      <input
-                        placeholder={t('topPanel.peerIdPlaceholder')}
-                        value={targetHostId}
-                        onChange={e => setTargetHostId(e.target.value)}
-                        className={`w-36 text-[9px] px-1 py-0.5 rounded border ${inputBg}`}
-                      />
-                    </div>
-                    <button 
-                      onClick={() => onConnectP2P(targetHostId)}
-                      disabled={!targetHostId}
-                      className={`flex items-center px-2 py-0.5 rounded font-bold text-[10px] transition-colors shadow-sm shrink-0 ${btnAction} disabled:opacity-50`}
-                    >
-                      {t('topPanel.go')}
-                    </button>
-                  </>
+                {onOwnDeviceRejectAllAndRevoke && (
+                  <button
+                    type="button"
+                    onClick={() => onOwnDeviceRejectAllAndRevoke()}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold ${isDarkMode ? 'bg-rose-900 hover:bg-rose-800 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
+                  >
+                    {t('topPanel.ownDeviceRejectAndRevoke')}
+                  </button>
                 )}
               </div>
             )}
-          </div>
-
-          {!isOnline && (
-            <span className={`text-[9px] ${subTextClass} italic`}>{t('topPanel.localMode')}</span>
-          )}
-          {isOnline && (
-            <p className={`text-[10px] mt-1 ${subTextClass}`}>{t('topPanel.networkPeerIdHint')}</p>
-          )}
-          </div>
-          )}
-
-          {activeTab === 'session' && (
-          <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-          {isOnline && syncStatusText && (
-            <span
-              className={`text-[9px] px-1.5 py-0.5 rounded border ${
-                isDarkMode ? 'border-slate-700 bg-slate-900/60 text-cyan-300' : 'border-slate-300 bg-white text-cyan-700'
-              }`}
-            >
-              {t('topPanel.sync')}: {syncStatusText}
-            </span>
-          )}
-          {isOnline && initialCompareStatusText && (
-            <span
-              className={`text-[9px] px-1.5 py-0.5 rounded border ${
-                isDarkMode ? 'border-slate-700 bg-slate-900/60 text-violet-300' : 'border-slate-300 bg-white text-violet-700'
-              }`}
-            >
-              {t('topPanel.compare')}: {initialCompareStatusText}
-            </span>
-          )}
-          </div>
-          <p className={`text-[10px] ${subTextClass}`}>{t('topPanel.sessionDurabilityHint')}</p>
-          {!shareCompareAllowed && p2pStatus === 'connected' && (
-            <p className={`text-[10px] mt-1 ${subTextClass}`}>{t('topPanel.shareCompareNamedInviteHint')}</p>
-          )}
-
-        {showCompleteIdentityHint && onOpenIdentityPanel && (
-          <div
-            className={`rounded-lg border p-3 mb-2 ${
-              isDarkMode ? 'border-amber-600/50 bg-amber-950/40' : 'border-amber-300 bg-amber-50'
-            }`}
-          >
-            <p className={`text-xs font-semibold ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
-              {t('topPanel.completeIdentityTitle')}
-            </p>
-            <p className={`text-[11px] mt-1 ${subTextClass}`}>{t('topPanel.completeIdentityBody')}</p>
-            <button
-              type="button"
-              onClick={onOpenIdentityPanel}
-              className={`mt-2 text-[11px] px-3 py-1.5 rounded font-bold ${
-                isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-              }`}
-            >
-              {t('topPanel.completeIdentityCta')}
-            </button>
-          </div>
+            {!isInviteMode && onCreateOwnDeviceInvite && selfIndividualId && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+                <select
+                  value={ownDeviceTtlPreset}
+                  onChange={(e) => setOwnDeviceTtlPreset(e.target.value as 'none' | '365' | '730' | '1825' | 'custom')}
+                  className={`text-xs rounded border px-2 py-1 ${inputBg}`}
+                >
+                  <option value="none">{t('topPanel.ownDeviceTtlNone')}</option>
+                  <option value="365">{t('topPanel.ownDeviceTtl1y')}</option>
+                  <option value="730">{t('topPanel.ownDeviceTtl2y')}</option>
+                  <option value="1825">{t('topPanel.ownDeviceTtl5y')}</option>
+                  <option value="custom">{t('topPanel.ownDeviceTtlCustom')}</option>
+                </select>
+                {ownDeviceTtlPreset === 'custom' ? (
+                  <input
+                    type="date"
+                    value={ownDeviceExpiresCustom}
+                    onChange={(e) => setOwnDeviceExpiresCustom(e.target.value)}
+                    className={`text-xs rounded border px-2 py-1 ${inputBg}`}
+                  />
+                ) : (
+                  <div />
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onCreateOwnDeviceInvite('editor', computeOwnDeviceExpiresAt(), {
+                      exchangeScope: inviteExchangeScope,
+                    });
+                  }}
+                  className={`text-xs rounded px-2 py-1.5 font-semibold ${btnAction}`}
+                >
+                  {t('topPanel.createOwnDeviceInvite')}
+                </button>
+              </div>
+            )}
+            <InviteListCompact
+              invites={ownDeviceInvites}
+              isDarkMode={isDarkMode}
+              isInviteMode={isInviteMode}
+              copiedInviteId={copiedInviteId}
+              formatInviteRole={formatInviteRole}
+              onCopyInviteLink={copyInviteLink}
+              onRevokeInvite={onRevokeInvite}
+              onAcceptInvite={onAcceptInvite}
+              t={t}
+            />
+          </section>
         )}
 
-        {p2pStatus !== 'disconnected' && (
-          <div className="mt-0 flex items-center gap-2 flex-wrap">
-            {showShareAction && (
-              <label className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
-                <span>{t('topPanel.transferModeLabel')}</span>
-                <select
-                  value={transferMode}
-                  onChange={(e) => onChangeTransferMode(e.target.value as 'progressive' | 'bundle')}
-                  className={`text-[10px] rounded border px-1 py-0.5 ${inputBg}`}
+        {activeTab === 'anonymousInvites' && (
+          <section className={`rounded-lg border p-3 space-y-2 ${cardClass}`}>
+            <div className={`rounded border p-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
+              <h4 className={`text-[11px] font-semibold mb-1 ${textClass}`}>{t('topPanel.visibilityDefaultProfileTitle')}</h4>
+              <div className="space-y-1 text-xs">
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeIdentity')} checked={visibilitySettings.exposeIdentity} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeIdentity: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeDates')} checked={visibilitySettings.exposeDates} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposePlaces')} checked={visibilitySettings.exposePlaces} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposePlaces: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeNotes')} checked={visibilitySettings.exposeNotes} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeNotes: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDocumentsSync')} checked={visibilitySettings.allowDocuments} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDocuments: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDownload')} checked={visibilitySettings.allowDownload} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDownload: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowProposals')} checked={visibilitySettings.allowProposal} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })} />
+                <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
+              </div>
+            </div>
+            {!isInviteMode && onCreateEphemeralInvite && (
+              <>
+                <p className={`text-[11px] leading-relaxed ${subTextClass}`}>
+                  {t('topPanel.anonymousInviteExpirationIntro')}
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+                <input
+                  type="datetime-local"
+                  value={ephemeralInviteExpiresAt}
+                  onChange={(e) => setEphemeralInviteExpiresAt(e.target.value)}
+                  className={`text-xs rounded border px-2 py-1 ${inputBg}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const iso = ephemeralInviteExpiresAt
+                      ? new Date(ephemeralInviteExpiresAt).toISOString()
+                      : undefined;
+                    onCreateEphemeralInvite(iso);
+                  }}
+                  className={`text-xs rounded px-2 py-1.5 font-semibold ${btnAction}`}
                 >
-                  <option value="progressive">{t('topPanel.transferModeProgressive')}</option>
-                  <option value="bundle">{t('topPanel.transferModeBundle')}</option>
-                </select>
-              </label>
+                  {t('topPanel.createEphemeralInvite')}
+                </button>
+              </div>
+              </>
             )}
-            {showShareAction && transferMode === 'bundle' && (
-              <label className={`text-[10px] ${subTextClass} flex items-center gap-1`}>
-                <span>{t('topPanel.bundleContentLabel')}</span>
-                <select
-                  value={bundleContentMode}
-                  onChange={(e) => onChangeBundleContentMode(e.target.value as 'gedcom-only' | 'gedcom-and-documents')}
-                  className={`text-[10px] rounded border px-1 py-0.5 ${inputBg}`}
-                >
-                  <option value="gedcom-only">{t('topPanel.bundleContentGedcomOnly')}</option>
-                  <option value="gedcom-and-documents">{t('topPanel.bundleContentGedcomAndDocuments')}</option>
-                </select>
-              </label>
-            )}
-            {showShareAction && (
-              <button
-                onClick={onStartShare}
-                disabled={!canStartShare}
-                className={`text-[10px] px-2 py-1 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
-              >
-                {t('topPanel.share')}
-              </button>
-            )}
-            <button
-              onClick={onStartCompare}
-              disabled={!canStartCompare}
-              className={`text-[10px] px-2 py-1 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-violet-700 hover:bg-violet-600 text-white' : 'bg-violet-600 hover:bg-violet-500 text-white'}`}
-            >
-              {t('topPanel.compare')}
-            </button>
-            <button
-              disabled
-              className={`text-[10px] px-2 py-1 rounded font-bold opacity-50 cursor-not-allowed ${btnAction}`}
-              title={t('topPanel.comingSoon')}
-            >
-              {t('topPanel.search')}
-            </button>
-            <span className={`text-[9px] ${subTextClass}`}>
-              {t('topPanel.remoteGedcom')}: {remoteHasData === null ? t('topPanel.unknownShort') : remoteHasData ? t('topPanel.loaded') : t('topPanel.empty')}
-            </span>
-            <span className={`text-[9px] ${subTextClass}`}>
-              {t('topPanel.mode')}:{p2pMode || t('topPanel.none')} {t('topPanel.local')}:{localHasData ? t('topPanel.loaded') : t('topPanel.empty')} {t('topPanel.remote')}:{remoteHasData === null ? t('topPanel.unknownShort') : remoteHasData ? t('topPanel.loaded') : t('topPanel.empty')}
-            </span>
-            {buildLabel && (
-              <span className={`text-[9px] ${subTextClass}`}>
-                {t('topPanel.build')}: {buildLabel}
-              </span>
-            )}
-          </div>
+            <InviteListCompact
+              invites={anonymousInvites}
+              isDarkMode={isDarkMode}
+              isInviteMode={isInviteMode}
+              copiedInviteId={copiedInviteId}
+              formatInviteRole={formatInviteRole}
+              onCopyInviteLink={copyInviteLink}
+              onRevokeInvite={onRevokeInvite}
+              onAcceptInvite={onAcceptInvite}
+              t={t}
+            />
+          </section>
         )}
-          </div>
-          )}
+
+        {activeTab === 'personalizedInvites' && (
+          <section className={`rounded-lg border p-3 space-y-2 ${cardClass}`}>
+            {!isInviteMode && (
+              <>
+                <div className={`rounded border p-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
+                  <h4 className={`text-[11px] font-semibold mb-1 ${textClass}`}>{t('topPanel.visibilityDefaultProfileTitle')}</h4>
+                  <div className="space-y-1 text-xs">
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeIdentity')} checked={visibilitySettings.exposeIdentity} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeIdentity: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeDates')} checked={visibilitySettings.exposeDates} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposePlaces')} checked={visibilitySettings.exposePlaces} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposePlaces: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.exposeNotes')} checked={visibilitySettings.exposeNotes} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeNotes: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDocumentsSync')} checked={visibilitySettings.allowDocuments} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDocuments: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDownload')} checked={visibilitySettings.allowDownload} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDownload: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowProposals')} checked={visibilitySettings.allowProposal} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })} />
+                    <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
+                  </div>
+                </div>
+                <p className={`text-[11px] leading-relaxed ${subTextClass}`}>
+                  {t('topPanel.personalizedInviteFormIntro')}
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                  <InviteLivingMemberCombobox
+                    value={newInviteIndividualId}
+                    onChange={setNewInviteIndividualId}
+                    candidates={livingCandidates}
+                    placeholder={t('topPanel.selectLivingMember')}
+                    inputBg={inputBg}
+                    textClass={textClass}
+                    subTextClass={subTextClass}
+                  />
+                  <select
+                    value={newInviteRole}
+                    onChange={(e) => setNewInviteRole(e.target.value as 'viewer' | 'contributor' | 'editor' | 'comparator')}
+                    className={`text-xs rounded border px-2 py-1 ${inputBg}`}
+                  >
+                    <option value="viewer">{t('topPanel.roleViewer')}</option>
+                    <option value="contributor">{t('topPanel.roleContributor')}</option>
+                    <option value="editor">{t('topPanel.roleEditor')}</option>
+                    <option value="comparator">{t('topPanel.roleComparator')}</option>
+                  </select>
+                  <input
+                    type="date"
+                    value={newInviteExpiresAt}
+                    onChange={(e) => setNewInviteExpiresAt(e.target.value)}
+                    className={`text-xs rounded border px-2 py-1 ${inputBg}`}
+                  />
+                  <div />
+                </div>
+                {newInviteRole === 'comparator' && (
+                  <div className={`rounded border p-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
+                    <InviteExchangeScopeForm
+                      value={inviteExchangeScope}
+                      onChange={setInviteExchangeScope}
+                      isDarkMode={isDarkMode}
+                      rootCandidates={exchangeRootCandidates}
+                    />
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    if (!newInviteIndividualId) return;
+                    onCreateInvite(
+                      newInviteIndividualId,
+                      newInviteRole,
+                      newInviteExpiresAt ? new Date(newInviteExpiresAt).toISOString() : undefined,
+                      { exchangeScope: inviteExchangeScope },
+                    );
+                    setNewInviteIndividualId('');
+                    setNewInviteRole('viewer');
+                    setNewInviteExpiresAt('');
+                  }}
+                  className={`text-xs rounded px-2 py-1.5 font-semibold ${btnAction}`}
+                >
+                  {t('topPanel.createInvite')}
+                </button>
+              </>
+            )}
+            <InviteListCompact
+              invites={personalizedInvites}
+              isDarkMode={isDarkMode}
+              isInviteMode={isInviteMode}
+              copiedInviteId={copiedInviteId}
+              formatInviteRole={formatInviteRole}
+              onCopyInviteLink={copyInviteLink}
+              onRevokeInvite={onRevokeInvite}
+              onAcceptInvite={onAcceptInvite}
+              t={t}
+            />
+            {pendingInviteToken && (
+              <p className={`text-[11px] ${subTextClass}`}>{t('topPanel.pendingInviteToken')}</p>
+            )}
+          </section>
+        )}
 
         {activeTab === 'proposals' && (
         <div className="grid grid-cols-1 gap-4 mt-0">
@@ -1034,342 +967,9 @@ const TopPanel: React.FC<TopPanelProps> = ({
           </section>
         )}
 
-        {activeTab === 'privacy' && (
-          <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.visibilityProfilesTitle')}</h3>
-            <p className={`text-xs mb-3 leading-relaxed ${subTextClass}`}>{t('topPanel.visibilityProfilesIntro')}</p>
-            <h4 className={`text-xs font-bold uppercase tracking-wide mb-2 ${textClass}`}>
-              {t('topPanel.visibilityDefaultProfileTitle')}
-            </h4>
-            <div className="space-y-2 text-sm">
-              <ToggleRow label={t('topPanel.exposeIdentity')} checked={visibilitySettings.exposeIdentity} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeIdentity: checked })} />
-              <ToggleRow label={t('topPanel.exposeDates')} checked={visibilitySettings.exposeDates} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeDates: checked })} />
-              <ToggleRow label={t('topPanel.exposePlaces')} checked={visibilitySettings.exposePlaces} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposePlaces: checked })} />
-              <ToggleRow label={t('topPanel.exposeNotes')} checked={visibilitySettings.exposeNotes} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, exposeNotes: checked })} />
-              <ToggleRow label={t('topPanel.allowDocumentsSync')} checked={visibilitySettings.allowDocuments} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDocuments: checked })} />
-              <ToggleRow label={t('topPanel.allowDownload')} checked={visibilitySettings.allowDownload} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDownload: checked })} />
-              <ToggleRow label={t('topPanel.allowProposals')} checked={visibilitySettings.allowProposal} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowProposal: checked })} />
-              <ToggleRow label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
-            </div>
-            <p className={`text-[11px] mt-3 leading-relaxed italic ${subTextClass}`}>{t('topPanel.visibilityPerPeerNote')}</p>
-          </section>
-        )}
 
-        {activeTab === 'invitations' && (
-          <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-2">{t('topPanel.connectionProfiles')}</h3>
-            <p className={`text-xs mb-3 ${subTextClass}`}>
-              {isInviteMode ? t('topPanel.invitedModeHint') : t('topPanel.connectionProfilesHint')}
-            </p>
-            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.invitationsProfilesBridge')}</p>
-            {!isInviteMode && (
-              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-slate-600 bg-slate-900/30' : 'border-slate-200 bg-slate-50/90'}`}>
-                <InviteExchangeScopeForm
-                  value={inviteExchangeScope}
-                  onChange={setInviteExchangeScope}
-                  isDarkMode={isDarkMode}
-                  rootCandidates={exchangeRootCandidates}
-                />
-              </div>
-            )}
-            {!isInviteMode && onCreateEphemeralInvite && (
-              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-teal-900/80 bg-teal-950/25' : 'border-teal-200 bg-teal-50/80'}`}>
-                <div className={`text-sm font-bold mb-1 ${isDarkMode ? 'text-teal-300' : 'text-teal-800'}`}>
-                  {t('topPanel.ephemeralInviteSectionTitle')}
-                </div>
-                <p className={`text-[11px] mb-2 ${subTextClass}`}>{t('topPanel.ephemeralInviteSectionHint')}</p>
-                <label className={`block text-[11px] mb-2 ${subTextClass}`}>
-                  {t('topPanel.ephemeralInviteExpiresOptional')}
-                  <input
-                    type="datetime-local"
-                    value={ephemeralInviteExpiresAt}
-                    onChange={(e) => setEphemeralInviteExpiresAt(e.target.value)}
-                    className={`mt-1 block w-full max-w-xs rounded border px-2 py-1 text-sm ${inputBg}`}
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const iso = ephemeralInviteExpiresAt
-                      ? new Date(ephemeralInviteExpiresAt).toISOString()
-                      : undefined;
-                    onCreateEphemeralInvite(iso);
-                  }}
-                  className={`text-sm rounded px-3 py-2 font-semibold ${isDarkMode ? 'bg-teal-800 hover:bg-teal-700 text-white' : 'bg-teal-600 text-white hover:bg-teal-500'}`}
-                >
-                  {t('topPanel.createEphemeralInvite')}
-                </button>
-              </div>
-            )}
-            {!isInviteMode && (
-            <>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-1">
-              <InviteLivingMemberCombobox
-                value={newInviteIndividualId}
-                onChange={setNewInviteIndividualId}
-                candidates={livingCandidates}
-                placeholder={t('topPanel.selectLivingMember')}
-                inputBg={inputBg}
-                textClass={textClass}
-                subTextClass={subTextClass}
-              />
-              <select
-                value={newInviteRole}
-                onChange={(e) =>
-                  setNewInviteRole(e.target.value as 'viewer' | 'contributor' | 'editor' | 'comparator')
-                }
-                className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-              >
-                <option value="viewer">{t('topPanel.roleViewer')}</option>
-                <option value="contributor">{t('topPanel.roleContributor')}</option>
-                <option value="editor">{t('topPanel.roleEditor')}</option>
-                <option value="comparator">{t('topPanel.roleComparator')}</option>
-              </select>
-              <input
-                type="date"
-                value={newInviteExpiresAt}
-                onChange={(e) => setNewInviteExpiresAt(e.target.value)}
-                className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-                title={t('topPanel.inviteExpiryOptionalHint')}
-              />
-              <button
-                onClick={() => {
-                  if (!newInviteIndividualId) return;
-                  onCreateInvite(
-                    newInviteIndividualId,
-                    newInviteRole,
-                    newInviteExpiresAt ? new Date(newInviteExpiresAt).toISOString() : undefined,
-                    { exchangeScope: inviteExchangeScope },
-                  );
-                  setNewInviteIndividualId('');
-                  setNewInviteRole('viewer');
-                  setNewInviteExpiresAt('');
-                }}
-                className={`text-sm rounded px-3 py-1.5 font-semibold ${isDarkMode ? 'bg-blue-700 hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
-              >
-                {t('topPanel.createInvite')}
-              </button>
-            </div>
-            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.inviteExpiryOptionalHint')}</p>
-            <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.comparatorRoleHint')}</p>
-            </>
-            )}
-            {!isInviteMode && onCreateOwnDeviceInvite && selfIndividualId && (
-              <div className={`mb-4 rounded-lg border p-3 ${isDarkMode ? 'border-indigo-900/80 bg-indigo-950/30' : 'border-indigo-200 bg-indigo-50/80'}`}>
-                <div className={`text-sm font-bold mb-1 ${isDarkMode ? 'text-indigo-300' : 'text-indigo-800'}`}>{t('topPanel.ownDeviceInviteTitle')}</div>
-                <p className={`text-[11px] mb-3 ${subTextClass}`}>{t('topPanel.ownDeviceInviteHint')}</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2 items-end">
-                  <label className={`flex flex-col gap-0.5 text-[11px] ${subTextClass}`}>
-                    <span>{t('topPanel.ownDeviceRole')}</span>
-                    <select
-                      value={ownDeviceRole}
-                      onChange={(e) => setOwnDeviceRole(e.target.value as 'viewer' | 'contributor' | 'editor')}
-                      className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-                    >
-                      <option value="viewer">{t('topPanel.roleViewer')}</option>
-                      <option value="contributor">{t('topPanel.roleContributor')}</option>
-                      <option value="editor">{t('topPanel.roleEditor')}</option>
-                    </select>
-                  </label>
-                  <label className={`flex flex-col gap-0.5 text-[11px] md:col-span-2 ${subTextClass}`}>
-                    <span>{t('topPanel.ownDeviceTtl')}</span>
-                    <select
-                      value={ownDeviceTtlPreset}
-                      onChange={(e) => setOwnDeviceTtlPreset(e.target.value as 'none' | '365' | '730' | '1825' | 'custom')}
-                      className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-                    >
-                      <option value="none">{t('topPanel.ownDeviceTtlNone')}</option>
-                      <option value="365">{t('topPanel.ownDeviceTtl1y')}</option>
-                      <option value="730">{t('topPanel.ownDeviceTtl2y')}</option>
-                      <option value="1825">{t('topPanel.ownDeviceTtl5y')}</option>
-                      <option value="custom">{t('topPanel.ownDeviceTtlCustom')}</option>
-                    </select>
-                  </label>
-                  {ownDeviceTtlPreset === 'custom' && (
-                    <label className={`flex flex-col gap-0.5 text-[11px] ${subTextClass}`}>
-                      <span>{t('topPanel.expires')}</span>
-                      <input
-                        type="date"
-                        value={ownDeviceExpiresCustom}
-                        onChange={(e) => setOwnDeviceExpiresCustom(e.target.value)}
-                        className={`text-sm rounded border px-2 py-1 ${inputBg}`}
-                      />
-                    </label>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onCreateOwnDeviceInvite(ownDeviceRole, computeOwnDeviceExpiresAt(), {
-                        exchangeScope: inviteExchangeScope,
-                      });
-                    }}
-                    className={`text-sm rounded px-3 py-2 font-semibold lg:col-span-1 ${isDarkMode ? 'bg-indigo-700 hover:bg-indigo-600' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-                  >
-                    {t('topPanel.createOwnDeviceInvite')}
-                  </button>
-                </div>
-              </div>
-            )}
-            {!isInviteMode && trustedOwnDevicePeerId && (onOwnDeviceAcceptAll || onOwnDeviceRejectAllAndRevoke) && (
-              <div className={`mb-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 ${isDarkMode ? 'border-amber-900/60 bg-amber-950/20' : 'border-amber-200 bg-amber-50'}`}>
-                <span className={`text-xs font-semibold ${textClass}`}>
-                  {t('topPanel.ownDeviceSessionBadge').replace('{{count}}', String(ownDevicePendingCount))}
-                </span>
-                {onOwnDeviceAcceptAll && (
-                  <button
-                    type="button"
-                    onClick={() => onOwnDeviceAcceptAll()}
-                    disabled={ownDevicePendingCount === 0}
-                    className={`px-2 py-1 rounded text-xs font-semibold disabled:opacity-40 ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
-                  >
-                    {t('topPanel.ownDeviceAcceptAll')}
-                  </button>
-                )}
-                {onOwnDeviceRejectAllAndRevoke && (
-                  <button
-                    type="button"
-                    onClick={() => onOwnDeviceRejectAllAndRevoke()}
-                    className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-900 hover:bg-rose-800' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
-                  >
-                    {t('topPanel.ownDeviceRejectAndRevoke')}
-                  </button>
-                )}
-              </div>
-            )}
-            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-              {invites.length === 0 ? (
-                <p className={`text-sm ${subTextClass}`}>{t('topPanel.noInvites')}</p>
-              ) : (
-                invites.map((invite) => {
-                  const isExpired = invite.status === 'expired';
-                  const isRevoked = invite.status === 'revoked';
-                  const canHostRevoke =
-                    (invite.status === 'active' || invite.status === 'accepted') &&
-                    !isInviteMode &&
-                    !isExpired &&
-                    !isRevoked;
-                  const accentClass =
-                    invite.linkKind === 'ephemeral_free'
-                      ? isDarkMode
-                        ? 'border-l-teal-500 bg-teal-950/25'
-                        : 'border-l-teal-500 bg-teal-50/80'
-                      : invite.inviteIntent === 'own_device'
-                        ? isDarkMode
-                          ? 'border-l-indigo-500 bg-indigo-950/20'
-                          : 'border-l-indigo-500 bg-indigo-50/80'
-                        : isDarkMode
-                          ? 'border-l-sky-500 bg-slate-900/40'
-                          : 'border-l-sky-500 bg-sky-50/80';
-                  return (
-                  <div
-                    key={invite.inviteId}
-                    className={`rounded border border-l-4 p-2 text-xs flex flex-wrap items-start justify-between gap-2 ${accentClass} ${
-                      isDarkMode ? 'border-slate-700' : 'border-slate-200'
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className={`font-semibold flex flex-wrap items-center gap-2 ${textClass}`}>
-                        {invite.linkKind === 'ephemeral_free' ? (
-                          <>
-                            <span
-                              className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
-                                isDarkMode
-                                  ? 'border-teal-600 text-teal-300 bg-teal-950/50'
-                                  : 'border-teal-300 text-teal-800 bg-teal-100/70'
-                              }`}
-                            >
-                              {t('topPanel.inviteKindEphemeralBadge')}
-                            </span>
-                            <span>{t('topPanel.ephemeralInviteLabel')}</span>
-                          </>
-                        ) : (
-                          <>
-                            {invite.inviteIntent === 'own_device' ? (
-                              <span
-                                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
-                                  isDarkMode
-                                    ? 'border-indigo-600 text-indigo-300 bg-indigo-950/50'
-                                    : 'border-indigo-300 text-indigo-800 bg-indigo-100/70'
-                                }`}
-                              >
-                                {t('topPanel.inviteKindOwnDeviceShort')}
-                              </span>
-                            ) : (
-                              <span
-                                className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${
-                                  isDarkMode
-                                    ? 'border-sky-600 text-sky-300 bg-sky-950/50'
-                                    : 'border-sky-300 text-sky-800 bg-sky-100/70'
-                                }`}
-                              >
-                                {t('topPanel.inviteKindNamedShort')}
-                              </span>
-                            )}
-                            <span className={`min-w-0 break-words ${textClass}`}>
-                              {t('topPanel.inviteNamedFor')
-                                .replace('{{name}}', invite.individualName || '—')
-                                .replace('{{role}}', formatInviteRole(invite.role))}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <div className={subTextClass}>
-                        {invite.personalizedDefault ? t('topPanel.defaultInvite') : t('topPanel.manualInvite')}
-                        {invite.inviteIntent === 'own_device' ? ` | ${t('topPanel.inviteOwnDeviceBadge')}` : ''}
-                        {' '}| {t('topPanel.status')}: {invite.status}
-                        {invite.expiresAt ? ` | ${t('topPanel.expires')}: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
-                      </div>
-                      {invite.inviteLink && (
-                        <div className={`font-mono text-[10px] truncate max-w-[320px] ${subTextClass}`}>{invite.inviteLink}</div>
-                      )}
-                    </div>
-                    {invite.inviteLink && !isInviteMode && (
-                      <InviteQrCode
-                        url={invite.inviteLink}
-                        isDarkMode={isDarkMode}
-                        label={t('topPanel.inviteQrHint')}
-                        size={88}
-                        className="shrink-0"
-                      />
-                    )}
-                    <div className="flex items-center gap-1 shrink-0">
-                      {invite.inviteLink && !isInviteMode && (
-                        <button
-                          onClick={() => copyInviteLink(invite.inviteId, invite.inviteLink)}
-                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-slate-200 text-slate-800 hover:bg-slate-300'}`}
-                        >
-                          {copiedInviteId === invite.inviteId ? t('topPanel.inviteCopied') : t('topPanel.copyInviteLink')}
-                        </button>
-                      )}
-                      {canHostRevoke && (
-                        <button
-                          onClick={() => onRevokeInvite(invite.inviteId)}
-                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 text-white hover:bg-rose-500'}`}
-                        >
-                          {t('topPanel.revoke')}
-                        </button>
-                      )}
-                      {invite.status === 'active' && isInviteMode && (
-                        <button
-                          onClick={() => onAcceptInvite(invite.inviteId)}
-                          className={`px-2 py-1 rounded text-xs font-semibold ${isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
-                        >
-                          {t('topPanel.acceptInvite')}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  );
-                })
-              )}
-            </div>
-            {pendingInviteToken && (
-              <p className={`text-[11px] mt-3 ${subTextClass}`}>{t('topPanel.pendingInviteToken')}</p>
-            )}
-          </section>
-        )}
 
-        {activeTab === 'wot' && (
+        {activeTab === 'yourIdentity' && (
           <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
             <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.wotHeading')}</h3>
             <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
@@ -1398,13 +998,58 @@ const TopPanel: React.FC<TopPanelProps> = ({
             {onOpenIdentityPanel && (
               <button
                 type="button"
-                onClick={onOpenIdentityPanel}
+                onClick={() => {
+                  onOpenIdentityPanel?.();
+                  onActiveTabChange?.('yourIdentity');
+                }}
                 className={`text-xs px-3 py-2 rounded font-bold w-full sm:w-auto ${
                   isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
                 }`}
               >
-                {t('topPanel.wotOpenIdentity')}
+                  {t('topPanel.wotOpenIdentity')}
               </button>
+            )}
+          </div>
+        )}
+        {activeTab === 'peerIdentities' && (
+          <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+            <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.peerIdentityHeading')}</h3>
+            {peerIdentityRows.length === 0 ? (
+              <p className={`text-xs ${subTextClass}`}>{t('topPanel.peerIdentityEmpty')}</p>
+            ) : (
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {peerIdentityRows.map((row) => (
+                  <div
+                    key={row.peerId}
+                    className={`rounded border px-2 py-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
+                  >
+                    <div className={`font-semibold ${textClass}`}>{row.label}</div>
+                    <div className={`${subTextClass} text-[11px]`}>{row.peerId}</div>
+                    {row.claimedAt && (
+                      <div className={`${subTextClass} text-[11px]`}>
+                        {t('topPanel.peerIdentityClaimedAt')}: {new Date(row.claimedAt).toLocaleString()}
+                      </div>
+                    )}
+                    {onTogglePeerCertifiedByMe && (
+                      <button
+                        type="button"
+                        onClick={() => onTogglePeerCertifiedByMe(row.peerId, !row.certifiedByMe)}
+                        className={`mt-2 px-2 py-1 rounded text-[11px] font-semibold ${
+                          row.certifiedByMe
+                            ? isDarkMode
+                              ? 'bg-emerald-800 text-emerald-100'
+                              : 'bg-emerald-600 text-white'
+                            : isDarkMode
+                              ? 'bg-slate-700 text-slate-100'
+                              : 'bg-slate-200 text-slate-800'
+                        }`}
+                      >
+                        {row.certifiedByMe ? t('topPanel.peerIdentityCertified') : t('topPanel.peerIdentityCertify')}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -1435,6 +1080,100 @@ const TopPanel: React.FC<TopPanelProps> = ({
   );
 };
 
+const InviteListCompact: React.FC<{
+  invites: TopPanelProps['invites'];
+  isDarkMode: boolean;
+  isInviteMode: boolean;
+  copiedInviteId: string | null;
+  formatInviteRole: (role: 'viewer' | 'contributor' | 'editor' | 'comparator') => string;
+  onCopyInviteLink: (inviteId: string, link?: string) => void;
+  onRevokeInvite: (inviteId: string) => void;
+  onAcceptInvite: (inviteId: string) => void;
+  t: (key: string) => string;
+}> = ({
+  invites,
+  isDarkMode,
+  isInviteMode,
+  copiedInviteId,
+  formatInviteRole,
+  onCopyInviteLink,
+  onRevokeInvite,
+  onAcceptInvite,
+  t,
+}) => {
+  if (invites.length === 0) {
+    return <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{t('topPanel.noInvites')}</p>;
+  }
+  return (
+    <div className="space-y-1.5 max-h-[220px] overflow-y-auto pr-1">
+      {invites.map((invite) => {
+        const isExpired = invite.status === 'expired';
+        const isRevoked = invite.status === 'revoked';
+        const canHostRevoke =
+          (invite.status === 'active' || invite.status === 'accepted') &&
+          !isInviteMode &&
+          !isExpired &&
+          !isRevoked;
+        return (
+          <div
+            key={invite.inviteId}
+            className={`rounded border p-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
+          >
+            <div className={`font-semibold ${isDarkMode ? 'text-slate-100' : 'text-slate-800'}`}>
+              {invite.linkKind === 'ephemeral_free'
+                ? t('topPanel.ephemeralInviteLabel')
+                : t('topPanel.inviteNamedFor')
+                    .replace('{{name}}', invite.individualName || '—')
+                    .replace('{{role}}', formatInviteRole(invite.role))}
+            </div>
+            <div className={`${isDarkMode ? 'text-slate-400' : 'text-slate-500'} text-[11px]`}>
+              {t('topPanel.status')}: {invite.status}
+              {invite.expiresAt ? ` | ${t('topPanel.expires')}: ${new Date(invite.expiresAt).toLocaleDateString()}` : ''}
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1 items-start">
+              {invite.inviteLink && !isInviteMode && (
+                <>
+                  <InviteQrCode
+                    url={invite.inviteLink}
+                    isDarkMode={isDarkMode}
+                    size={52}
+                    className="shrink-0"
+                    enlargeOnClick
+                    enlargeAriaLabel={t('topPanel.qrEnlargeAria')}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onCopyInviteLink(invite.inviteId, invite.inviteLink)}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold ${isDarkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-100' : 'bg-slate-200 hover:bg-slate-300 text-slate-800'}`}
+                  >
+                    {copiedInviteId === invite.inviteId ? t('topPanel.inviteCopied') : t('topPanel.copyInviteLink')}
+                  </button>
+                </>
+              )}
+              {canHostRevoke && (
+                <button
+                  onClick={() => onRevokeInvite(invite.inviteId)}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold ${isDarkMode ? 'bg-rose-900 hover:bg-rose-800 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
+                >
+                  {t('topPanel.revoke')}
+                </button>
+              )}
+              {invite.status === 'active' && isInviteMode && (
+                <button
+                  onClick={() => onAcceptInvite(invite.inviteId)}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}
+                >
+                  {t('topPanel.acceptInvite')}
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 const StatCard: React.FC<{ label: string; value: number; isDarkMode: boolean }> = ({ label, value, isDarkMode }) => (
   <div className={`rounded-lg border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
     <div className="text-[11px] opacity-70 uppercase">{label}</div>
@@ -1442,10 +1181,25 @@ const StatCard: React.FC<{ label: string; value: number; isDarkMode: boolean }> 
   </div>
 );
 
-const ToggleRow: React.FC<{ label: string; checked: boolean; onChange: (checked: boolean) => void }> = ({ label, checked, onChange }) => (
-  <label className="flex items-center justify-between gap-2">
-    <span>{label}</span>
-    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+const ToggleRow: React.FC<{
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  inputFirst?: boolean;
+  textClass?: string;
+}> = ({ label, checked, onChange, inputFirst = false, textClass = '' }) => (
+  <label className={`flex items-center gap-2 ${inputFirst ? '' : 'justify-between'}`}>
+    {inputFirst ? (
+      <>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        <span className={textClass}>{label}</span>
+      </>
+    ) : (
+      <>
+        <span className={textClass}>{label}</span>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      </>
+    )}
   </label>
 );
 

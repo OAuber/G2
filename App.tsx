@@ -8,6 +8,7 @@ import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR 
 import CompareMergeModal, { type CompareImportRequest } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';
+import type { TopPanelTabId } from './components/topPanel/topPanelTabs';
 import { InviteExchangeScopeForm } from './components/InviteExchangeScopeForm';
 import { AppLayout } from './components/AppLayout';
 import {
@@ -109,7 +110,6 @@ import {
   buildAccessProfileFromRole,
   buildEphemeralAccessProfile,
   resolveLinkKind,
-  sessionAllowsShareCompare,
   type InviteLinkKind,
 } from './app/inviteLinkKind';
 
@@ -176,9 +176,7 @@ function App() {
   const { documentsByIndividualId, setDocumentsByIndividualId } = useDocumentsState();
   const {
     p2pTransferMode,
-    setP2PTransferMode,
     p2pBundleContentMode,
-    setP2PBundleContentMode,
   } = useP2PTransferModes();
 
   // State for 3D View (Expanded individuals)
@@ -192,6 +190,7 @@ function App() {
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [topPanelOpen, setTopPanelOpen] = useState(false);
+  const [topPanelActiveTab, setTopPanelActiveTab] = useState<TopPanelTabId | null>(null);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [documentsTabSignal, setDocumentsTabSignal] = useState(0);
   const [recordsTabSignal, setRecordsTabSignal] = useState(0);
@@ -241,6 +240,8 @@ function App() {
   // Info Pages State
   const [activeInfoPage, setActiveInfoPage] = useState<'about' | 'contribute' | 'contact' | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [landingInviteInput, setLandingInviteInput] = useState('');
+  const [showStartOverlay, setShowStartOverlay] = useState(false);
   const buildLabel = `${import.meta.env.MODE}:${window.location.host}`;
   const [programUpdateState, setProgramUpdateState] = useState<'idle' | 'checking' | 'available' | 'updating' | 'error' | 'unsupported'>('idle');
   const [isShortcutModifierPressed, setIsShortcutModifierPressed] = useState(false);
@@ -263,6 +264,18 @@ function App() {
   const [reviewFocusSignal, setReviewFocusSignal] = useState(0);
   const [webglRecoveryKey, setWebglRecoveryKey] = useState(0);
   const [remoteIdentityClaimsByIndividualId, setRemoteIdentityClaimsByIndividualId] = useState<Record<string, { claimedAt: string; actorPeerId: string }>>({});
+  const [knownPeerIdentities, setKnownPeerIdentities] = useState<
+    Record<string, { label: string; claimedAt?: string; certifiedByMe?: boolean; certifiedByPeer?: boolean }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem('knownPeerIdentities.v1');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   /** Côté client : dernière identité publique reçue de l’hôte (SESSION_STATE). */
   const remoteHostSelfIdentityRef = useRef<SelfIdentityPublic | null>(null);
   /** Contexte d’invite issu de l’URL (#g2invite), pour attacher introduction au claim. */
@@ -279,7 +292,7 @@ function App() {
     message: string;
   } | null>(null);
   const [p2pSyncStatusText, setP2PSyncStatusText] = useState<string | null>(null);
-  const [initialCompareStatusText, setInitialCompareStatusText] = useState<string | null>(null);
+  const [, setInitialCompareStatusText] = useState<string | null>(null);
   const [p2pSessionUseCase, setP2PSessionUseCase] = useState<P2PSessionUseCase>(null);
   const [remotePeerHasData, setRemotePeerHasData] = useState<boolean | null>(null);
 
@@ -374,8 +387,8 @@ function App() {
     exposePlaces: false,
     exposeNotes: false,
     allowDocuments: true,
-    allowDownload: true,
-    allowProposal: true,
+    allowDownload: false,
+    allowProposal: false,
     allowDirectEdit: false,
   });
   const [remoteAccessPolicy, setRemoteAccessPolicy] = useState<P2PVisibilitySettings | null>(null);
@@ -1471,11 +1484,6 @@ function App() {
     });
   };
 
-  const createRequestToken = () =>
-    (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `diff-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-
   const allocateUniqueIndividualId = (candidateId: string, data: GedcomData): string => {
     if (!(candidateId in data.individuals)) return candidateId;
     const used = new Set(Object.keys(data.individuals));
@@ -1544,35 +1552,6 @@ function App() {
       deathPlace: policy.exposePlaces ? individual.deathPlace : undefined,
       notes: policy.exposeNotes ? individual.notes : undefined,
     };
-  };
-
-  const buildDiffIndex = (data: GedcomData, policy: P2PVisibilitySettings): IndividualDiffIndexEntry[] => {
-    return Object.values(data.individuals).map((individual) => {
-      const spouseCount = individual.familySpouseIds?.length || 0;
-      const childCount = (individual.familySpouseIds || []).reduce((acc, famId) => {
-        const fam = data.families[famId];
-        return acc + (fam?.childrenIds?.length || 0);
-      }, 0);
-      const parentCount = individual.familyChildId ? 1 : 0;
-      return {
-        localId: individual.id,
-        fingerprint: buildDiffFingerprint(individual, policy),
-        lightweightSignature: {
-          initials: policy.exposeIdentity ? toInitials(individual.givenName, individual.surname) : undefined,
-          gender: policy.exposeIdentity ? individual.gender : undefined,
-          birthYear: policy.exposeDates ? individual.birthDate?.year ?? null : null,
-          deathYear: policy.exposeDates ? individual.deathDate?.year ?? null : null,
-          parentCount,
-          spouseCount,
-          childCount,
-        },
-        givenName: policy.exposeIdentity ? individual.givenName : undefined,
-        surname: policy.exposeIdentity ? individual.surname : undefined,
-        birthYear: policy.exposeDates ? individual.birthDate?.year ?? null : null,
-        deathYear: policy.exposeDates ? individual.deathDate?.year ?? null : null,
-        gender: policy.exposeIdentity ? individual.gender : undefined,
-      };
-    });
   };
 
   const scoreIndexCandidate = (local: Individual, remote: IndividualDiffIndexEntry): number => {
@@ -1806,93 +1785,6 @@ function App() {
     }, INITIAL_DIFF_REQUEST_TIMEOUT_MS);
   };
 
-  const startInitialCompareExchange = () => {
-    if (!gedcomDataRef.current) return false;
-    setP2PProposals((prev) =>
-      prev.filter((p) => !(p.source === 'initial_compare' && p.status === 'pending'))
-    );
-    const policy = getEffectiveSharePolicy();
-    const index = buildDiffIndex(gedcomDataRef.current, policy).slice(0, INITIAL_DIFF_BATCH_LIMIT);
-    const requestToken = createRequestToken();
-    const batchId = `batch-${Date.now()}`;
-    initialDiffContextsRef.current[requestToken] = {
-      requestToken,
-      batchId,
-      retryCount: 0,
-      pendingRequestIds: [],
-      potentialMatchesBySenderId: {},
-      startedAt: Date.now(),
-    };
-    p2pService.sendMessage('INDIVIDUAL_DIFF_REQUEST', {
-      phase: 'index',
-      requestToken,
-      batchId,
-      index,
-      retryCount: 0,
-    } as IndividualDiffRequestPayload);
-    setInitialCompareStatusText(`index sent ${index.length}`);
-    logP2PActivity('initial_compare.started', 'session', batchId, peerId || 'peer');
-    return true;
-  };
-
-  const handleStartCompare = () => {
-    if (!sessionAllowsShareCompare(sessionLinkKind)) {
-      alert(t('app.alerts.shareCompareNamedInviteOnly'));
-      return;
-    }
-    if (!isIdentified) {
-      alert(t('app.alerts.claimIdentityBeforeCompare'));
-      return;
-    }
-    if (p2pStatus !== 'connected') {
-      alert(t('app.alerts.connectBeforeCompare'));
-      return;
-    }
-    if (!gedcomDataRef.current || remotePeerHasData === false) {
-      alert(t('app.alerts.compareNeedsBothGedcom'));
-      return;
-    }
-    setP2PSessionUseCase('compare');
-    p2pSessionUseCaseRef.current = 'compare';
-    if (!startInitialCompareExchange()) {
-      alert(t('app.alerts.loadGedcomBeforeCompare'));
-      return;
-    }
-    sendSessionState();
-  };
-
-  const handleStartShare = () => {
-    if (!sessionAllowsShareCompare(sessionLinkKind)) {
-      alert(t('app.alerts.shareCompareNamedInviteOnly'));
-      return;
-    }
-    if (!isIdentified) {
-      alert(t('app.alerts.claimIdentityBeforeShare'));
-      return;
-    }
-    if (p2pStatus !== 'connected') {
-      alert(t('app.alerts.connectBeforeShare'));
-      return;
-    }
-    if (p2pModeRef.current !== 'host') {
-      alert(t('app.alerts.shareHostOnly'));
-      return;
-    }
-    if (!gedcomDataRef.current) {
-      alert(t('app.alerts.loadGedcomBeforeShare'));
-      return;
-    }
-    if (remotePeerHasData === true) {
-      alert(t('app.alerts.shareRemoteMustBeEmpty'));
-      return;
-    }
-    setP2PSessionUseCase('share');
-    p2pSessionUseCaseRef.current = 'share';
-    sendP2PSnapshot(gedcomDataRef.current, documentsByIndividualId, 'sync.sent');
-    setP2PSyncStatusText('share started');
-    sendSessionState();
-  };
-
   /**
    * Personnes probablement vivantes (invitations P2P + choix d’identité) : décès selon le GEDCOM d’origine,
    * pas les dates de décès calculées par la normalisation.
@@ -1989,8 +1881,9 @@ function App() {
     const namedClaimSession = sessionLinkKind === 'named_claim';
     const fromSession =
       namedClaimSession &&
-      (pendingInviteRole === 'comparator' ||
-        (p2pMode === 'client' && p2pSessionUseCase === 'compare'));
+      pendingInviteRole === 'comparator' &&
+      p2pMode === 'client' &&
+      p2pSessionUseCase === 'compare';
     return Boolean(fromToken || fromSession);
   }, [p2pMode, pendingInviteToken, sessionLinkKind, pendingInviteRole, p2pSessionUseCase]);
 
@@ -2228,6 +2121,11 @@ function App() {
     /** Vue double : hôte (même sans GEDCOM pair encore) ou invité une fois le cas d’usage synchronisé. */
     return p2pMode === 'host' || p2pMode === 'client';
   }, [p2pMode, p2pSessionUseCase, peerCompareGedcom, shouldSuspendSceneForInvite]);
+  const isInviteComparatorClientSession =
+    p2pMode === 'client' &&
+    sessionLinkKind === 'named_claim' &&
+    pendingInviteRole === 'comparator' &&
+    p2pSessionUseCase === 'compare';
 
   /** Message centré (vue compare) : jusqu’à ce que l’invité ait chargé son GEDCOM (hôte) ou l’invité son propre fichier (client). */
   const compareViewportCenterHint = useMemo(() => {
@@ -4406,6 +4304,14 @@ function App() {
                     payload.selfIdentity.devicePublicKeyJwk
                   ) {
                     remoteHostSelfIdentityRef.current = payload.selfIdentity;
+                    const remotePeerId = data.senderPeerId || 'remote';
+                    setKnownPeerIdentities((prev) => ({
+                      ...prev,
+                      [remotePeerId]: {
+                        ...(prev[remotePeerId] || { label: remotePeerId }),
+                        claimedAt: new Date().toISOString(),
+                      },
+                    }));
                   }
                   logP2PActivity(
                     'session.state.received',
@@ -5012,7 +4918,29 @@ function App() {
                           actorPeerId: payload.actorPeerId || 'remote',
                         },
                       }));
+                      const actor = payload.actorPeerId || 'remote';
+                      setKnownPeerIdentities((prev) => ({
+                        ...prev,
+                        [actor]: {
+                          ...(prev[actor] || { label: actor }),
+                          claimedAt: payload.timestamp || new Date().toISOString(),
+                        },
+                      }));
                     }
+                  }
+              }
+              if (data.type === 'PEER_IDENTITY_CERTIFY' && data.payload) {
+                  const payload = data.payload as { certifiedByMe?: boolean; certifiedAt?: string };
+                  const senderPeerId = data.senderPeerId || 'remote';
+                  if (typeof payload.certifiedByMe === 'boolean') {
+                    setKnownPeerIdentities((prev) => ({
+                      ...prev,
+                      [senderPeerId]: {
+                        ...(prev[senderPeerId] || { label: senderPeerId }),
+                        certifiedByPeer: payload.certifiedByMe,
+                        claimedAt: prev[senderPeerId]?.claimedAt || payload.certifiedAt,
+                      },
+                    }));
                   }
               }
           }
@@ -5044,18 +4972,6 @@ function App() {
     topPanelP2pAutoInitForOpenRef.current = true;
     handleInitP2PRef.current();
   }, [topPanelOpen, p2pStatus]);
-
-  const handleConnectP2P = (hostId: string) => {
-      const targetHostId = hostId.trim();
-      if (!targetHostId) {
-        alert(t('app.alerts.invalidPeerId'));
-        return;
-      }
-      setP2pMode('client');
-      p2pModeRef.current = 'client';
-      p2pService.connect(targetHostId);
-      logP2PActivity('peer.connect.requested', 'session', targetHostId);
-  };
 
   // Called by CameraController when animation finishes
   const handleFlyComplete = () => {
@@ -7537,18 +7453,53 @@ function App() {
 
   // --- Creation, Linking & Deletion Logic ---
 
-  const handleInitIdentifySelf = () => {
-    setIsIdentifyingSelf(true);
-    setIsCreating(false);
-    setRightPanelOpen(true);
-    setIdentityTabSignal((prev) => prev + 1);
-  };
-
-  /** Ouvre le panneau détails sur l’onglet Identité (raccourci WoT / session). */
+  /** Ouvre l’onglet identité dans le panneau haut. */
   const handleOpenIdentityPanel = useCallback(() => {
-    setRightPanelOpen(true);
-    setIdentityTabSignal((prev) => prev + 1);
+    setTopPanelOpen(true);
+    setTopPanelActiveTab('yourIdentity');
   }, []);
+
+  const handleOpenPeerIdentitiesPanel = useCallback(() => {
+    setTopPanelOpen(true);
+    setTopPanelActiveTab('peerIdentities');
+  }, []);
+
+  const handleTogglePeerCertifiedByMe = useCallback((peerId: string, next: boolean) => {
+    setKnownPeerIdentities((prev) => ({
+      ...prev,
+      [peerId]: {
+        ...(prev[peerId] || { label: peerId }),
+        certifiedByMe: next,
+      },
+    }));
+    if (p2pStatus === 'connected') {
+      p2pService.sendMessage('PEER_IDENTITY_CERTIFY', {
+        peerId,
+        certifiedByMe: next,
+        certifiedAt: new Date().toISOString(),
+      });
+    }
+  }, [p2pStatus]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('knownPeerIdentities.v1', JSON.stringify(knownPeerIdentities));
+    } catch {
+      // ignore persistence failures
+    }
+  }, [knownPeerIdentities]);
+
+  const peerIdentityRows = useMemo(
+    () =>
+      Object.entries(knownPeerIdentities).map(([peerId, info]) => ({
+        peerId,
+        label: info.label || peerId,
+        claimedAt: info.claimedAt,
+        certifiedByMe: !!info.certifiedByMe,
+        certifiedByPeer: !!info.certifiedByPeer,
+      })),
+    [knownPeerIdentities],
+  );
 
   const buildP2PIntroductionContext = (): IdentityIntroductionContext | undefined => {
     if (p2pModeRef.current !== 'client') return undefined;
@@ -8192,6 +8143,43 @@ function App() {
      );
   };
 
+  const handleLandingValidateInvite = () => {
+    const raw = landingInviteInput.trim();
+    if (!raw) return;
+    if (!/^https?:\/\//i.test(raw)) {
+      showTransientToast('error', t('landing.linkOnlyHint'), 2400);
+      return;
+    }
+    let token = '';
+    try {
+      const u = new URL(raw);
+      token =
+        u.hash.replace(/^#/, '').replace(/^g2invite=/, '') ||
+        u.searchParams.get('g2invite') ||
+        '';
+    } catch {
+      token = '';
+    }
+    if (!token) {
+      showTransientToast('error', t('landing.linkOnlyHint'), 2400);
+      return;
+    }
+    const claims = parseInviteClaimsUnsafe(token);
+    const hostPeerId =
+      claims?.sessionId && claims.sessionId !== 'local-session' ? claims.sessionId : null;
+    if (!hostPeerId) {
+      showTransientToast('error', t('topPanel.pendingInviteToken'), 2400);
+      return;
+    }
+    setPendingInviteToken(token);
+    setPendingInviteHostPeerId(hostPeerId);
+    setPendingInviteTargetIndividualId(claims?.targetIndividualId || null);
+    setPendingInviteInviterName(claims?.inviterName || null);
+    setPendingInviteRole((claims?.role as P2PRole) || null);
+    setTopPanelOpen(true);
+    setTopPanelActiveTab('personalizedInvites');
+  };
+
   const renderHelpOverlay = () => {
     if (!isHelpOpen) return null;
 
@@ -8406,6 +8394,9 @@ function App() {
       
       <main className={`flex-1 relative h-full min-w-0 ${isDarkMode ? 'bg-black' : 'bg-[#f0f9ff]'}`}>
         {compareDualViewActive &&
+          p2pSessionUseCase === 'compare' &&
+          !is2dIndividual &&
+          (p2pMode === 'host' || isInviteComparatorClientSession) &&
           ((!compareExchangeRootsBarDismissed && compareExchangeRootsBarText) || showCompareGridRecallBanner) && (
           <div
             className="pointer-events-none absolute left-1/2 top-20 z-[116] flex max-w-[min(100%,32rem)] -translate-x-1/2 flex-col gap-1.5 px-2"
@@ -8620,8 +8611,6 @@ function App() {
                   rightPanelOpen={rightPanelOpen}
                   singleIndividual={false}
                   onWebGLContextLost={handleWebGLContextLost}
-                  selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
-                  showSelfIntroductionBadge={!!selfIdentity?.introduction}
                   compareSuggestionIds={compareUnifiedSuggestionIdSet}
                   compareSuggestionScores={compareUnifiedSuggestionScores}
                   compareFusionCompleted={compareFusionCompleted}
@@ -8716,8 +8705,6 @@ function App() {
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
             onWebGLContextLost={handleWebGLContextLost}
-            selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
-            showSelfIntroductionBadge={!!selfIdentity?.introduction}
             compareSuggestionIds={
               compareDualViewActive ? compareUnifiedSuggestionIdSet : undefined
             }
@@ -8758,8 +8745,6 @@ function App() {
             rightPanelOpen={rightPanelOpen}
             singleIndividual={is2dIndividual}
             onWebGLContextLost={handleWebGLContextLost}
-            selfIndividualId={isIdentified ? selfIdentity?.individualId ?? null : null}
-            showSelfIntroductionBadge={!!selfIdentity?.introduction}
           />
         )}
         
@@ -8993,41 +8978,33 @@ function App() {
                     </button>
                   </div>
 
-                  {/* Action rows */}
-                  <div className="flex flex-col items-center gap-3">
-                    <div className={`flex items-center gap-2 md:gap-4 text-xs md:text-sm font-bold tracking-[0.2em] uppercase ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                      <button onClick={() => setLeftPanelOpen(true)} className="hover:text-pink-400 transition-colors cursor-pointer">
-                        {t('landing.actions.import')}
-                      </button>
-                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
-                      <button onClick={handleInitCreation} className="hover:text-pink-400 transition-colors cursor-pointer">
-                        {t('landing.actions.create')}
-                      </button>
-                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
-                      <button onClick={() => setBottomPanelOpen(true)} className="hover:text-pink-400 transition-colors cursor-pointer">
-                        {t('landing.actions.visualize')}
-                      </button>
-                    </div>
-                    <div className={`flex items-center gap-2 md:gap-4 text-xs md:text-sm font-bold tracking-[0.2em] uppercase ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                      <button onClick={handleInitIdentifySelf} className="hover:text-blue-400 transition-colors cursor-pointer">
-                        {t('landing.actions.identify')}
-                      </button>
-                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
-                      <button onClick={() => setTopPanelOpen(true)} className="hover:text-blue-400 transition-colors cursor-pointer">
-                        {t('landing.actions.certify')}
-                      </button>
-                      <span className={`${isDarkMode ? 'text-slate-700' : 'text-slate-300'}`}>—</span>
-                      <button onClick={() => setTopPanelOpen(true)} className="hover:text-blue-400 transition-colors cursor-pointer">
-                        {t('landing.actions.share')}
+                  <div className="w-full max-w-lg space-y-2">
+                    <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{t('landing.pasteInviteHint')}</p>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <input
+                        value={landingInviteInput}
+                        onChange={(e) => setLandingInviteInput(e.target.value)}
+                        placeholder={t('landing.pasteInvitePlaceholder')}
+                        className={`w-full max-w-sm rounded border px-2 py-1 text-sm ${isDarkMode ? 'bg-neutral-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleLandingValidateInvite}
+                        className={`rounded border px-2.5 py-1 text-xs font-semibold ${isDarkMode ? 'border-slate-600 bg-slate-800 hover:bg-slate-700 text-slate-100' : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700'}`}
+                      >
+                        {t('landing.validateInvite')}
                       </button>
                     </div>
+                    <p className={`pt-3 text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{t('landing.noInviteHint')}</p>
                   </div>
 
                   {/* Footer links */}
                   <div className={`flex items-center gap-2 text-xs tracking-widest uppercase pb-8 ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
                     <button onClick={() => setActiveInfoPage('about')} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.about')}</button>
                     <span>·</span>
-                    <button onClick={() => setIsHelpOpen(true)} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.help')}</button>
+                    <button onClick={() => setShowStartOverlay(true)} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.start')}</button>
+                    <span>·</span>
+                    <button onClick={() => setIsHelpOpen(true)} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.settings')}</button>
                     <span>·</span>
                     <button onClick={() => setActiveInfoPage('contribute')} className={`transition-colors ${isDarkMode ? 'hover:text-slate-300' : 'hover:text-slate-700'}`}>{t('landing.links.contribute')}</button>
                     <span>·</span>
@@ -9101,6 +9078,10 @@ function App() {
           compareDualViewActive &&
           (selectedIndividual?.id?.startsWith(PEER_COMPARE_ID_PREFIX) ?? false)
         }
+        onOpenYourIdentityTab={handleOpenIdentityPanel}
+        onOpenPeerIdentitiesTab={handleOpenPeerIdentitiesPanel}
+        onTogglePeerCertifiedByMe={handleTogglePeerCertifiedByMe}
+        knownPeerIdentityByPeerId={knownPeerIdentities}
       />
 
       {/* --- Top Panel (Share) --- */}
@@ -9116,17 +9097,8 @@ function App() {
         // P2P Props
         p2pStatus={p2pStatus}
         p2pMode={p2pMode}
-        localHasData={!!gedcomData}
-        remoteHasData={remotePeerHasData}
         peerId={peerId}
         onInitP2P={handleInitP2P}
-        onConnectP2P={handleConnectP2P}
-        onStartShare={handleStartShare}
-        onStartCompare={handleStartCompare}
-        transferMode={p2pTransferMode}
-        onChangeTransferMode={setP2PTransferMode}
-        bundleContentMode={p2pBundleContentMode}
-        onChangeBundleContentMode={setP2PBundleContentMode}
         activityEvents={p2pActivityEvents}
         proposals={p2pProposals}
         visibilitySettings={p2pVisibilitySettings}
@@ -9135,9 +9107,6 @@ function App() {
         invites={p2pInvites}
         pendingInviteToken={pendingInviteToken}
         pendingProposalsCount={pendingProposalsCount}
-        syncStatusText={p2pSyncStatusText}
-        initialCompareStatusText={initialCompareStatusText}
-        buildLabel={buildLabel}
         onChangeVisibilitySettings={setP2PVisibilitySettings}
         onCreateInvite={handleCreateInvite}
         onCreateOwnDeviceInvite={handleCreateOwnDeviceInvite}
@@ -9152,16 +9121,19 @@ function App() {
         isIdentityClaimed={isIdentified}
         identityIntroduction={selfIdentity?.introduction}
         onOpenIdentityPanel={handleOpenIdentityPanel}
+        activeTabOverride={topPanelActiveTab}
+        onActiveTabChange={setTopPanelActiveTab}
+        peerIdentityRows={peerIdentityRows}
+        onTogglePeerCertifiedByMe={handleTogglePeerCertifiedByMe}
         showCompleteIdentityHint={
           p2pStatus === 'connected' &&
           !isIdentified &&
           inviteOnboardingStage === 'ready' &&
           sessionLinkKind === 'named_claim'
         }
-        shareCompareAllowed={sessionAllowsShareCompare(sessionLinkKind)}
         onCreateEphemeralInvite={handleCreateEphemeralInvite}
         onOpenInviteeExchangeScope={() => setInviteeExchangeScopeModalOpen(true)}
-        showInviteeExchangeScopeEditor={inviteeExchangeScopeEditorVisible}
+        showInviteeExchangeScopeEditor={inviteeExchangeScopeEditorVisible && isInviteComparatorClientSession}
         inviteeExchangeScopeSetupDone={inviteeExchangeScopeSetupDone}
         inviterExchangeScopeDraft={p2pMode === 'host' ? inviterDraftExchangeScope : undefined}
         onInviterExchangeScopeDraftChange={p2pMode === 'host' ? setInviterDraftExchangeScope : undefined}
@@ -9200,6 +9172,55 @@ function App() {
             }`}
           >
             {bundleToast.message}
+          </div>
+        </div>
+      )}
+
+      {showStartOverlay && (
+        <div className={`absolute inset-0 flex flex-col items-center justify-center p-8 text-center z-[300] ${isDarkMode ? 'bg-black text-white' : 'bg-sky-50 text-black'} animate-in fade-in duration-300`}>
+          <button
+            onClick={() => setShowStartOverlay(false)}
+            className={`fixed top-4 right-4 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[320] hover:bg-opacity-20 transition-colors ${
+              isDarkMode
+                ? 'border-slate-700 bg-black/80 hover:bg-white text-white'
+                : 'border-slate-300 bg-white/90 hover:bg-black text-black'
+            }`}
+            title={t('info.close')}
+          >
+            <X className="w-8 h-8" />
+          </button>
+          <button
+            onClick={toggleLanguage}
+            className={`fixed top-4 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full border shadow-lg backdrop-blur-sm z-[320] text-xs font-bold tracking-wider transition-colors ${
+              isDarkMode
+                ? 'border-slate-700 bg-black/80 text-slate-200 hover:bg-neutral-900'
+                : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+            }`}
+            title={t('app.language.switchTo')}
+            aria-label={t('app.language.switchTo')}
+          >
+            {language.toUpperCase()}
+          </button>
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className={`fixed top-4 left-4 p-2 rounded-full border shadow-lg backdrop-blur-sm z-[320] transition-colors ${
+              isDarkMode
+                ? 'border-slate-700 bg-black/80 text-slate-200 hover:bg-neutral-900'
+                : 'border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-100'
+            }`}
+            title={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+            aria-label={isDarkMode ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+          >
+            {isDarkMode ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </button>
+
+          <div className="mb-5 opacity-90">{renderBrandMark(true)}</div>
+          <h2 className="text-3xl font-bold mb-6 tracking-tight uppercase">{t('landing.startOverlayTitle')}</h2>
+          <div className="max-w-2xl text-justify text-base font-light leading-relaxed opacity-80 space-y-4 overflow-y-auto max-h-[60vh] px-4 custom-scrollbar">
+            <p>{t('landing.startOverlayIntro')}</p>
+            <p>{t('landing.startOverlayStep1')}</p>
+            <p>{t('landing.startOverlayStep2')}</p>
+            <p>{t('landing.startOverlayStep3')}</p>
           </div>
         </div>
       )}

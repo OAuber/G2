@@ -69,6 +69,16 @@ export class P2PService {
         /* Ne pas destroy/recréer le Peer à chaque init : le jeton d’invitation embarque le `sessionId`
          * (Peer ID hôte). Un nouveau Peer = nouvel ID = lien invalide, connexion impossible, sync vide. */
         if (this.peer) {
+            /* Réaligner l’UI : sinon `initP2PWithMode` laisse `connecting` indéfiniment. */
+            if (this.conn && this.conn.open) {
+                this.onStatusChange?.('connected', this.peer.id);
+            } else if (this.conn && !this.conn.open) {
+                this.onStatusChange?.('connecting');
+            } else if (this.peer.id) {
+                this.onStatusChange?.('ready', this.peer.id);
+            } else {
+                this.onStatusChange?.('connecting');
+            }
             return;
         }
 

@@ -8,7 +8,7 @@ import {
 } from './topPanelTabs';
 
 type Props = {
-  activeTab: TopPanelTabId;
+  activeTab: TopPanelTabId | null;
   onSelectTab: (tabId: TopPanelTabId) => void;
   tabIndicators: Record<TopPanelTabId, TabIndicatorLevel>;
   isDarkMode: boolean;
