@@ -40,6 +40,12 @@ describe('isProbablyLivingForUi', () => {
     expect(isProbablyLivingForUi('I1', normalized, original)).toBe(false);
   });
 
+  it('original : décès uniquement calculé → encore considéré comme vivant probable', () => {
+    const original = minimal('I1', 2090, true);
+    const normalized = minimal('I1', 2090, true);
+    expect(isProbablyLivingForUi('I1', normalized, original)).toBe(true);
+  });
+
   it('sans original, une mort calculée seule ne retire pas la fiche', () => {
     const only = minimal('I1', 2050, true);
     expect(isProbablyLivingForUi('I1', only, null)).toBe(true);

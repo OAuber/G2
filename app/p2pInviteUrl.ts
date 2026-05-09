@@ -5,6 +5,7 @@ import {
   buildEphemeralAccessProfile,
   resolveLinkKind,
 } from './inviteLinkKind';
+import { isInviteIdLocallyRevoked } from './p2pInviteRevocations';
 
 /** Décode base64url → chaîne UTF-8 (évite la corruption « HÃ©loÃ¯se » de `JSON.parse(atob(…))`). */
 function base64UrlDecodeUtf8(encoded: string): string {
@@ -18,6 +19,26 @@ function base64UrlDecodeUtf8(encoded: string): string {
 }
 
 /** Lit le jeton d’invitation P2P depuis l’URL (query ou hash). */
+/** Retire `g2invite` de l’URL courante (query ou fragment). */
+export function stripG2InviteFromCurrentUrl(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('g2invite');
+    let newHash = '';
+    if (url.hash.length > 1) {
+      const raw = url.hash.slice(1);
+      const hp = new URLSearchParams(raw);
+      hp.delete('g2invite');
+      const s = hp.toString();
+      newHash = s ? `#${s}` : '';
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${newHash}`);
+  } catch {
+    // ignore
+  }
+}
+
 export function readInviteTokenFromLocation(): string | null {
   const search = new URLSearchParams(window.location.search);
   const fromQuery = search.get('g2invite');
@@ -76,6 +97,8 @@ export type InitialInviteBootstrap = {
   inviterName: string | null;
   intent: 'standard' | 'own_device';
   role: P2PRole | null;
+  /** Jeton présent dans l’URL mais id déjà dans la liste de révocation locale (invitant / même navigateur). */
+  bootstrapInviteWasRevoked?: boolean;
 };
 
 /** État dérivé du jeton dans l’URL au premier chargement (avant tout useEffect). */
@@ -90,6 +113,7 @@ export function readInitialInviteBootstrap(): InitialInviteBootstrap {
       inviterName: null,
       intent: 'standard',
       role: null,
+      bootstrapInviteWasRevoked: false,
     };
   }
   const token = readInviteTokenFromLocation();
@@ -103,6 +127,7 @@ export function readInitialInviteBootstrap(): InitialInviteBootstrap {
       inviterName: null,
       intent: 'standard',
       role: null,
+      bootstrapInviteWasRevoked: false,
     };
   }
   const claims = parseInviteClaimsUnsafe(token);
@@ -116,9 +141,24 @@ export function readInitialInviteBootstrap(): InitialInviteBootstrap {
       inviterName: null,
       intent: 'standard',
       role: null,
+      bootstrapInviteWasRevoked: false,
     };
   }
   const item = buildP2PInviteItemFromInviteToken(token);
+  if (item && isInviteIdLocallyRevoked(item.inviteId)) {
+    stripG2InviteFromCurrentUrl();
+    return {
+      token: null,
+      claims: null,
+      initialInvites: [],
+      hostPeerId: null,
+      targetIndividualId: null,
+      inviterName: null,
+      intent: 'standard',
+      role: null,
+      bootstrapInviteWasRevoked: true,
+    };
+  }
   const hostPeerId =
     claims.sessionId && claims.sessionId !== 'local-session' ? claims.sessionId : null;
   const urlLinkKind = resolveLinkKind(claims);
@@ -135,5 +175,6 @@ export function readInitialInviteBootstrap(): InitialInviteBootstrap {
     inviterName: claims.inviterName ?? null,
     intent: claims.intent === 'own_device' ? 'own_device' : 'standard',
     role: claims.role,
+    bootstrapInviteWasRevoked: false,
   };
 }

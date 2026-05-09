@@ -4,7 +4,7 @@ import { p2pService } from '../services/p2p';
 import type { ActivityLogEvent } from '../services/p2pDomain';
 import { createG2Bundle } from '../services/bundleService';
 import { collectIndividualIdsForManifest, parseInviteExchangeManifestJson } from '../services/inviteExchangeManifest';
-import { extractGedcomSubset } from '../services/lineageImportScope';
+import { collectAncestorIndividualIds, extractGedcomSubset } from '../services/lineageImportScope';
 import type { GedcomData, Individual, P2PMode } from '../types';
 import type {
   IndividualDocument,
@@ -44,6 +44,10 @@ export type P2PSyncSendersContext = {
   getSelectedIndividual: () => Individual | null | undefined;
   /** Manifeste d’échange (JSON) pour les bundles en session comparaison + invitation — mémo § 5.2. */
   getInviteExchangeManifestJson?: () => string | null;
+  /** WoT node v1 : retirer le périmètre ancêtres du bundle pour les pairs non certifiés. */
+  getWotNodePeerExportGuard?: () => {
+    stripAncestorScope: { rootId: string; maxGenUp: number };
+  } | null;
   setP2PSyncStatusText: (text: string | null) => void;
 };
 
@@ -221,6 +225,32 @@ export function createP2PSyncSenders(ctx: P2PSyncSendersContext) {
             }
             documentsForBundle = filtered;
           }
+        }
+      }
+    }
+    /**
+     * Même logique que `skipManifestSubsetForCompare` : en session comparateur, le pair doit recevoir
+     * la racine d’échange et la chaîne complète utile à la grille / manifeste. Le strip ancêtres « node »
+     * (confidentialité vis-à-vis d’un pair non certifié) enlève souvent précisément la racine d’échange
+     * invitant si elle figure dans les ascendants du nœud — d’où liste pair incomplète côté invité.
+     */
+    const skipWotAncestorStripForCompare = ctx.p2pSessionUseCaseRef.current === 'compare';
+    const wotGuard = ctx.getWotNodePeerExportGuard?.();
+    if (wotGuard?.stripAncestorScope && !skipWotAncestorStripForCompare) {
+      const { rootId, maxGenUp } = wotGuard.stripAncestorScope;
+      if (gedcomForBundle.individuals[rootId]) {
+        const stripIds = collectAncestorIndividualIds(gedcomForBundle, rootId, maxGenUp);
+        const allIds = new Set(Object.keys(gedcomForBundle.individuals));
+        for (const id of stripIds) allIds.delete(id);
+        if (allIds.size > 0) {
+          gedcomForBundle = extractGedcomSubset(gedcomForBundle, allIds);
+          const filtered: Record<string, IndividualDocument[]> = {};
+          for (const id of allIds) {
+            const list = documentsForBundle[id];
+            if (list?.length) filtered[id] = list;
+          }
+          documentsForBundle = filtered;
+          gedcomSubsetApplied = true;
         }
       }
     }

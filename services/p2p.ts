@@ -178,6 +178,21 @@ export class P2PService {
         });
     }
 
+    /** PeerJS : identifiant du pair connecté (hôte ou invité). */
+    public getRemotePeerId(): string | null {
+        return this.conn?.peer ?? null;
+    }
+
+    /** Ferme le canal données sans détruire le Peer (ex. hôte qui révoque : message puis coupure). */
+    public closeConnection() {
+        this.clearConnectTimeout();
+        this.pendingOutbound = [];
+        if (this.conn) {
+            this.conn.close();
+            this.conn = null;
+        }
+    }
+
     public destroy() {
         this.clearConnectTimeout();
         this.pendingOutbound = [];
@@ -239,10 +254,11 @@ export class P2PService {
         this.handleConnection(conn);
     }
 
-    private decodeIncomingData(data: any): { type: string; payload: unknown } | null {
+    private decodeIncomingData(data: any): { type: string; payload: unknown; senderPeerId?: string } | null {
         // Backward compatibility with old format: { type, payload }
         if (data && typeof data === 'object' && !('protocolVersion' in data) && 'type' in data && 'payload' in data) {
-            return { type: data.type, payload: data.payload };
+            const legacy = data as { type: string; payload: unknown; senderPeerId?: string };
+            return { type: legacy.type, payload: legacy.payload, senderPeerId: legacy.senderPeerId };
         }
 
         if (!isEnvelope(data)) {
@@ -259,7 +275,7 @@ export class P2PService {
 
         // Do not ACK ACKs to avoid endless acknowledgement loops.
         if (envelope.type === 'ACK') {
-            return { type: envelope.type, payload: envelope.payload };
+            return { type: envelope.type, payload: envelope.payload, senderPeerId: envelope.senderPeerId };
         }
 
         const senderKey = envelope.senderPeerId || 'anonymous';
@@ -269,7 +285,7 @@ export class P2PService {
         }
 
         this.sendAck(envelope.messageId, 'ok');
-        return { type: envelope.type, payload: envelope.payload };
+        return { type: envelope.type, payload: envelope.payload, senderPeerId: envelope.senderPeerId };
     }
 
     private sendAck(ackMessageId: string, status: 'ok' | 'error', errorCode?: P2PErrorCode) {

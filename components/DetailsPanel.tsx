@@ -2114,6 +2114,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             {showClaimedIdentityPanels && (
               <div className={`${cardBg} rounded-lg p-2.5 space-y-1`}>
                 <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.claimedIdentity')}</div>
+                {selfIdentity.claimedIndividualLabel?.trim() ? (
+                  <div className={`text-xs ${textClass}`}>
+                    {t('details.claimedIdentityDisplayName')}: {selfIdentity.claimedIndividualLabel.trim()}
+                  </div>
+                ) : null}
                 <div className={`text-xs ${textClass}`}>{t('details.individualLabel')}: {selfIdentity.individualId}</div>
                 <div className={`text-xs ${textClass}`}>{t('details.deviceKey')}: {selfIdentity.deviceKeyId}</div>
                 <div className={`text-[11px] ${subTextClass}`}>

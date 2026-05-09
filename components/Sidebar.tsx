@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Upload, Search, Loader2, FileText, User as UserIcon, Globe, Eye, EyeOff, Sparkles, SlidersHorizontal, Check, Save } from 'lucide-react';
 import { Individual, GedcomData, Gender, SortMode, FilterTag } from '../types';
 import { logGedcomImportDiagnostics, parseGedcom } from '../services/gedcomParser';
-import { individualMatchesSearchQuery } from '../services/individualSearch';
+import { individualMatchesSearchQuery, individualPrimaryListLabel } from '../services/individualSearch';
 import { useI18n } from '../i18n';
 import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
 
@@ -1142,8 +1142,20 @@ const Sidebar: React.FC<SidebarProps> = ({
                             <div
                               className={`text-sm font-medium truncate flex-1 ${textClass}`}
                             >
-                              {indi.givenName}{' '}
-                              <span className="font-bold">{indi.surname}</span>
+                              {(() => {
+                                const primary = individualPrimaryListLabel(indi);
+                                const sn = (indi.surname || '').trim();
+                                if (sn && primary.includes(sn) && primary !== sn) {
+                                  const before = primary.split(sn)[0]?.trim() ?? '';
+                                  return (
+                                    <>
+                                      {before ? `${before} ` : null}
+                                      <span className="font-bold">{sn}</span>
+                                    </>
+                                  );
+                                }
+                                return primary;
+                              })()}
                               {isCal && (
                                 <span
                                   className="ms-1.5 inline-block w-2 h-2 rounded-full bg-yellow-500 border border-black/40 align-middle"

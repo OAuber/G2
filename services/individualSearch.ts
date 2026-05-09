@@ -1,6 +1,17 @@
 import { Individual } from '../types';
 
 /**
+ * Libellé principal pour listes / recherche : prénom + nom de famille si présents,
+ * sinon `name` GEDCOM (souvent rempli seul côté import), sinon id.
+ * Aligné sur l’usage des bandeaux comparaison (`individualDisplayLabel` côté App).
+ */
+export function individualPrimaryListLabel(indi: Individual): string {
+  const fromParts = `${indi.givenName || ''} ${indi.surname || ''}`.trim();
+  if (fromParts) return fromParts;
+  return (indi.name || '').trim() || indi.id;
+}
+
+/**
  * Recherche dans la liste : sous-chaîne complète, ou tous les « mots » (≥2 car.) présents
  * dans prénom + nom + nom affiché + identifiant GEDCOM sans @.
  * Permet de trouver « Sarah Ferguson » alors que le GEDCOM a « Sarah Margaret Ferguson ».

@@ -33,6 +33,8 @@ export type P2PMessageType =
   | 'CONTACT_REQUEST'
   | 'CONTACT_RESPONSE'
   | 'PEER_IDENTITY_CERTIFY'
+  /** État d’annonce WoT node (v1) — périmètre ancêtres partagé avec pairs autorisés. */
+  | 'WOT_NODE_STATE'
   | 'ACK';
 
 export type P2PErrorCode =

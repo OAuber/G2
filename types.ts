@@ -64,6 +64,12 @@ export interface SelfIdentityPublic {
   claimedAt: string;
   deviceKeyId: string;
   devicePublicKeyJwk: JsonWebKey;
+  /**
+   * Libellé affiché (nom au moment de la revendication ou de l’import).
+   * Les identifiants GEDCOM (@I52@, etc.) ne sont pas stables entre fichiers : ce libellé évite d’afficher
+   * une autre personne lorsque le même xref désigne quelqu’un d’autre dans un autre arbre.
+   */
+  claimedIndividualLabel?: string;
   /** Présent si l’identité a été revendiquée dans un contexte d’invitation P2P (invite + clé hôte connue). */
   introduction?: IdentityIntroductionContext;
 }

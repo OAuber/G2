@@ -87,6 +87,21 @@ function isOfflinePhotoUrl(url: string): boolean {
   return u.startsWith('data:') || u.startsWith('blob:');
 }
 
+/** Liste de pistes (scores connus) : ruban au meilleur % au centre de la rangée. */
+function orderBestScoreInCenter(
+  items: Individual[],
+  scores: ReadonlyMap<string, number>,
+): Individual[] {
+  if (items.length <= 1) return items;
+  if (!scores.size) return items;
+  const allHaveScore = items.every((i) => scores.has(i.id));
+  if (!allHaveScore) return items;
+  const sorted = [...items].sort((a, b) => scores.get(b.id)! - scores.get(a.id)!);
+  const [best, ...tail] = sorted;
+  const mid = Math.floor(tail.length / 2);
+  return [...tail.slice(0, mid), best, ...tail.slice(mid)];
+}
+
 const GRID_PHOTO_PLANES_MAX_ONLINE = 10;
 const GRID_PHOTO_PLANES_MAX_OFFLINE = 100;
 
@@ -1031,6 +1046,16 @@ const GridContent: React.FC<GridContentProps> = ({
     prevSelectedIdRef.current = selectedId;
   }, [selectedId, singleIndividual]);
 
+  const prevComparePairRibbonCountRef = useRef(-1);
+  useLayoutEffect(() => {
+    const dual = !singleIndividual && comparePeerRibbonBackdrop && ribbonData.length === 2;
+    if (dual && prevComparePairRibbonCountRef.current !== 2) {
+      needsCenterRef.current = true;
+      shouldApplyGridDefaultZoomRef.current = true;
+    }
+    prevComparePairRibbonCountRef.current = ribbonData.length;
+  }, [singleIndividual, comparePeerRibbonBackdrop, ribbonData.length]);
+
   useEffect(() => {
     if (prevSingleIndividualRef.current && !singleIndividual) {
       // Entering grid view from individual view:
@@ -1186,6 +1211,16 @@ const GridContent: React.FC<GridContentProps> = ({
     if (visW <= 0 || !isFinite(visW)) return;
 
     const cols = Math.max(1, Math.floor(visW / STEP_X));
+    const comparePairCameraXY =
+      !singleIndividual && comparePeerRibbonBackdrop && ribbonData.length === 2
+        ? (() => {
+            const c0 = 0 % cols;
+            const r0 = Math.floor(0 / cols);
+            const c1 = 1 % cols;
+            const r1 = Math.floor(1 / cols);
+            return { x: ((c0 + c1) * STEP_X) / 2, y: -((r0 + r1) * STEP_Y) / 2 };
+          })()
+        : null;
     const needsReflow = cols !== colsRef.current;
 
     if (!singleIndividual && ribbonData.length > 0 && cols !== lastLayoutColsSyncedRef.current) {
@@ -1216,17 +1251,24 @@ const GridContent: React.FC<GridContentProps> = ({
     };
 
     let centeredSelectedThisFrame = false;
-    // Center camera on newly selected individual in grid mode
+    // Center camera on newly selected individual in grid mode (ou milieu des 2 rubans comparaison).
     if (needsCenterRef.current && cols > 0 && initializedRef.current && !singleIndividual) {
       needsCenterRef.current = false;
-      const idx = ribbonData.findIndex(rd => rd.individual.id === selectedId);
-      if (idx >= 0) {
-        const row = Math.floor(idx / cols);
-        const col = idx % cols;
-        ortho.position.x = col * STEP_X;
-        ortho.position.y = -row * STEP_Y;
+      if (comparePairCameraXY) {
+        ortho.position.x = comparePairCameraXY.x;
+        ortho.position.y = comparePairCameraXY.y;
         centeredSelectedThisFrame = true;
         applyGridDefaultZoomIfNeeded();
+      } else {
+        const idx = ribbonData.findIndex(rd => rd.individual.id === selectedId);
+        if (idx >= 0) {
+          const row = Math.floor(idx / cols);
+          const col = idx % cols;
+          ortho.position.x = col * STEP_X;
+          ortho.position.y = -row * STEP_Y;
+          centeredSelectedThisFrame = true;
+          applyGridDefaultZoomIfNeeded();
+        }
       }
     }
 
@@ -1234,11 +1276,16 @@ const GridContent: React.FC<GridContentProps> = ({
     if (skipMatrixReflow) {
       // Keep selected individual centered while zooming in grid mode,
       // regardless of pointer position.
-      if (zoomChanged && selectedIdx >= 0) {
-        const row = Math.floor(selectedIdx / cols);
-        const col = selectedIdx % cols;
-        ortho.position.x = col * STEP_X;
-        ortho.position.y = -row * STEP_Y;
+      if (zoomChanged) {
+        if (comparePairCameraXY) {
+          ortho.position.x = comparePairCameraXY.x;
+          ortho.position.y = comparePairCameraXY.y;
+        } else if (selectedIdx >= 0) {
+          const row = Math.floor(selectedIdx / cols);
+          const col = selectedIdx % cols;
+          ortho.position.x = col * STEP_X;
+          ortho.position.y = -row * STEP_Y;
+        }
       }
     } else {
     // Anchor: keep the top-most visible item stable during reflow
@@ -1542,7 +1589,9 @@ const GridContent: React.FC<GridContentProps> = ({
       if (isAtZoomLimit) setIsAtZoomLimit(false);
       const gridCx = ((cols - 1) * STEP_X) / 2;
       if (!initializedRef.current) {
-        if (selectedIdx >= 0) {
+        if (comparePairCameraXY) {
+          ortho.position.set(comparePairCameraXY.x, comparePairCameraXY.y, 100);
+        } else if (selectedIdx >= 0) {
           const selectedRow = Math.floor(selectedIdx / cols);
           const selectedCol = selectedIdx % cols;
           ortho.position.set(selectedCol * STEP_X, -selectedRow * STEP_Y, 100);
@@ -1554,12 +1603,17 @@ const GridContent: React.FC<GridContentProps> = ({
       } else if (!skipMatrixReflow && !centeredSelectedThisFrame) {
         // Uniquement après un reflow de grille : recentrage au zoom ou conservation du défilement.
         // Si skipMatrixReflow, le centrage sélection / zoom est géré plus haut (needsCenterRef + bloc zoom).
-        if (zoomChanged && selectedIdx >= 0) {
-          // On zoom (including reflow), always keep selected centered.
-          const selectedRow = Math.floor(selectedIdx / cols);
-          const selectedCol = selectedIdx % cols;
-          ortho.position.x = selectedCol * STEP_X;
-          ortho.position.y = -selectedRow * STEP_Y;
+        if (zoomChanged) {
+          if (comparePairCameraXY) {
+            ortho.position.x = comparePairCameraXY.x;
+            ortho.position.y = comparePairCameraXY.y;
+          } else if (selectedIdx >= 0) {
+            // On zoom (including reflow), always keep selected centered.
+            const selectedRow = Math.floor(selectedIdx / cols);
+            const selectedCol = selectedIdx % cols;
+            ortho.position.x = selectedCol * STEP_X;
+            ortho.position.y = -selectedRow * STEP_Y;
+          }
         } else {
           const newRow = Math.floor(anchorIndexRef.current / cols);
           // Preserve user free horizontal pan in grid mode.
@@ -2765,29 +2819,16 @@ const Scene2DGrid: React.FC<Scene2DGridProps> = ({
       );
     }
     let ordered = applySortMode(list, sortMode);
-    /** Comparaison : ancre (sélection) puis pistes par score décroissant, puis le reste au tri — évite l’ordre A→Z qui met un homonyme avant la bonne piste. */
-    if (compareSuggestionScores && compareSuggestionScores.size > 0 && ordered.length > 1) {
-      const anchor =
-        selectedId && ordered.some((i) => i.id === selectedId)
-          ? ordered.find((i) => i.id === selectedId)
-          : null;
-      if (anchor) {
-        const rest = ordered.filter((i) => i.id !== selectedId);
-        const rScored = rest.filter((i) => compareSuggestionScores.has(i.id));
-        const rUnscored = rest.filter((i) => !compareSuggestionScores.has(i.id));
-        rScored.sort(
-          (a, b) =>
-            (compareSuggestionScores.get(b.id) ?? 0) - (compareSuggestionScores.get(a.id) ?? 0),
-        );
-        ordered = [anchor, ...rScored, ...applySortMode(rUnscored, sortMode)];
-      } else {
-        const scored = ordered.filter((i) => compareSuggestionScores.has(i.id));
-        const unscored = ordered.filter((i) => !compareSuggestionScores.has(i.id));
-        scored.sort(
-          (a, b) =>
-            (compareSuggestionScores.get(b.id) ?? 0) - (compareSuggestionScores.get(a.id) ?? 0),
-        );
-        ordered = [...unscored, ...scored];
+    // Ne pas réordonner une paire figée (2 rubans) : les deux ont souvent un score pistes et le
+    // recentrage « meilleur au centre » déplaçait la paire d’échange en bord de grille.
+    if (
+      compareSuggestionScores &&
+      compareSuggestionScores.size > 0 &&
+      ordered.length > 2
+    ) {
+      const allScored = ordered.every((i) => compareSuggestionScores.has(i.id));
+      if (allScored) {
+        ordered = orderBestScoreInCenter(ordered, compareSuggestionScores);
       }
     }
     return ordered;

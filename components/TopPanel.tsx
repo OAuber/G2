@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Network,
   WifiOff,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { P2PStatus, P2PMode, IdentityIntroductionContext } from '../types';
 import { ActivityLogEvent } from '../services/p2pDomain';
@@ -12,9 +14,13 @@ import type { InviteExchangeScope, P2PVisibilitySettings } from '../app/p2pAppTy
 import { defaultInviteExchangeScope } from '../services/inviteExchangeManifest';
 import { InviteExchangeScopeForm } from './InviteExchangeScopeForm';
 import type { InviteLinkKind } from '../app/inviteLinkKind';
+import type { CertificationKind, PeerRelationStatus, WotNodeAnnouncementV1 } from '../app/identityTrust/types';
 import { InviteQrCode } from './InviteQrCode';
 
-const MAX_INVITE_MEMBER_PICK = 500;
+/** Résultats max quand l’utilisateur tape une recherche (liste potentiellement énorme). */
+const MAX_INVITE_MEMBER_SEARCH_RESULTS = 500;
+/** Sans recherche : afficher tout l’arbre jusqu’à ce plafond pour éviter de masquer des fiches (bug « pas dans la liste »). */
+const MAX_INVITE_MEMBER_UNFILTERED = 8000;
 
 /** Sélection d’un membre pour invitation : recherche + liste (meilleure ergonomie qu’un menu natif très long). */
 const InviteLivingMemberCombobox: React.FC<{
@@ -33,17 +39,27 @@ const InviteLivingMemberCombobox: React.FC<{
     if (!value) return '';
     return candidates.find((c) => c.id === value)?.label ?? value;
   }, [value, candidates]);
-  const filtered = useMemo(() => {
+  const { filtered, listTruncated } = useMemo(() => {
     const q = query.toLowerCase().trim();
-    const list = q
-      ? candidates.filter(
-          (c) =>
-            c.label.toLowerCase().includes(q) ||
-            c.id.toLowerCase().includes(q) ||
-            (c.lifeSpanLine && c.lifeSpanLine.toLowerCase().includes(q)),
-        )
-      : candidates;
-    return list.slice(0, MAX_INVITE_MEMBER_PICK);
+    if (q) {
+      const matched = candidates.filter(
+        (c) =>
+          c.label.toLowerCase().includes(q) ||
+          c.id.toLowerCase().includes(q) ||
+          (c.lifeSpanLine && c.lifeSpanLine.toLowerCase().includes(q)),
+      );
+      return {
+        filtered: matched.slice(0, MAX_INVITE_MEMBER_SEARCH_RESULTS),
+        listTruncated: matched.length > MAX_INVITE_MEMBER_SEARCH_RESULTS,
+      };
+    }
+    if (candidates.length <= MAX_INVITE_MEMBER_UNFILTERED) {
+      return { filtered: candidates, listTruncated: false };
+    }
+    return {
+      filtered: candidates.slice(0, MAX_INVITE_MEMBER_UNFILTERED),
+      listTruncated: true,
+    };
   }, [candidates, query]);
 
   const pickEmpty = useCallback(
@@ -112,6 +128,11 @@ const InviteLivingMemberCombobox: React.FC<{
           ))}
           {filtered.length === 0 && (
             <div className={`px-2 py-1.5 text-xs italic ${subTextClass}`}>{t('details.noMatch')}</div>
+          )}
+          {listTruncated && (
+            <div className={`px-2 py-1.5 text-[10px] border-t border-amber-500/35 ${subTextClass}`}>
+              {t('topPanel.inviteMemberListTruncated')}
+            </div>
           )}
         </div>
       )}
@@ -192,16 +213,26 @@ interface TopPanelProps {
   onReviewProposal: (proposalId: string) => void;
   /** WoT / identité — résumé et lien vers le panneau détails. */
   isIdentityClaimed?: boolean;
+  /** Libellé de la fiche revendiquée (nom + prénom ou id si hors GEDCOM). */
+  claimedIndividualLabel?: string | null;
+  /** Xref GEDCOM à afficher pour cet arbre (invité nominatif : fiche cible chez l’hôte, pas le xref du fichier local). */
+  claimedIndividualWireId?: string | null;
+  /** Xref du fichier local si différent de `claimedIndividualWireId` (désambiguïsation). */
+  claimedIndividualLocalWireDisambiguation?: string | null;
+  /** Le fichier ouvert contient le même xref mais une autre personne que le libellé enregistré avec l’identité. */
+  claimedWireOpenFileCollisionName?: string | null;
   identityIntroduction?: IdentityIntroductionContext;
   onOpenIdentityPanel?: () => void;
+  onExportIdentityBackup?: (password: string) => void | Promise<void>;
+  onImportIdentityBackup?: (file: File, password: string) => void | Promise<void>;
+  /** Exécuté après confirmation dans ce panneau (pas de `window.confirm` côté parent). */
+  onRenounceIdentity?: () => void;
+  /** Idem : reset local après confirmation dans ce panneau. */
+  onProvisionalResetAllLocalData?: () => void;
   /** Raccourci après invite : invité pas encore identifié. */
   showCompleteIdentityHint?: boolean;
   /** Comparaison : message supplémentaire (ex. inviter le pair à charger son GEDCOM). */
   compareSessionExtraHint?: string | null;
-  /** Invité comparateur : ouvrir la modale périmètre d’échange (base locale chargée). */
-  onOpenInviteeExchangeScope?: () => void;
-  showInviteeExchangeScopeEditor?: boolean;
-  inviteeExchangeScopeSetupDone?: boolean;
   /** Hôte : périmètre d’échange (formulaire) — état piloté par `App` pour l’aligner avec la liste comparaison. */
   inviterExchangeScopeDraft?: InviteExchangeScope;
   onInviterExchangeScopeDraftChange?: (scope: InviteExchangeScope) => void;
@@ -214,8 +245,39 @@ interface TopPanelProps {
     claimedAt?: string;
     certifiedByMe?: boolean;
     certifiedByPeer?: boolean;
+    certificationKindByMe?: CertificationKind;
+    relationStatus?: PeerRelationStatus;
   }>;
   onTogglePeerCertifiedByMe?: (peerId: string, next: boolean) => void;
+  onSetPeerCertificationKind?: (peerId: string, kind: CertificationKind) => void;
+  axisStatusSummary?: {
+    sessionKey: string;
+    identityKey: string;
+    trustSummary: string;
+    nodeKey: string;
+  };
+  wotNodePanel?: {
+    runtimeLabelKey: string;
+    eligibilityReasonKey: string;
+    requiredCount: number;
+    directedCertTotal: number;
+    personhoodMajority: boolean;
+    expiresAt?: string;
+    revokedAt?: string;
+    active: boolean;
+    rootId: string;
+    ttlHours: number;
+    maxGenUp: number;
+    rootCandidates: Array<{ id: string; label: string }>;
+    onRootChange: (id: string) => void;
+    onTtlHoursChange: (hours: number) => void;
+    onMaxGenUpChange: (n: number) => void;
+    onActivate: () => void;
+    onRevoke: () => void;
+    /** Hôte ou invité : chacun peut publier son périmètre WoT local si identité + GEDCOM. */
+    allowLocalWotNodeControls: boolean;
+    remoteAnn: WotNodeAnnouncementV1 | null;
+  };
 }
 
 const TopPanel: React.FC<TopPanelProps> = ({ 
@@ -248,20 +310,28 @@ const TopPanel: React.FC<TopPanelProps> = ({
   onAcceptInvite,
   onReviewProposal,
   isIdentityClaimed = false,
+  claimedIndividualLabel = null,
+  claimedIndividualWireId = null,
+  claimedIndividualLocalWireDisambiguation = null,
+  claimedWireOpenFileCollisionName = null,
   identityIntroduction,
   onOpenIdentityPanel,
+  onExportIdentityBackup,
+  onImportIdentityBackup,
+  onRenounceIdentity,
+  onProvisionalResetAllLocalData,
   showCompleteIdentityHint = false,
   onCreateEphemeralInvite,
   compareSessionExtraHint = null,
-  onOpenInviteeExchangeScope,
-  showInviteeExchangeScopeEditor = false,
-  inviteeExchangeScopeSetupDone = false,
   inviterExchangeScopeDraft,
   onInviterExchangeScopeDraftChange,
   activeTabOverride,
   onActiveTabChange,
   peerIdentityRows = [],
   onTogglePeerCertifiedByMe,
+  onSetPeerCertificationKind,
+  axisStatusSummary,
+  wotNodePanel,
 }) => {
   const { t } = useI18n();
   const [newInviteIndividualId, setNewInviteIndividualId] = useState('');
@@ -287,10 +357,22 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
   const [activeTab, setActiveTab] = useState<TopPanelTabId | null>(null);
+  const [exportPassword, setExportPassword] = useState('');
+  const [importPassword, setImportPassword] = useState('');
+  const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
+  const [showExportPassword, setShowExportPassword] = useState(false);
+  const [showImportPassword, setShowImportPassword] = useState(false);
   useEffect(() => {
     if (activeTabOverride === undefined) return;
     setActiveTab(activeTabOverride);
   }, [activeTabOverride]);
+
+  const [renounceInlineConfirm, setRenounceInlineConfirm] = useState(false);
+  const [provisionalResetInlineConfirm, setProvisionalResetInlineConfirm] = useState(false);
+  useEffect(() => {
+    setRenounceInlineConfirm(false);
+    setProvisionalResetInlineConfirm(false);
+  }, [activeTab]);
 
   const inviteExpiringSoon = useMemo(() => {
     const week = 7 * 24 * 60 * 60 * 1000;
@@ -340,6 +422,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
       proposals: proposalsTab,
       activity,
       yourIdentity: isIdentityClaimed ? 'ok' : 'warning',
+      p2pPairShare: 'idle',
       peerIdentities: peerIdentityRows.length > 0 ? 'ok' : 'idle',
     };
   }, [
@@ -403,6 +486,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
     : 'bg-white border-slate-300 text-slate-800';
 
   const cardClass = isDarkMode ? 'bg-neutral-900/50 border-slate-700' : 'bg-slate-50 border-slate-200';
+  const innerCardBg = isDarkMode ? 'bg-slate-900/40 border-slate-600' : 'bg-white border-slate-200';
+  const identityBackupBtnClass = isDarkMode
+    ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
+    : 'bg-emerald-600 text-white hover:bg-emerald-500';
   const activitySummary = useMemo(() => {
     const counts = { view: 0, download: 0, proposal: 0, merges: 0 };
     for (const event of activityEvents) {
@@ -541,7 +628,10 @@ const TopPanel: React.FC<TopPanelProps> = ({
               )}
             </div>
 
-            {activeTab && (
+            {activeTab &&
+              activeTab !== 'yourIdentity' &&
+              activeTab !== 'p2pPairShare' &&
+              activeTab !== 'peerIdentities' && (
               <div
                 className={`rounded-lg border px-3 py-2 ${cardClass}`}
                 role="status"
@@ -582,25 +672,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
                   }`}
                 >
                   {t('topPanel.completeIdentityCta')}
-                </button>
-              </div>
-            )}
-
-            {isInviteMode && showInviteeExchangeScopeEditor && onOpenInviteeExchangeScope && (
-              <div
-                className={`rounded-lg border px-3 py-2.5 ${isDarkMode ? 'border-emerald-900/70 bg-emerald-950/30' : 'border-emerald-300 bg-emerald-50'}`}
-              >
-                <p className={`text-[11px] mb-2 leading-relaxed ${subTextClass}`}>
-                  {t('topPanel.inviteeExchangeScopeEditorHint')}
-                </p>
-                <button
-                  type="button"
-                  onClick={onOpenInviteeExchangeScope}
-                  className={`text-sm rounded px-3 py-2 font-semibold w-full sm:w-auto ${isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
-                >
-                  {inviteeExchangeScopeSetupDone
-                    ? t('topPanel.inviteeExchangeScopeEditorAgain')
-                    : t('topPanel.inviteeExchangeScopeEditorOpen')}
                 </button>
               </div>
             )}
@@ -770,6 +841,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 <p className={`text-[11px] leading-relaxed ${subTextClass}`}>
                   {t('topPanel.personalizedInviteFormIntro')}
                 </p>
+                <p className={`text-[10px] ${subTextClass}`}>{t('topPanel.inviteMemberSearchHint')}</p>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                   <InviteLivingMemberCombobox
                     value={newInviteIndividualId}
@@ -971,17 +1043,51 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {activeTab === 'yourIdentity' && (
           <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.wotHeading')}</h3>
-            <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
-            <p className={`text-xs leading-relaxed mt-2 ${subTextClass}`}>{t('topPanel.wotSymmetricTrust')}</p>
-            <p className={`text-xs leading-relaxed mt-1 ${subTextClass}`}>{t('topPanel.wotAncestorsSharing')}</p>
-            <div className={`text-xs space-y-1 rounded-lg border p-2 mt-2 ${isDarkMode ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white'}`}>
+            <h3 className={`text-sm font-bold uppercase tracking-wide ${textClass}`}>{t('topPanel.tabYourIdentity')}</h3>
+            <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.identityGlobalHint')}</p>
+            <div className={`text-xs space-y-1 rounded-lg border p-2 ${innerCardBg}`}>
               <div className="flex justify-between gap-2">
                 <span className={subTextClass}>{t('topPanel.wotIdentityStatus')}</span>
                 <span className={`font-semibold ${isIdentityClaimed ? 'text-emerald-500' : 'text-amber-500'}`}>
                   {isIdentityClaimed ? t('topPanel.wotIdentityClaimed') : t('topPanel.wotIdentityNone')}
                 </span>
               </div>
+              {isIdentityClaimed &&
+                (claimedIndividualLabel || claimedIndividualWireId || selfIndividualId) && (
+                  <div className={`mt-2 pt-2 border-t ${isDarkMode ? 'border-slate-600' : 'border-slate-200'}`}>
+                    <div className={`text-[10px] uppercase tracking-wide ${subTextClass}`}>
+                      {t('topPanel.wotClaimedIndividual')}
+                    </div>
+                    <div className={`font-semibold ${textClass} mt-0.5`}>
+                      {claimedIndividualLabel || t('topPanel.wotClaimedIndividualUnknown')}
+                    </div>
+                    {(claimedIndividualWireId ?? selfIndividualId) ? (
+                      <div className={`font-mono text-[10px] mt-1 break-all ${subTextClass}`}>
+                        {t('topPanel.wotClaimedWireIdentity')}: {claimedIndividualWireId ?? selfIndividualId}
+                      </div>
+                    ) : null}
+                    {claimedWireOpenFileCollisionName ? (
+                      <div
+                        className={`text-[10px] mt-1.5 leading-snug ${isDarkMode ? 'text-amber-200/90' : 'text-amber-900'}`}
+                      >
+                        {t('topPanel.wotClaimedWireOtherPersonInOpenFile').replace(
+                          '{{name}}',
+                          claimedWireOpenFileCollisionName,
+                        )}
+                      </div>
+                    ) : null}
+                    {claimedIndividualLocalWireDisambiguation ? (
+                      <div
+                        className={`text-[10px] mt-1.5 leading-snug ${isDarkMode ? 'text-amber-200/90' : 'text-amber-900'}`}
+                      >
+                        {t('topPanel.wotClaimedLocalWireDisambiguation').replace(
+                          '{{id}}',
+                          claimedIndividualLocalWireDisambiguation,
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               {identityIntroduction?.inviterName && (
                 <div className="flex justify-between gap-2">
                   <span className={subTextClass}>{t('topPanel.wotIntroductionInviter')}</span>
@@ -994,26 +1100,313 @@ const TopPanel: React.FC<TopPanelProps> = ({
                 </div>
               )}
             </div>
-            <p className={`text-[11px] ${subTextClass} opacity-90`}>{t('topPanel.wotFutureAttestations')}</p>
-            {onOpenIdentityPanel && (
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenIdentityPanel?.();
-                  onActiveTabChange?.('yourIdentity');
-                }}
-                className={`text-xs px-3 py-2 rounded font-bold w-full sm:w-auto ${
-                  isDarkMode ? 'bg-emerald-800 hover:bg-emerald-700 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                }`}
+            {!isIdentityClaimed && onOpenIdentityPanel && (
+              <div
+                className={`rounded-lg border p-3 space-y-2 ${isDarkMode ? 'border-slate-600 bg-slate-900/30' : 'border-slate-200 bg-white'}`}
               >
-                  {t('topPanel.wotOpenIdentity')}
-              </button>
+                <p className={`text-[11px] leading-relaxed ${subTextClass}`}>{t('topPanel.claimIdentityTopHint')}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenIdentityPanel();
+                    onActiveTabChange?.('yourIdentity');
+                  }}
+                  className={`text-xs px-3 py-2 rounded font-bold w-full sm:w-auto ${identityBackupBtnClass}`}
+                >
+                  {t('topPanel.claimIdentityTopCta')}
+                </button>
+              </div>
+            )}
+            {(onExportIdentityBackup || onImportIdentityBackup) && (
+              <div className={`rounded-lg border p-2.5 space-y-2 ${innerCardBg}`}>
+                <div className={`text-xs font-bold uppercase tracking-wider ${textClass}`}>{t('details.identityBackup')}</div>
+                {isIdentityClaimed && onExportIdentityBackup && (
+                  <>
+                    <div className="relative">
+                      <input
+                        type={showExportPassword ? 'text' : 'password'}
+                        value={exportPassword}
+                        onChange={(e) => setExportPassword(e.target.value)}
+                        placeholder={t('details.exportPasswordPlaceholder')}
+                        autoComplete="new-password"
+                        className={`w-full rounded px-2 py-1 pr-9 text-sm border outline-none ${inputBg}`}
+                      />
+                      <button
+                        type="button"
+                        className={`absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-md ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+                        onClick={() => setShowExportPassword((v) => !v)}
+                        aria-label={showExportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                        title={showExportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                      >
+                        {showExportPassword ? <EyeOff className="w-4 h-4" aria-hidden /> : <Eye className="w-4 h-4" aria-hidden />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className={`w-full py-2 rounded text-xs font-bold ${identityBackupBtnClass}`}
+                      onClick={() => void onExportIdentityBackup(exportPassword)}
+                    >
+                      {t('details.exportBackup')}
+                    </button>
+                  </>
+                )}
+                {onImportIdentityBackup && (
+                  <>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
+                      onChange={(e) => setIdentityBackupFile(e.target.files?.[0] || null)}
+                    />
+                    <div className="relative">
+                      <input
+                        type={showImportPassword ? 'text' : 'password'}
+                        value={importPassword}
+                        onChange={(e) => setImportPassword(e.target.value)}
+                        placeholder={t('details.importPasswordPlaceholder')}
+                        autoComplete="new-password"
+                        className={`w-full rounded px-2 py-1 pr-9 text-sm border outline-none ${inputBg}`}
+                      />
+                      <button
+                        type="button"
+                        className={`absolute right-1 top-1/2 -translate-y-1/2 p-1.5 rounded-md ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'}`}
+                        onClick={() => setShowImportPassword((v) => !v)}
+                        aria-label={showImportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                        title={showImportPassword ? t('details.hidePassword') : t('details.showPassword')}
+                      >
+                        {showImportPassword ? <EyeOff className="w-4 h-4" aria-hidden /> : <Eye className="w-4 h-4" aria-hidden />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!identityBackupFile}
+                      className={`w-full py-2 rounded text-xs font-bold ${identityBackupBtnClass} disabled:opacity-50`}
+                      onClick={() => identityBackupFile && void onImportIdentityBackup(identityBackupFile, importPassword)}
+                    >
+                      {t('details.importBackup')}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {isIdentityClaimed && onRenounceIdentity && (
+              <div className="rounded-lg border border-rose-500/60 bg-rose-500/10 p-3 space-y-2">
+                <div className={`text-xs font-bold uppercase tracking-wider text-rose-500`}>{t('details.dangerZone')}</div>
+                <p className="text-xs text-rose-400">{t('details.renounceWarning')}</p>
+                {renounceInlineConfirm ? (
+                  <>
+                    <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+                      {t('app.confirm.renounceIdentity')}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={`touch-manipulation flex-1 min-w-[6rem] rounded border py-2 text-[11px] font-bold ${
+                          isDarkMode
+                            ? 'border-rose-400/50 text-rose-100 hover:bg-rose-500/15'
+                            : 'border-rose-400 text-rose-900 hover:bg-rose-100'
+                        }`}
+                        onClick={() => setRenounceInlineConfirm(false)}
+                      >
+                        {t('details.cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        className="touch-manipulation flex-1 min-w-[6rem] rounded bg-rose-600 py-2 text-[11px] font-bold text-white hover:bg-rose-500"
+                        onClick={() => {
+                          onRenounceIdentity();
+                          setRenounceInlineConfirm(false);
+                        }}
+                      >
+                        {t('details.yes')}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="touch-manipulation w-full rounded bg-rose-600 py-2 text-xs font-bold text-white hover:bg-rose-500"
+                    onClick={() => setRenounceInlineConfirm(true)}
+                  >
+                    {t('details.renounceIdentity')}
+                  </button>
+                )}
+              </div>
+            )}
+            {onProvisionalResetAllLocalData && (
+              <div
+                className={`mt-2 rounded-lg border p-3 space-y-2 ${isDarkMode ? 'border-rose-900/60 bg-rose-950/30' : 'border-rose-200 bg-rose-50'}`}
+              >
+                <div className={`text-[11px] font-semibold ${isDarkMode ? 'text-rose-100' : 'text-rose-900'}`}>
+                  {t('topPanel.provisionalResetTitle')}
+                </div>
+                <p className={`text-[10px] leading-relaxed ${subTextClass}`}>{t('topPanel.provisionalResetBody')}</p>
+                {provisionalResetInlineConfirm ? (
+                  <>
+                    <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+                      {t('app.confirm.provisionalResetAllData')}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={`touch-manipulation flex-1 min-w-[6rem] rounded border py-2 text-[11px] font-bold ${
+                          isDarkMode
+                            ? 'border-rose-400/50 text-rose-100 hover:bg-rose-500/15'
+                            : 'border-rose-400 text-rose-900 hover:bg-rose-100'
+                        }`}
+                        onClick={() => setProvisionalResetInlineConfirm(false)}
+                      >
+                        {t('details.cancel')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`touch-manipulation flex-1 min-w-[6rem] rounded py-2 text-[11px] font-bold text-white ${
+                          isDarkMode ? 'bg-rose-800 hover:bg-rose-700' : 'bg-rose-600 hover:bg-rose-500'
+                        }`}
+                        onClick={() => onProvisionalResetAllLocalData()}
+                      >
+                        {t('details.yes')}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setProvisionalResetInlineConfirm(true)}
+                    className={`touch-manipulation text-[11px] px-3 py-1.5 rounded font-bold ${
+                      isDarkMode ? 'bg-rose-800 hover:bg-rose-700 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'
+                    }`}
+                  >
+                    {t('topPanel.provisionalResetButton')}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {activeTab === 'p2pPairShare' && (
+          <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
+            <h3 className={`text-sm font-bold uppercase tracking-wide ${textClass}`}>{t('topPanel.tabP2pPairShare')}</h3>
+            <h4 className={`text-xs font-bold uppercase tracking-wide ${textClass}`}>{t('topPanel.wotHeading')}</h4>
+            <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.wotIntro')}</p>
+            {axisStatusSummary && (
+              <div className={`text-[11px] space-y-1 rounded-lg border p-2 ${innerCardBg}`}>
+                <div className="flex justify-between gap-2">
+                  <span className={subTextClass}>{t('topPanel.axisSession')}</span>
+                  <span className={`font-medium ${textClass}`}>{t(axisStatusSummary.sessionKey)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className={subTextClass}>{t('topPanel.axisIdentity')}</span>
+                  <span className={`font-medium ${textClass}`}>{t(axisStatusSummary.identityKey)}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className={subTextClass}>{t('topPanel.axisTrust')}</span>
+                  <span className={`font-medium ${textClass} text-right`}>{axisStatusSummary.trustSummary}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className={subTextClass}>{t('topPanel.axisNode')}</span>
+                  <span className={`font-medium ${textClass}`}>{t(axisStatusSummary.nodeKey)}</span>
+                </div>
+              </div>
+            )}
+            <p className={`text-xs leading-relaxed mt-1 ${subTextClass}`}>{t('topPanel.wotSymmetricTrust')}</p>
+            <p className={`text-xs leading-relaxed ${subTextClass}`}>{t('topPanel.wotAncestorsSharing')}</p>
+            {wotNodePanel && (
+              <div
+                className={`text-xs space-y-2 rounded-lg border p-3 ${isDarkMode ? 'border-violet-900/60 bg-violet-950/25' : 'border-violet-200 bg-violet-50/90'}`}
+              >
+                <div className={`font-bold uppercase tracking-wide text-[11px] ${textClass}`}>
+                  {t('topPanel.wotNodeSectionTitle')}
+                </div>
+                <div className={`${subTextClass} text-[11px]`}>
+                  {t(wotNodePanel.runtimeLabelKey)}
+                </div>
+                <div className={`${subTextClass} text-[11px]`}>
+                  {t('topPanel.wotNodeEligibilityLine')
+                    .replace('{{reason}}', t(`topPanel.wotNodeReason_${wotNodePanel.eligibilityReasonKey}`))
+                    .replace('{{have}}', String(wotNodePanel.directedCertTotal))
+                    .replace('{{need}}', String(wotNodePanel.requiredCount))}
+                </div>
+                {wotNodePanel.personhoodMajority && (
+                  <div className={`text-[10px] ${isDarkMode ? 'text-amber-200/90' : 'text-amber-900'}`}>
+                    {t('topPanel.wotNodePersonhoodMajorityHint')}
+                  </div>
+                )}
+                {wotNodePanel.allowLocalWotNodeControls && (
+                  <div className="space-y-2">
+                    <label className={`block text-[11px] ${subTextClass}`}>{t('topPanel.wotNodeRoot')}</label>
+                    <select
+                      className={`w-full rounded border px-2 py-1 text-xs ${inputBg}`}
+                      value={wotNodePanel.rootId}
+                      onChange={(e) => wotNodePanel.onRootChange(e.target.value)}
+                    >
+                      <option value="">{t('topPanel.wotNodeRootPlaceholder')}</option>
+                      {wotNodePanel.rootCandidates.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <label className={`text-[11px] ${subTextClass}`}>{t('topPanel.wotNodeTtlHours')}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        className={`w-24 rounded border px-2 py-1 text-xs ${inputBg}`}
+                        value={wotNodePanel.ttlHours}
+                        onChange={(e) => wotNodePanel.onTtlHoursChange(Number(e.target.value) || 1)}
+                      />
+                      <label className={`text-[11px] ${subTextClass}`}>{t('topPanel.wotNodeMaxGenUp')}</label>
+                      <input
+                        type="number"
+                        min={0}
+                        className={`w-20 rounded border px-2 py-1 text-xs ${inputBg}`}
+                        value={wotNodePanel.maxGenUp}
+                        onChange={(e) => wotNodePanel.onMaxGenUpChange(Number(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={!isIdentityClaimed || wotNodePanel.active}
+                        onClick={() => wotNodePanel.onActivate()}
+                        className={`px-3 py-1.5 rounded text-[11px] font-semibold disabled:opacity-40 ${
+                          isDarkMode ? 'bg-violet-700 hover:bg-violet-600 text-white' : 'bg-violet-600 text-white hover:bg-violet-500'
+                        }`}
+                      >
+                        {t('topPanel.wotNodeActivate')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!wotNodePanel.active}
+                        onClick={() => wotNodePanel.onRevoke()}
+                        className={`px-3 py-1.5 rounded text-[11px] font-semibold disabled:opacity-40 ${btnAction}`}
+                      >
+                        {t('topPanel.wotNodeRevoke')}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {wotNodePanel.expiresAt && wotNodePanel.active && (
+                  <div className={`text-[10px] ${subTextClass}`}>
+                    {t('topPanel.wotNodeExpires')}: {new Date(wotNodePanel.expiresAt).toLocaleString()}
+                  </div>
+                )}
+                {wotNodePanel.remoteAnn?.active && Date.parse(wotNodePanel.remoteAnn.expiresAt) > Date.now() && (
+                  <div className={`text-[10px] ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                    {t('topPanel.wotNodeRemoteActive').replace(
+                      '{{root}}',
+                      wotNodePanel.remoteAnn.rootIndividualId,
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
         {activeTab === 'peerIdentities' && (
           <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide">{t('topPanel.peerIdentityHeading')}</h3>
+            <h3 className={`text-sm font-bold uppercase tracking-wide ${textClass}`}>{t('topPanel.peerIdentityHeading')}</h3>
             {peerIdentityRows.length === 0 ? (
               <p className={`text-xs ${subTextClass}`}>{t('topPanel.peerIdentityEmpty')}</p>
             ) : (
@@ -1024,10 +1417,32 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     className={`rounded border px-2 py-2 text-xs ${isDarkMode ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}
                   >
                     <div className={`font-semibold ${textClass}`}>{row.label}</div>
-                    <div className={`${subTextClass} text-[11px]`}>{row.peerId}</div>
+                    {row.label !== row.peerId ? (
+                      <div className={`${subTextClass} text-[11px] font-mono break-all`}>{row.peerId}</div>
+                    ) : null}
                     {row.claimedAt && (
                       <div className={`${subTextClass} text-[11px]`}>
                         {t('topPanel.peerIdentityClaimedAt')}: {new Date(row.claimedAt).toLocaleString()}
+                      </div>
+                    )}
+                    {row.relationStatus && (
+                      <div className={`${subTextClass} text-[10px]`}>
+                        {t('topPanel.peerRelationLabel')}: {t(`topPanel.peerRelation_${row.relationStatus}`)}
+                      </div>
+                    )}
+                    {onSetPeerCertificationKind && (
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <label className={`text-[10px] ${subTextClass}`}>{t('topPanel.peerCertKind')}</label>
+                        <select
+                          className={`rounded border px-1 py-0.5 text-[10px] ${inputBg}`}
+                          value={row.certificationKindByMe ?? 'personhoodCertification'}
+                          onChange={(e) =>
+                            onSetPeerCertificationKind(row.peerId, e.target.value as CertificationKind)
+                          }
+                        >
+                          <option value="personhoodCertification">{t('topPanel.peerCertKindPersonhood')}</option>
+                          <option value="relationshipCertification">{t('topPanel.peerCertKindRelationship')}</option>
+                        </select>
                       </div>
                     )}
                     {onTogglePeerCertifiedByMe && (

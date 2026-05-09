@@ -12,7 +12,10 @@ export function isProbablyLivingForUi(
 ): boolean {
   const orig = originalGedcomData?.individuals[individualId];
   if (orig) {
-    return !orig.deathDate?.year;
+    const od = orig.deathDate;
+    if (!od?.year) return true;
+    if (od.isCalculated === true) return true;
+    return false;
   }
   const cur = gedcomData.individuals[individualId];
   if (!cur) return false;
