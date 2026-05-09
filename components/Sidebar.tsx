@@ -225,10 +225,6 @@ interface SidebarProps {
   autoSaveLastAt: string | null;
   hasAutoSaveDraft: boolean;
   onRestoreAutoSave: () => void;
-  programUpdateState: 'idle' | 'checking' | 'available' | 'updating' | 'error' | 'unsupported';
-  programVersionLabel: string;
-  onProgramCheckUpdates: () => void;
-  onProgramApplyUpdate: () => void;
   /** Pour filtres « Doc. en ligne / hors ligne ». */
   documentsByIndividualId?: Record<string, SortDocumentRef[]>;
   /** Démo Rois : à l’ouverture du panneau, afficher l’onglet Liste. */
@@ -286,10 +282,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   autoSaveLastAt,
   hasAutoSaveDraft,
   onRestoreAutoSave,
-  programUpdateState,
-  programVersionLabel,
-  onProgramCheckUpdates,
-  onProgramApplyUpdate,
   documentsByIndividualId,
   preferListTabWhenOpening = false,
   compareListMode = false,
@@ -307,7 +299,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { t } = useI18n();
   const [searchTerm, setSearchTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activePane, setActivePane] = useState<'program' | 'data' | 'list'>('data');
+  const [activePane, setActivePane] = useState<'data' | 'list'>('data');
   const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevSidebarOpenRef = useRef(false);
@@ -367,7 +359,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     const hasData = !!data;
     if (hasData && !hadDataRef.current) {
       hadDataRef.current = true;
-      setActivePane((prev) => (prev === 'program' ? prev : 'list'));
+      setActivePane('list');
     } else if (!hasData && hadDataRef.current) {
       hadDataRef.current = false;
       setActivePane('data');
@@ -377,7 +369,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   /** À l’entrée en mode comparaison 2D uniquement : ouvrir l’onglet Liste (sans écraser un changement d’onglet manuel). */
   useEffect(() => {
     if (compareListMode && !prevCompareListModeRef.current) {
-      setActivePane((prev) => (prev === 'program' ? prev : 'list'));
+      setActivePane('list');
     }
     prevCompareListModeRef.current = compareListMode;
   }, [compareListMode]);
@@ -593,14 +585,6 @@ const Sidebar: React.FC<SidebarProps> = ({
       : autoSaveState === 'error'
       ? t('sidebar.labels.autosaveError')
       : `${t('sidebar.labels.autosaveSaved')} • ${autoSaveLastAt ? new Date(autoSaveLastAt).toLocaleTimeString() : t('sidebar.labels.autosaveNever')}`;
-  const getProgramStatusText = (): string => {
-    if (programUpdateState === 'available') return t('sidebar.program.available');
-    if (programUpdateState === 'checking') return t('sidebar.program.checking');
-    if (programUpdateState === 'updating') return t('sidebar.program.updating');
-    if (programUpdateState === 'error') return t('sidebar.program.error');
-    if (programUpdateState === 'unsupported') return t('sidebar.program.unsupported');
-    return t('sidebar.program.upToDate');
-  };
   const signalDot = (state: 'none' | 'attention' | 'running' | 'error') => {
     if (state === 'none') return null;
     const color =
@@ -610,14 +594,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     const pulse = state === 'attention' || state === 'running' ? 'animate-pulse' : '';
     return <span className={`inline-block w-2 h-2 rounded-full ${color} ${pulse}`} />;
   };
-  const programSignal: 'none' | 'attention' | 'running' | 'error' =
-    programUpdateState === 'available'
-      ? 'attention'
-      : programUpdateState === 'checking' || programUpdateState === 'updating'
-      ? 'running'
-      : programUpdateState === 'error'
-      ? 'error'
-      : 'none';
   const dataSignal: 'none' | 'attention' | 'running' | 'error' =
     autoSaveState === 'error'
       ? 'error'
@@ -649,9 +625,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         </span>
       </button>
 
-      <div className={`p-2 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} grid grid-cols-3 gap-1`}>
+      <div className={`p-2 border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-300'} grid grid-cols-2 gap-1`}>
         {([
-          { key: 'program', label: t('sidebar.tabs.program'), signal: programSignal },
           { key: 'data', label: t('sidebar.tabs.data'), signal: dataSignal },
           { key: 'list', label: t('sidebar.tabs.list'), signal: listSignal },
         ] as const).map((tab) => (
@@ -980,33 +955,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         ref={scrollRef}
         className="flex-1 overflow-y-auto custom-scrollbar flex flex-col isolate [overscroll-behavior-y:contain]"
       >
-        {activePane === 'program' ? (
-          <div className="p-4 space-y-3">
-            <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('sidebar.program.title')}</div>
-            <div className={`rounded border p-3 space-y-2 ${inputBg}`}>
-              <div className={`text-xs ${subTextClass}`}>{t('sidebar.program.version')}: <span className={textClass}>{programVersionLabel}</span></div>
-              <div className={`text-xs ${subTextClass}`}>{t('sidebar.program.updateStatus')}: <span className={textClass}>{getProgramStatusText()}</span></div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={onProgramCheckUpdates}
-                  className={`flex-1 py-1.5 rounded text-xs font-semibold border ${buttonImportClass}`}
-                >
-                  {t('sidebar.program.check')}
-                </button>
-                {programUpdateState === 'available' && (
-                  <button
-                    type="button"
-                    onClick={onProgramApplyUpdate}
-                    className={`flex-1 py-1.5 rounded text-xs font-semibold border ${buttonImportClass}`}
-                  >
-                    {t('sidebar.program.apply')}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : activePane === 'data' ? (
+        {activePane === 'data' ? (
           !data ? (
             <div className={`p-4 text-sm ${subTextClass}`}>
               <p>{t('sidebar.labels.noDatabaseLoaded')}</p>

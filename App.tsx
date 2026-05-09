@@ -9132,10 +9132,6 @@ function App() {
         autoSaveLastAt={autoSaveLastAt}
         hasAutoSaveDraft={hasAutoSaveDraft}
         onRestoreAutoSave={handleRestoreAutoSave}
-        programUpdateState={programUpdateState}
-        programVersionLabel={buildLabel}
-        onProgramCheckUpdates={handleProgramCheckUpdates}
-        onProgramApplyUpdate={handleProgramApplyUpdate}
         documentsByIndividualId={renderedDocumentsByIndividualId}
         preferListTabWhenOpening={royalsDemoUiPrefs?.preferSidebarListOnOpen === true}
         compareListMode={compareDualViewActive && viewMode === '2D'}
@@ -9894,8 +9890,12 @@ function App() {
         onImportIdentityBackup={handleImportIdentityBackup}
         onRenounceIdentity={commitRenounceIdentity}
         onProvisionalResetAllLocalData={commitProvisionalResetAllLocalData}
-        activeTabOverride={topPanelActiveTab}
+        activeTab={topPanelActiveTab}
         onActiveTabChange={setTopPanelActiveTab}
+        programUpdateState={programUpdateState}
+        programVersionLabel={buildLabel}
+        onProgramCheckUpdates={handleProgramCheckUpdates}
+        onProgramApplyUpdate={handleProgramApplyUpdate}
         peerIdentityRows={peerIdentityRows}
         onTogglePeerCertifiedByMe={handleTogglePeerCertifiedByMe}
         onSetPeerCertificationKind={handleSetPeerCertificationKind}

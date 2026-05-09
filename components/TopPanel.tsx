@@ -17,6 +17,9 @@ import type { InviteLinkKind } from '../app/inviteLinkKind';
 import type { CertificationKind, PeerRelationStatus, WotNodeAnnouncementV1 } from '../app/identityTrust/types';
 import { InviteQrCode } from './InviteQrCode';
 
+/** Panneau ouvert : hauteur max ; le contenu définit la hauteur réelle (pas de minHeight = pas de bande vide). */
+const TOP_PANEL_OPEN_MAX_H = '96vh';
+
 /** Résultats max quand l’utilisateur tape une recherche (liste potentiellement énorme). */
 const MAX_INVITE_MEMBER_SEARCH_RESULTS = 500;
 /** Sans recherche : afficher tout l’arbre jusqu’à ce plafond pour éviter de masquer des fiches (bug « pas dans la liste »). */
@@ -236,9 +239,13 @@ interface TopPanelProps {
   /** Hôte : périmètre d’échange (formulaire) — état piloté par `App` pour l’aligner avec la liste comparaison. */
   inviterExchangeScopeDraft?: InviteExchangeScope;
   onInviterExchangeScopeDraftChange?: (scope: InviteExchangeScope) => void;
-  /** Pilotage externe optionnel de l’onglet actif (redirections depuis Fiche). */
-  activeTabOverride?: TopPanelTabId | null;
-  onActiveTabChange?: (tab: TopPanelTabId | null) => void;
+  /** Onglet actif (source de vérité côté app — évite tout décalage avec l’état local). */
+  activeTab: TopPanelTabId | null;
+  onActiveTabChange: (tab: TopPanelTabId | null) => void;
+  programUpdateState: 'idle' | 'checking' | 'available' | 'updating' | 'error' | 'unsupported';
+  programVersionLabel: string;
+  onProgramCheckUpdates: () => void;
+  onProgramApplyUpdate: () => void;
   peerIdentityRows?: Array<{
     peerId: string;
     label: string;
@@ -325,8 +332,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
   compareSessionExtraHint = null,
   inviterExchangeScopeDraft,
   onInviterExchangeScopeDraftChange,
-  activeTabOverride,
+  activeTab,
   onActiveTabChange,
+  programUpdateState,
+  programVersionLabel,
+  onProgramCheckUpdates,
+  onProgramApplyUpdate,
   peerIdentityRows = [],
   onTogglePeerCertifiedByMe,
   onSetPeerCertificationKind,
@@ -356,16 +367,20 @@ const TopPanel: React.FC<TopPanelProps> = ({
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [proposalPage, setProposalPage] = useState(0);
   const PROPOSALS_PAGE_SIZE = 30;
-  const [activeTab, setActiveTab] = useState<TopPanelTabId | null>(null);
   const [exportPassword, setExportPassword] = useState('');
   const [importPassword, setImportPassword] = useState('');
   const [identityBackupFile, setIdentityBackupFile] = useState<File | null>(null);
   const [showExportPassword, setShowExportPassword] = useState(false);
   const [showImportPassword, setShowImportPassword] = useState(false);
-  useEffect(() => {
-    if (activeTabOverride === undefined) return;
-    setActiveTab(activeTabOverride);
-  }, [activeTabOverride]);
+
+  const programStatusText = useMemo(() => {
+    if (programUpdateState === 'available') return t('sidebar.program.available');
+    if (programUpdateState === 'checking') return t('sidebar.program.checking');
+    if (programUpdateState === 'updating') return t('sidebar.program.updating');
+    if (programUpdateState === 'error') return t('sidebar.program.error');
+    if (programUpdateState === 'unsupported') return t('sidebar.program.unsupported');
+    return t('sidebar.program.upToDate');
+  }, [programUpdateState, t]);
 
   const [renounceInlineConfirm, setRenounceInlineConfirm] = useState(false);
   const [provisionalResetInlineConfirm, setProvisionalResetInlineConfirm] = useState(false);
@@ -415,12 +430,24 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
     const activity: TabIndicatorLevel = activityEvents.length > 0 ? 'ok' : 'idle';
 
+    const versionG2: TabIndicatorLevel =
+      programUpdateState === 'error'
+        ? 'error'
+        : programUpdateState === 'available'
+          ? 'warning'
+          : programUpdateState === 'checking' || programUpdateState === 'updating'
+            ? 'ok'
+            : programUpdateState === 'unsupported'
+              ? 'future'
+              : 'idle';
+
     return {
       deviceInvites: deviceInvitesLevel,
       anonymousInvites: anonymousInvitesLevel,
       personalizedInvites: personalizedInvitesLevel,
       proposals: proposalsTab,
       activity,
+      versionG2,
       yourIdentity: isIdentityClaimed ? 'ok' : 'warning',
       p2pPairShare: 'idle',
       peerIdentities: peerIdentityRows.length > 0 ? 'ok' : 'idle',
@@ -438,6 +465,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
     proposals.length,
     activityEvents.length,
     peerIdentityRows.length,
+    programUpdateState,
   ]);
 
   const indicatorDotClass = (level: TabIndicatorLevel): string => {
@@ -570,27 +598,26 @@ const TopPanel: React.FC<TopPanelProps> = ({
     setProposalPage((prev) => Math.min(prev, proposalsPageCount - 1));
   }, [proposalsPageCount]);
 
+  const panelOpenSizeStyle: React.CSSProperties = isOpen
+    ? { maxHeight: TOP_PANEL_OPEN_MAX_H }
+    : { maxHeight: '0px', minHeight: '0px' };
+
   return (
     <div className="fixed top-0 left-0 right-0 z-[100] pointer-events-none">
-      <div className="overflow-hidden" style={{ maxHeight: isOpen ? 'calc(100vh - 120px)' : '0px', transition: 'max-height 300ms ease' }}>
+      <div
+        className="overflow-hidden"
+        style={{
+          ...panelOpenSizeStyle,
+          transition: 'max-height 260ms ease',
+        }}
+      >
         <div 
-          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-3 py-1.5 shadow-xl max-h-[calc(100vh-120px)] overflow-y-auto`}
-          style={{ touchAction: 'pan-y' }}
+          className={`pointer-events-auto ${bgClass} backdrop-blur-md border-b px-3 py-1.5 shadow-xl overflow-y-auto`}
+          style={{ touchAction: 'pan-y', ...panelOpenSizeStyle }}
           onMouseEnter={onMouseEnter}
           onMouseLeave={onMouseLeave}
         >
-          <div className="w-full max-w-5xl mx-auto min-w-0 flex flex-col gap-2">
-            <TopPanelTabList
-              activeTab={activeTab}
-              onSelectTab={(tab) => {
-                setActiveTab(tab);
-                onActiveTabChange?.(tab);
-              }}
-              tabIndicators={tabIndicators}
-              isDarkMode={isDarkMode}
-              indicatorDotClass={indicatorDotClass}
-            />
-
+          <div className="w-full max-w-5xl mx-auto min-w-0 flex flex-col gap-1">
             <div
               className={`rounded-lg border px-3 py-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white'}`}
             >
@@ -628,10 +655,27 @@ const TopPanel: React.FC<TopPanelProps> = ({
               )}
             </div>
 
+            <TopPanelTabList
+              activeTab={activeTab}
+              onSelectTab={(tab) => {
+                onActiveTabChange(tab);
+              }}
+              tabIndicators={tabIndicators}
+              isDarkMode={isDarkMode}
+              indicatorDotClass={indicatorDotClass}
+              topPanelIsOpen={isOpen}
+            />
+
             {activeTab &&
               activeTab !== 'yourIdentity' &&
               activeTab !== 'p2pPairShare' &&
-              activeTab !== 'peerIdentities' && (
+              activeTab !== 'peerIdentities' &&
+              activeTab !== 'activity' &&
+              activeTab !== 'proposals' &&
+              activeTab !== 'versionG2' &&
+              activeTab !== 'deviceInvites' &&
+              activeTab !== 'anonymousInvites' &&
+              activeTab !== 'personalizedInvites' && (
               <div
                 className={`rounded-lg border px-3 py-2 ${cardClass}`}
                 role="status"
@@ -664,8 +708,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                   type="button"
                   onClick={() => {
                     onOpenIdentityPanel();
-                    setActiveTab('yourIdentity');
-                    onActiveTabChange?.('yourIdentity');
+                    onActiveTabChange('yourIdentity');
                   }}
                   className={`mt-2 text-[11px] px-3 py-1.5 rounded font-bold ${
                     isDarkMode ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-emerald-600 hover:bg-emerald-500 text-white'
@@ -684,8 +727,14 @@ const TopPanel: React.FC<TopPanelProps> = ({
             {!selfIndividualId && !isInviteMode && (
               <p className={`text-[11px] ${subTextClass}`}>{t('topPanel.deviceInviteNeedsIdentity')}</p>
             )}
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-1.5 ${textClass}`}>
+              {t('topPanel.tabDeviceInvites')}
+            </h3>
+            <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+              {t('topPanel.contextMessage_deviceInvites')}
+            </p>
             {!isInviteMode && (
-              <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+              <p className={`text-[10px] leading-relaxed whitespace-pre-line ${subTextClass} opacity-90`}>
                 {t('topPanel.ownDeviceResilienceSummary')}
               </p>
             )}
@@ -767,6 +816,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {activeTab === 'anonymousInvites' && (
           <section className={`rounded-lg border p-3 space-y-2 ${cardClass}`}>
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-1.5 ${textClass}`}>
+              {t('topPanel.shareSectionTitleAnonymous')}
+            </h3>
+            <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+              {t('topPanel.contextMessage_anonymousInvites')}
+            </p>
             <div className={`rounded border p-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
               <h4 className={`text-[11px] font-semibold mb-1 ${textClass}`}>{t('topPanel.visibilityDefaultProfileTitle')}</h4>
               <div className="space-y-1 text-xs">
@@ -823,6 +878,12 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {activeTab === 'personalizedInvites' && (
           <section className={`rounded-lg border p-3 space-y-2 ${cardClass}`}>
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-1.5 ${textClass}`}>
+              {t('topPanel.shareSectionTitlePersonalized')}
+            </h3>
+            <p className={`text-[11px] leading-relaxed whitespace-pre-line ${subTextClass}`}>
+              {t('topPanel.contextMessage_personalizedInvites')}
+            </p>
             {!isInviteMode && (
               <>
                 <div className={`rounded border p-2 ${isDarkMode ? 'border-slate-700 bg-slate-900/25' : 'border-slate-200 bg-white'}`}>
@@ -838,9 +899,6 @@ const TopPanel: React.FC<TopPanelProps> = ({
                     <ToggleRow textClass={textClass} inputFirst label={t('topPanel.allowDirectEdits')} checked={visibilitySettings.allowDirectEdit} onChange={(checked) => onChangeVisibilitySettings({ ...visibilitySettings, allowDirectEdit: checked })} />
                   </div>
                 </div>
-                <p className={`text-[11px] leading-relaxed ${subTextClass}`}>
-                  {t('topPanel.personalizedInviteFormIntro')}
-                </p>
                 <p className={`text-[10px] ${subTextClass}`}>{t('topPanel.inviteMemberSearchHint')}</p>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                   <InviteLivingMemberCombobox
@@ -919,7 +977,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
         {activeTab === 'proposals' && (
         <div className="grid grid-cols-1 gap-4 mt-0">
           <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-2 ${textClass}`}>
               {t('topPanel.proposals')} {proposals.length > 0 ? `(${proposals.length})` : ''}
             </h3>
             {proposals.length > PROPOSALS_PAGE_SIZE && (
@@ -998,7 +1056,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
 
         {activeTab === 'activity' && (
           <section className={`rounded-xl border p-4 ${cardClass}`}>
-            <h3 className="text-sm font-bold uppercase tracking-wide mb-3">{t('topPanel.activity')}</h3>
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-2 ${textClass}`}>{t('topPanel.activity')}</h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
               <StatCard label={t('topPanel.views')} value={activitySummary.view} isDarkMode={isDarkMode} />
               <StatCard label={t('topPanel.downloads')} value={activitySummary.download} isDarkMode={isDarkMode} />
@@ -1039,7 +1097,30 @@ const TopPanel: React.FC<TopPanelProps> = ({
           </section>
         )}
 
-
+        {activeTab === 'versionG2' && (
+          <section className={`rounded-xl border p-4 ${cardClass}`}>
+            <h3 className={`text-sm font-bold uppercase tracking-wide mb-3 ${textClass}`}>{t('topPanel.versionG2Title')}</h3>
+            <div className={`text-xs leading-relaxed space-y-3 ${subTextClass}`}>
+              <p>
+                {t('sidebar.program.version')}:{' '}
+                <span className={`font-medium ${textClass}`}>{programVersionLabel}</span>
+              </p>
+              <p>
+                {t('sidebar.program.updateStatus')}: <span className={textClass}>{programStatusText}</span>
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button type="button" onClick={onProgramCheckUpdates} className={`px-3 py-1.5 rounded text-xs font-semibold ${btnAction}`}>
+                  {t('sidebar.program.check')}
+                </button>
+                {programUpdateState === 'available' && (
+                  <button type="button" onClick={onProgramApplyUpdate} className={`px-3 py-1.5 rounded text-xs font-semibold ${btnAction}`}>
+                    {t('sidebar.program.apply')}
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
 
         {activeTab === 'yourIdentity' && (
           <div className={`rounded-xl border p-4 space-y-3 ${cardClass}`}>
@@ -1109,7 +1190,7 @@ const TopPanel: React.FC<TopPanelProps> = ({
                   type="button"
                   onClick={() => {
                     onOpenIdentityPanel();
-                    onActiveTabChange?.('yourIdentity');
+                    onActiveTabChange('yourIdentity');
                   }}
                   className={`text-xs px-3 py-2 rounded font-bold w-full sm:w-auto ${identityBackupBtnClass}`}
                 >

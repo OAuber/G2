@@ -8,11 +8,13 @@ export type TopPanelTabId =
   | 'anonymousInvites'
   | 'personalizedInvites'
   | 'proposals'
-  | 'activity';
+  | 'activity'
+  | 'versionG2';
 
 /** Niveau d’état pour le témoin lumineux */
 export type TabIndicatorLevel = 'ok' | 'warning' | 'error' | 'idle' | 'future';
 
+/** Ordre historique / référence ; la barre du panneau utilise des sous-menus (voir `TopPanelTabList`). */
 export const TOP_PANEL_TAB_ORDER: TopPanelTabId[] = [
   'yourIdentity',
   'p2pPairShare',
@@ -22,6 +24,7 @@ export const TOP_PANEL_TAB_ORDER: TopPanelTabId[] = [
   'personalizedInvites',
   'proposals',
   'activity',
+  'versionG2',
 ];
 
 export const TOP_PANEL_TAB_I18N: Record<TopPanelTabId, string> = {
@@ -33,4 +36,5 @@ export const TOP_PANEL_TAB_I18N: Record<TopPanelTabId, string> = {
   personalizedInvites: 'topPanel.tabPersonalizedInvites',
   proposals: 'topPanel.tabProposals',
   activity: 'topPanel.tabActivity',
+  versionG2: 'topPanel.tabVersionG2',
 };
