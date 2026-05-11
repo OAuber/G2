@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { User, Plus, Trash2, Edit, Link2, X, ChevronLeft, ChevronRight, Camera, Crop, Eye, EyeOff } from 'lucide-react';
-import { Individual, GedcomData, Family, Gender, SelfIdentityPublic } from '../types';
+import { Individual, GedcomData, Family, Gender, SelfIdentityPublic, DateInfo } from '../types';
 import { findIndividualInGedcom } from '../app/gedcomIndividualLookup';
 import { parseDate } from '../services/gedcomParser';
+import { dateInfoToFormString, formatDateInfoDisplay } from '../services/genealogyDate';
+import { GenealogyDateField } from './GenealogyDateField';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
 import { useI18n } from '../i18n';
 
@@ -472,7 +474,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   onTogglePeerCertifiedByMe,
   knownPeerIdentityByPeerId = {},
 }) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
     givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', birthPlace: '', deathPlace: '', notes: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
   });
@@ -562,15 +564,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       let marriageDate = '';
       if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
         const fam = data.families[individual.familySpouseIds[0]];
-        marriageDate = fam?.marriageDate?.year?.toString() || '';
+        marriageDate = dateInfoToFormString(fam?.marriageDate);
       }
       
       setFormData({
          givenName: individual.givenName,
          surname: individual.surname,
          gender: individual.gender,
-         birthDate: individual.birthDate?.year?.toString() || '',
-         deathDate: individual.deathDate?.year?.toString() || '',
+         birthDate: dateInfoToFormString(individual.birthDate),
+         deathDate: dateInfoToFormString(individual.deathDate),
          birthPlace: individual.birthPlace || '',
          deathPlace: individual.deathPlace || '',
          notes: individual.notes || '',
@@ -621,6 +623,23 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const availableWomen = useMemo(() => allIndividuals.filter(i => i.gender === Gender.Female), [allIndividuals]);
 
   const getName = (id: string) => { if (!data) return id; const p = data.individuals[id]; return p ? `${p.givenName} ${p.surname}` : id; };
+
+  const genealogyDateLabels = useMemo(() => {
+    const base = {
+      refine: t('details.dateRefine'),
+      hideRefine: t('details.dateHideRefine'),
+      month: t('details.dateMonth'),
+      day: t('details.dateDay'),
+      monthPlaceholder: t('details.dateMonthNone'),
+      dayPlaceholder: t('details.dateDayNone'),
+    };
+    return {
+      birth: { ...base, year: t('details.birthYear') },
+      death: { ...base, year: t('details.deathYear') },
+      marriage: { ...base, year: t('details.marriageYear') },
+      document: { ...base, year: t('details.documentDate') },
+    };
+  }, [t]);
 
   const handleSaveEdit = () => {
      if(!individual) return;
@@ -675,17 +694,20 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const relatedPeerCertState =
     relatedPeerId ? !!knownPeerIdentityByPeerId?.[relatedPeerId]?.certifiedByMe : false;
   
-  const DateDisplay = ({ label, date }: { label: string, date?: { year: number | null, isCalculated?: boolean } }) => (
-      <div className="flex justify-between items-center">
+  const DateDisplay = ({ label, date }: { label: string; date?: DateInfo | null }) => {
+    const line = formatDateInfoDisplay(date, language);
+    return (
+      <div className="flex justify-between items-center gap-2">
           <span className={subTextClass}>{label}</span>
-          <div className="flex items-center gap-2">
-            <span className={`${textClass} font-mono`}>{date?.year || t('details.unknown')}</span>
+          <div className="flex items-center gap-2 text-right min-w-0">
+            <span className={`${textClass} font-mono text-xs shrink`}>{line || t('details.unknown')}</span>
             {date?.isCalculated && (
-                <span className="text-[9px] px-1 bg-yellow-500/20 text-yellow-500 rounded font-bold border border-yellow-500/50">CAL</span>
+                <span className="text-[9px] px-1 bg-yellow-500/20 text-yellow-500 rounded font-bold border border-yellow-500/50 shrink-0">CAL</span>
             )}
           </div>
       </div>
-  );
+    );
+  };
 
   const formatFieldValue = (value: unknown): string => {
     if (value === undefined || value === null || value === '') return '-';
@@ -988,13 +1010,19 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 )}
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-1">
-              <input
-                type="date"
-                className={`rounded px-1.5 py-1 text-[11px] border outline-none flex-1 min-w-[7rem] ${inputBg}`}
-                value={editingDocDate}
-                onChange={(e) => setEditingDocDate(e.target.value)}
-              />
+            <div className="flex flex-wrap items-end gap-2">
+              <div className={`flex-1 min-w-[10rem] rounded border px-1.5 py-1 ${inputBg}`}>
+                <GenealogyDateField
+                  mode="isoDoc"
+                  value={editingDocDate}
+                  onChange={setEditingDocDate}
+                  inputBg={inputBg}
+                  textClass={textClass}
+                  subTextClass={subTextClass}
+                  language={language}
+                  labels={genealogyDateLabels.document}
+                />
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -1386,9 +1414,27 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                  ))}
              </div>
              
-             <div className="grid grid-cols-2 gap-2">
-               <input placeholder={t('details.birthYear')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthDate} onChange={e => setFormData({...formData, birthDate: e.target.value})} />
-               <input placeholder={t('details.deathYear')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.deathDate} onChange={e => setFormData({...formData, deathDate: e.target.value})} />
+             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+               <GenealogyDateField
+                 mode="gedcom"
+                 value={formData.birthDate}
+                 onChange={(birthDate) => setFormData({ ...formData, birthDate })}
+                 inputBg={inputBg}
+                 textClass={textClass}
+                 subTextClass={subTextClass}
+                 language={language}
+                 labels={genealogyDateLabels.birth}
+               />
+               <GenealogyDateField
+                 mode="gedcom"
+                 value={formData.deathDate}
+                 onChange={(deathDate) => setFormData({ ...formData, deathDate })}
+                 inputBg={inputBg}
+                 textClass={textClass}
+                 subTextClass={subTextClass}
+                 language={language}
+                 labels={genealogyDateLabels.death}
+               />
              </div>
              <div className="grid grid-cols-1 gap-2">
                <input placeholder={t('details.birthPlace')} className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} value={formData.birthPlace} onChange={e => setFormData({...formData, birthPlace: e.target.value})} />
@@ -1429,12 +1475,15 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                 
                 {formData.spouseId && (
                   <div>
-                    <label className={`block text-xs ${subTextClass} mb-1`}>{t('details.marriageYear')}</label>
-                    <input 
-                      placeholder={t('details.marriageYearOptional')} 
-                      className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`} 
-                      value={formData.marriageDate} 
-                      onChange={e => setFormData({...formData, marriageDate: e.target.value})} 
+                    <GenealogyDateField
+                      mode="gedcom"
+                      value={formData.marriageDate}
+                      onChange={(marriageDate) => setFormData({ ...formData, marriageDate })}
+                      inputBg={inputBg}
+                      textClass={textClass}
+                      subTextClass={subTextClass}
+                      language={language}
+                      labels={genealogyDateLabels.marriage}
                     />
                   </div>
                 )}
@@ -1689,12 +1738,18 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                     )}
                   </div>
                 )}
-                <input
-                  type="date"
-                  className={`w-full rounded px-2 py-1 text-sm border outline-none ${inputBg}`}
-                  value={docForm.date}
-                  onChange={(e) => setDocForm((prev) => ({ ...prev, date: e.target.value }))}
-                />
+                <div className={`rounded px-2 py-1 border ${inputBg}`}>
+                  <GenealogyDateField
+                    mode="isoDoc"
+                    value={docForm.date}
+                    onChange={(date) => setDocForm((prev) => ({ ...prev, date }))}
+                    inputBg={inputBg}
+                    textClass={textClass}
+                    subTextClass={subTextClass}
+                    language={language}
+                    labels={genealogyDateLabels.document}
+                  />
+                </div>
                 <label className={`block text-xs font-bold uppercase tracking-wider mt-1 ${subTextClass}`}>
                   {t('details.sourceAttribution')}
                 </label>
@@ -2402,10 +2457,16 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                           <button onClick={() => data && onSelectIndividual(data.individuals[spouseId])} className={`flex items-center gap-2 text-sm font-bold ${textClass} hover:text-blue-500`}>
                                               <Link2 className="w-3 h-3" /> {getName(spouseId)}
                                           </button>
-                                          {fam.marriageDate?.year && (
+                                          {(fam.marriageDate &&
+                                            (formatDateInfoDisplay(fam.marriageDate, language) ||
+                                              fam.marriageDate.year != null)) && (
                                             <div className={`text-[10px] ${subTextClass} ml-6 mb-2`}>
-                                              {t('details.married')}: {fam.marriageDate.year}
-                                              {fam.marriageDate.isCalculated && <span className="ml-1 text-yellow-500">({t('details.calc')})</span>}
+                                              {t('details.married')}:{' '}
+                                              {formatDateInfoDisplay(fam.marriageDate, language) ||
+                                                (fam.marriageDate.year != null ? String(fam.marriageDate.year) : '')}
+                                              {fam.marriageDate.isCalculated && (
+                                                <span className="ml-1 text-yellow-500">({t('details.calc')})</span>
+                                              )}
                                             </div>
                                           )}
                                         </>

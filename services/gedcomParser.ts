@@ -34,6 +34,34 @@ export const parseDate = (dateStr: string): DateInfo => {
   // Handles: ABT 1980, EST 1980, VERS 1980, CAL, BEF, AFT, INT, BET, FROM, TO, ENV, CA...
   cleanStr = cleanStr.replace(/^(ABT|EST|CAL|BEF|AFT|INT|BET|FROM|TO|VERS|ENV|CA|CIRCA)\.?\s+/i, '');
 
+  let year: number | null = null;
+  let preciseDate: number | undefined = undefined;
+
+  // ISO yyyy-mm-dd / yyyy-mm (saisie / export documents)
+  const isoFull = cleanStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoFull) {
+    const y = parseInt(isoFull[1], 10);
+    const m0 = parseInt(isoFull[2], 10) - 1;
+    const d = parseInt(isoFull[3], 10);
+    if (m0 >= 0 && m0 <= 11 && d >= 1 && d <= 31) {
+      year = y;
+      const dayOfYear = m0 * 30.44 + d;
+      preciseDate = y + dayOfYear / 365.25;
+      return { raw: dateStr, year, preciseDate };
+    }
+  }
+  const isoYm = cleanStr.match(/^(\d{4})-(\d{2})$/);
+  if (isoYm) {
+    const y = parseInt(isoYm[1], 10);
+    const m0 = parseInt(isoYm[2], 10) - 1;
+    if (m0 >= 0 && m0 <= 11) {
+      year = y;
+      const dayOfYear = m0 * 30.44 + 15;
+      preciseDate = y + dayOfYear / 365.25;
+      return { raw: dateStr, year, preciseDate };
+    }
+  }
+
   // Maps standard GEDCOM months to index (0-11)
   const months: Record<string, number> = {
     // English Standard
@@ -43,9 +71,6 @@ export const parseDate = (dateStr: string): DateInfo => {
     'FEV': 1, 'FÉV': 1, 'AVR': 3, 'MAI': 4, 
     'AOU': 7, 'AOÛ': 7, 'DÉC': 11
   };
-
-  let year: number | null = null;
-  let preciseDate: number | undefined = undefined;
 
   // Strategy: Try specific formats first. 
   // We removed strict anchors (^ and $) to allow matching dates even if surrounded by noise.

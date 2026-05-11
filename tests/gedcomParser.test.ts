@@ -12,6 +12,20 @@ describe('parseDate', () => {
     const d = parseDate('ABT 1850');
     expect(d.year).toBe(1850);
   });
+
+  it('parse une date ISO yyyy-mm-dd', () => {
+    const d = parseDate('2000-03-15');
+    expect(d.year).toBe(2000);
+    expect(d.preciseDate).toBeDefined();
+    expect(d.preciseDate!).toBeGreaterThan(2000);
+    expect(d.preciseDate!).toBeLessThan(2001);
+  });
+
+  it('parse une date ISO yyyy-mm', () => {
+    const d = parseDate('1999-12');
+    expect(d.year).toBe(1999);
+    expect(d.preciseDate).toBeDefined();
+  });
 });
 
 describe('parseGedcom', () => {
