@@ -665,6 +665,8 @@ const RibbonPhotoOverlays3D: React.FC<{
       key: string;
       url: string;
       sortScore: number;
+      /** Pour invalider le cache quand le ruban bouge (gap, layout) ou la caméra. */
+      transformSig: string;
       position: [number, number, number];
       quaternion: [number, number, number, number];
       scale: [number, number, number];
@@ -722,17 +724,28 @@ const RibbonPhotoOverlays3D: React.FC<{
 
       const depthBias = cameraMode === 'top' ? 0.045 : 0.08;
       const pos = p.clone().addScaledVector(camDir, depthBias);
+      const sx = effThickness * RIBBON_PHOTO_FACE_INSET;
+      const sy = diagonal * RIBBON_PHOTO_FACE_INSET;
+      const quant = (v: number, invStep: number) => String(Math.round(v * invStep) / invStep);
+      const transformSig = [
+        quant(pos.x, 200),
+        quant(pos.y, 200),
+        quant(pos.z, 200),
+        quant(pathQ.x, 2000),
+        quant(pathQ.y, 2000),
+        quant(pathQ.z, 2000),
+        quant(pathQ.w, 2000),
+        quant(sx, 200),
+        quant(sy, 200),
+      ].join(',');
       candidates.push({
         key: node.id,
         url,
         sortScore,
+        transformSig,
         position: [pos.x, pos.y, pos.z],
         quaternion: [pathQ.x, pathQ.y, pathQ.z, pathQ.w],
-        scale: [
-          effThickness * RIBBON_PHOTO_FACE_INSET,
-          diagonal * RIBBON_PHOTO_FACE_INSET,
-          1,
-        ],
+        scale: [sx, sy, 1],
       });
     }
 
@@ -749,8 +762,8 @@ const RibbonPhotoOverlays3D: React.FC<{
           return [sel, ...rest.slice(0, maxPlanes - 1)];
         })()
       : candidates.slice(0, maxPlanes);
-    const next = capped.map(({ sortScore: _s, ...rest }) => rest);
-    const sig = next.map((it) => `${it.key}:${it.url}`).join('|');
+    const next = capped.map(({ sortScore: _s, transformSig: _t, ...rest }) => rest);
+    const sig = capped.map((it) => `${it.key}:${it.url}:${it.transformSig}`).join('|');
     if (sig !== sigRef.current) {
       sigRef.current = sig;
       setPlanes(next);
