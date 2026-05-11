@@ -774,6 +774,7 @@ const RibbonPhotoOverlays3D: React.FC<{
             opacity={shouldFadePhoto ? 0.8 : 0.95}
             depthWrite={false}
             side={2}
+            /* Sous le ruban instancié (box 0, path 1) : une seule « voile » colorée sur la photo. */
             renderOrder={-1}
             toneMapped={false}
             ref={(obj: any) => {
