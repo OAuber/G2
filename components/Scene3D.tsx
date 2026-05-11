@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { Canvas, useFrame, events as createPointerEvents } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, OrthographicCamera, Image as DreiImage } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -8,7 +8,7 @@ import { calculateIndividualGeometry, GENERATION_PITCH } from '../services/geome
 import { LayoutNode, GenealogyLayoutEngineB } from '../services/layoutEngineB';
 import InstancedGenealogyTree from './InstancedGenealogyTree';
 import PresentPlanPoietic3D from './PresentPlanPoietic3D';
-
+import { wikimediaUploadThumbUrl } from '../utils/wikimediaThumbUrl';
 // --- Camera Controller ---
 // Handles animated transitions between 3 camera modes: top, individual, free.
 const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -30,6 +30,8 @@ const PHOTO_MIN_PROJECTED_PX_3D = 18;
 const PHOTO_TOP_SORT_WORLD_ZOOM_K = 0.12;
 const PHOTO_RECALC_MS_3D = 90;
 const PHOTO_RECALC_MS_TOP_3D = 110;
+/** Largeur max souhaitée pour les vignettes ruban 3D (mappée à un palier Wikimedia supporté, ex. 384 → 330). */
+const WIKIMEDIA_3D_THUMB_MAX_PX = 384;
 /** Même facteur que `PATH_THICKNESS_SCREEN_PAD` dans InstancedGenealogyTree (pathScale.x). */
 const RIBBON_PATH_THICKNESS_PAD = 1.045;
 /** Couvre la face du calque sans dépasser (0.98 laissait un liseré). */
@@ -762,29 +764,29 @@ const RibbonPhotoOverlays3D: React.FC<{
           cameraMode === 'top' &&
           (fadedNodeIds?.includes(p.key) ?? false);
         return (
-        <DreiImage
-          key={`photo-3d-${p.key}`}
-          url={p.url}
-          position={p.position}
-          quaternion={p.quaternion}
-          scale={p.scale}
-          transparent
-          opacity={shouldFadePhoto ? 0.8 : 0.95}
-          depthWrite={false}
-          side={2}
-          renderOrder={-1}
-          toneMapped={false}
-          ref={(obj: any) => {
-            if (!obj) return;
-            if (typeof obj.traverse === 'function') {
-              obj.traverse((child: any) => {
-                child.raycast = () => null;
-              });
-            } else {
-              obj.raycast = () => null;
-            }
-          }}
-        />
+          <DreiImage
+            key={`photo-3d-${p.key}`}
+            url={wikimediaUploadThumbUrl(p.url, WIKIMEDIA_3D_THUMB_MAX_PX)}
+            position={p.position}
+            quaternion={p.quaternion}
+            scale={p.scale}
+            transparent
+            opacity={shouldFadePhoto ? 0.8 : 0.95}
+            depthWrite={false}
+            side={2}
+            renderOrder={-1}
+            toneMapped={false}
+            ref={(obj: any) => {
+              if (!obj) return;
+              if (typeof obj.traverse === 'function') {
+                obj.traverse((child: any) => {
+                  child.raycast = () => null;
+                });
+              } else {
+                obj.raycast = () => null;
+              }
+            }}
+          />
         );
       })}
     </>
@@ -1410,15 +1412,20 @@ const Scene3D: React.FC<Scene3DProps> = ({
             }}
             zoomToCursor={true}
         />
-        
-        <RibbonPhotoOverlays3D
+        {/*
+          Suspense interne : DreiImage → useLoader suspend ; évite de remonter jusqu’au Suspense d’App
+          (spinner) et de démonter toute la scène WebGL / OrbitControls.
+        */}
+        <Suspense fallback={null}>
+          <RibbonPhotoOverlays3D
             nodes={allLayoutNodes}
             cameraMode={cameraMode}
             selectedId={selectedId}
             fadedNodeIds={topFadedNodeIds}
             primaryPhotoUrlById={primaryPhotoUrlById}
             documentsByIndividualId={documentsByIndividualId}
-        />
+          />
+        </Suspense>
         <InstancedGenealogyTree 
             key={rootIndividual?.id || 'empty-tree'}
             nodes={allLayoutNodes} 
