@@ -2499,7 +2499,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 min-h-0 w-full min-w-0 flex justify-center items-start overflow-y-auto overflow-x-hidden overscroll-contain p-2 touch-pan-x touch-pan-y">
+          <div className="flex-1 min-h-0 w-full min-w-0 flex justify-center items-start overflow-y-auto overflow-x-hidden overscroll-contain p-2 pl-[max(10px,env(safe-area-inset-left))] pr-[max(18px,env(safe-area-inset-right))] [scrollbar-gutter:stable] touch-pan-x touch-pan-y">
             <div className="relative w-full max-w-full min-w-0 flex justify-center">
               <div className="relative block w-full max-w-full min-w-0">
               <img
@@ -2585,14 +2585,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                       key={mode}
                       type="button"
                       tabIndex={-1}
-                      className={`absolute z-20 flex items-center justify-center min-w-[44px] min-h-[44px] p-2 -m-2 pointer-events-auto touch-manipulation ${
+                      className={`absolute z-20 flex items-center justify-center min-w-[52px] min-h-[52px] sm:min-w-[48px] sm:min-h-[48px] p-1 pointer-events-auto touch-manipulation rounded-lg bg-white/10 active:bg-white/20 ${
                         mode === 'nw'
-                          ? 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize'
+                          ? 'left-1 top-1 cursor-nwse-resize'
                           : mode === 'ne'
-                            ? 'right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize'
+                            ? 'right-1 top-1 cursor-nesw-resize'
                             : mode === 'sw'
-                              ? 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize'
-                              : 'right-0 bottom-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize'
+                              ? 'left-1 bottom-1 cursor-nesw-resize'
+                              : 'right-1 bottom-1 cursor-nwse-resize'
                       }`}
                       aria-hidden
                       onPointerDown={(e) => {
@@ -2610,7 +2610,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                         });
                       }}
                     >
-                      <span className="block w-3.5 h-3.5 bg-white border border-slate-800 rounded-sm shadow shrink-0" />
+                      <span className="block w-7 h-7 sm:w-6 sm:h-6 bg-white border-2 border-slate-900 rounded-md shadow-md shrink-0 ring-1 ring-white/40" />
                     </button>
                   ))}
                 </div>
