@@ -1933,8 +1933,8 @@ const GridContent: React.FC<GridContentProps> = ({
           relationId: t.type === 'birth' ? t.motherId : t.type === 'marriage' ? t.spouseId : undefined,
         };
       });
-    // Space close union labels (spouse names and union dates) and keep links
-    // to their original union traits using thin connectors.
+    // Écarter uniquement les unions trop proches sur le ruban (min vertical) ; sinon les
+    // étiquettes restent sur la horizontale des dates (connecteurs quasi horizontaux).
     const marriageRows = dateTraits
       .filter((d) => d.type === 'marriage')
       .sort((a, b) => a.sourceY - b.sourceY);
@@ -1943,20 +1943,39 @@ const GridContent: React.FC<GridContentProps> = ({
     const marriageMinY = cy - rH / 2 - (1.2 * YEAR);
     const marriageMaxY = cy + rH / 2 + (3.4 * YEAR);
     if (marriageRows.length > 1) {
-      const center = marriageRows.reduce((s, r) => s + r.sourceY, 0) / marriageRows.length;
-      let start = center - ((marriageRows.length - 1) * marriageMinGap) / 2;
-      let end = start + (marriageRows.length - 1) * marriageMinGap;
-      if (start < marriageMinY) {
-        const shift = marriageMinY - start;
-        start += shift;
-        end += shift;
-      }
-      if (end > marriageMaxY) {
-        const shift = end - marriageMaxY;
-        start -= shift;
-      }
+      // Comme pour les prénoms enfants : on ne décale que si deux unions sont trop proches
+      // verticalement. L’ancien regroupement autour de la moyenne rapprochait les étiquettes
+      // quand les dates étaient au contraire bien espacées (connecteurs inclinés à tort).
       for (let i = 0; i < marriageRows.length; i++) {
-        marriageRows[i].targetY = start + i * marriageMinGap;
+        marriageRows[i].targetY = marriageRows[i].sourceY;
+      }
+      for (let i = 1; i < marriageRows.length; i++) {
+        marriageRows[i].targetY = Math.max(
+          marriageRows[i].sourceY,
+          marriageRows[i - 1].targetY + marriageMinGap,
+        );
+      }
+      for (let i = marriageRows.length - 2; i >= 0; i--) {
+        if (marriageRows[i + 1].targetY > marriageMaxY) {
+          marriageRows[i + 1].targetY = marriageMaxY;
+        }
+        if (marriageRows[i].targetY > marriageRows[i + 1].targetY - marriageMinGap) {
+          marriageRows[i].targetY = marriageRows[i + 1].targetY - marriageMinGap;
+        }
+      }
+      if (marriageRows[0].targetY < marriageMinY) {
+        const shift = marriageMinY - marriageRows[0].targetY;
+        for (let j = 0; j < marriageRows.length; j++) {
+          marriageRows[j].targetY += shift;
+        }
+        for (let i = marriageRows.length - 2; i >= 0; i--) {
+          if (marriageRows[i + 1].targetY > marriageMaxY) {
+            marriageRows[i + 1].targetY = marriageMaxY;
+          }
+          if (marriageRows[i].targetY > marriageRows[i + 1].targetY - marriageMinGap) {
+            marriageRows[i].targetY = marriageRows[i + 1].targetY - marriageMinGap;
+          }
+        }
       }
     } else if (marriageRows.length === 1) {
       marriageRows[0].targetY = Math.max(marriageMinY, Math.min(marriageMaxY, marriageRows[0].sourceY));
