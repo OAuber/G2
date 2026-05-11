@@ -1464,7 +1464,6 @@ const Scene3D: React.FC<Scene3DProps> = ({
         {showPresentPlane && (
           <PresentPlanPoietic3D
             nodes={allLayoutNodes}
-            cameraMode={cameraMode}
             isDarkMode={isDarkMode}
             enabled={showPresentPlane}
           />

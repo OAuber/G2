@@ -7,6 +7,7 @@ import { findRelationshipPath } from '../services/relationshipPath';
 import { matchesFilters, applySortMode, computeLineageFilterSets } from './Sidebar';
 import { useI18n } from '../i18n';
 import { PEER_COMPARE_ID_PREFIX } from '../app/peerCompareIdNamespace';
+import { WHEEL_ZOOM_IN_STEP_FACTOR, computeGridZoomSwitchThresholds } from './scene2dGridZoom';
 
 type SceneMouseEvent = ThreeEvent<globalThis.MouseEvent>;
 
@@ -128,34 +129,11 @@ const MARGIN    = 5 * YEAR;
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 100000;
 const GRID_DEFAULT_ZOOM = 580;
-/** Zoom initial grille dans les deux volets comparaison (hauteur réduite — éviter débordement vertical). */
-export const COMPARE_VIEW_GRID_DEFAULT_ZOOM = 320;
 
 /** Comparaison pair : pulsation sinusoïdale globale (même phase pour tous les rubans `pc:`). */
 const PEER_PULSE_RAD_PER_S = 2.35;
 const PEER_PULSE_ALPHA_MIN = 0.34;
 const PEER_PULSE_ALPHA_MAX = 1;
-/** Un cran de molette (aligné sur la rampe reveal) — handoff grille ↔ individuel. */
-export const WHEEL_ZOOM_IN_STEP_FACTOR = 1.1;
-/**
- * Basculer grille → individuel quelques crans avant l’ancien seuil fixe : pour les rubans très
- * longs (longue durée de vie), un zoom trop poussé plaçait les boutons Html haut/bas hors viewport
- * au moment du switch. Chaque cran = {@link WHEEL_ZOOM_IN_STEP_FACTOR}.
- */
-const GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS = 4;
-const GRID_REVEAL_PRE_SWITCH_STEPS = 4;
-
-/** Seuils zoom grille → individuel / rampe reveal, proportionnels au zoom par défaut de la grille. */
-export function computeGridZoomSwitchThresholds(baseZoom: number): {
-  switchZoom: number;
-  revealStartZoom: number;
-} {
-  const switchZoom =
-    (baseZoom * 1.2) / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_TO_INDIVIDUAL_SWITCH_EARLY_STEPS);
-  const revealStartZoom =
-    switchZoom / Math.pow(WHEEL_ZOOM_IN_STEP_FACTOR, GRID_REVEAL_PRE_SWITCH_STEPS);
-  return { switchZoom, revealStartZoom };
-}
 
 const GRID_REVEAL_START_OPACITY = 1;
 const SINGLE_VIEW_VERTICAL_FIT_PADDING = 1.10;

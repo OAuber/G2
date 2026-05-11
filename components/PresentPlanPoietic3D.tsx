@@ -2,8 +2,6 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Html } from '@react-three/drei';
 import type { LayoutNode } from '../services/layoutEngineB';
-import type { CameraMode } from '../types';
-
 /** Viewer collaboratif ; contenu affiché via iframe (pas une texture GPU du DOM tiers). */
 export const POIETIC_GENERATOR_VIEWER_URL = 'https://poietic-generator.net/viewer';
 
@@ -22,7 +20,6 @@ const POIETIC_IMAGE_PX = 500;
 
 export interface PresentPlanPoietic3DProps {
   nodes: LayoutNode[];
-  cameraMode: CameraMode;
   isDarkMode: boolean;
   enabled: boolean;
 }
@@ -34,7 +31,6 @@ export interface PresentPlanPoietic3DProps {
  */
 const PresentPlanPoietic3D: React.FC<PresentPlanPoietic3DProps> = ({
   nodes,
-  cameraMode,
   isDarkMode,
   enabled,
 }) => {
@@ -67,7 +63,7 @@ const PresentPlanPoietic3D: React.FC<PresentPlanPoietic3DProps> = ({
     const cx = (minX + maxX) / 2;
     const cz = (minZ + maxZ) / 2;
     return { cx, yPlane: PRESENT_Y, cz, squareSide };
-  }, [enabled, cameraMode, nodes]);
+  }, [enabled, nodes]);
 
   if (!layout) return null;
 

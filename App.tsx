@@ -4,7 +4,8 @@ import Sidebar, { applySortMode, computeLineageFilterSets, matchesFilters } from
 import DetailsPanel, { NewPersonData } from './components/DetailsPanel';
 const Scene3D = lazy(() => import('./components/Scene3D'));
 import Scene2DIndividual from './components/Scene2DIndividual';
-import Scene2DGrid, { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/Scene2DGrid';
+import Scene2DGrid from './components/Scene2DGrid';
+import { COMPARE_VIEW_GRID_DEFAULT_ZOOM, WHEEL_ZOOM_IN_STEP_FACTOR } from './components/scene2dGridZoom';
 import CompareMergeModal, { type CompareImportRequest } from './components/compare/CompareMergeModal';
 import BottomPanel from './components/BottomPanel';
 import TopPanel from './components/TopPanel';

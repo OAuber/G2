@@ -65,7 +65,7 @@ export function GenealogyDateField({
         return;
       }
       let dd = d;
-      let mm = m;
+      const mm = m;
       if (mm != null && dd != null) {
         const dim = daysInMonth(y, mm);
         dd = Math.min(dd, dim);
