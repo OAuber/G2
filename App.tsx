@@ -414,6 +414,10 @@ function App() {
     return c.exchangeRootDisplayName ?? null;
   });
   const [pendingInviteRole, setPendingInviteRole] = useState<P2PRole | null>(() => INVITE_BOOTSTRAP.role);
+  const pendingInviteIntentRef = useRef<'standard' | 'own_device' | null>(
+    INVITE_BOOTSTRAP.claims ? INVITE_BOOTSTRAP.intent : null,
+  );
+  const remoteAccessPolicyRef = useRef<P2PVisibilitySettings | null>(null);
   const [pendingInviteIntent, setPendingInviteIntent] = useState<'standard' | 'own_device' | null>(() =>
     INVITE_BOOTSTRAP.claims ? INVITE_BOOTSTRAP.intent : null
   );
@@ -812,6 +816,12 @@ function App() {
 
   useEffect(() => { gedcomDataRef.current = gedcomData; }, [gedcomData]);
   useEffect(() => { visibilitySettingsRef.current = p2pVisibilitySettings; }, [p2pVisibilitySettings]);
+  useEffect(() => {
+    pendingInviteIntentRef.current = pendingInviteIntent;
+  }, [pendingInviteIntent]);
+  useEffect(() => {
+    remoteAccessPolicyRef.current = remoteAccessPolicy;
+  }, [remoteAccessPolicy]);
   useEffect(() => { documentsRef.current = documentsByIndividualId; }, [documentsByIndividualId]);
   useEffect(() => { pendingInviteTokenRef.current = pendingInviteToken; }, [pendingInviteToken]);
   useEffect(() => {
@@ -1665,6 +1675,14 @@ function App() {
       return activeSessionPeerPolicy;
     }
     return visibilitySettingsRef.current;
+  };
+
+  /** Export GEDCOM / archive .g2.zip : le fichier local sur cet appareil, sauf invité distant soumis à la politique hôte. */
+  const localExportAllowedByPolicy = (): boolean => {
+    if (p2pModeRef.current !== 'client') return true;
+    if (p2pSessionUseCaseRef.current === 'compare') return true;
+    if (pendingInviteIntentRef.current === 'own_device') return true;
+    return remoteAccessPolicyRef.current?.allowDownload ?? true;
   };
 
   const hashString = (value: string): string => {
@@ -6525,13 +6543,7 @@ function App() {
 
   const handleDownloadGedcom = () => {
     if (!gedcomData) return;
-    const effectiveAllowDownload =
-      p2pModeRef.current === 'client' && p2pSessionUseCaseRef.current === 'compare'
-        ? true
-        : p2pModeRef.current === 'client'
-          ? (remoteAccessPolicy?.allowDownload ?? true)
-          : p2pVisibilitySettings.allowDownload;
-    if (!effectiveAllowDownload) {
+    if (!localExportAllowedByPolicy()) {
       alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
     }
@@ -6571,13 +6583,7 @@ function App() {
 
   const handleDownloadBundle = async () => {
     if (!gedcomData) return;
-    const effectiveAllowDownload =
-      p2pModeRef.current === 'client' && p2pSessionUseCaseRef.current === 'compare'
-        ? true
-        : p2pModeRef.current === 'client'
-          ? (remoteAccessPolicy?.allowDownload ?? true)
-          : p2pVisibilitySettings.allowDownload;
-    if (!effectiveAllowDownload) {
+    if (!localExportAllowedByPolicy()) {
       alert(t('app.alerts.downloadDisabledByPolicy'));
       return;
     }
