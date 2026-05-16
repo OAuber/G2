@@ -251,7 +251,14 @@ function computeRibbonData(individuals: Individual[], data: GedcomData | null): 
 
         const mOffset = mYear - birthYear;
         if (mOffset > 0 && mOffset < lifespan) {
-          traits.push({ type: 'marriage', offset: mOffset, spouseId, year: mYear, isCalculated: mIsCalculated });
+          traits.push({
+            type: 'marriage',
+            offset: mOffset,
+            spouseId,
+            familyId: famId,
+            year: mYear,
+            isCalculated: mIsCalculated,
+          });
         }
 
         if (fam.childrenIds) {
@@ -1902,7 +1909,7 @@ const GridContent: React.FC<GridContentProps> = ({
               ? (spouse ? `${spouse.givenName} ${spouse.surname}`.trim() : '')
               : '';
         return {
-          key: `${t.type}-${t.offset}-${t.spouseId ?? ''}-${t.motherId ?? ''}`,
+          key: `${t.type}-${t.familyId ?? ''}-${t.offset}-${t.spouseId ?? ''}-${t.motherId ?? ''}`,
           type: t.type,
           sourceY: y,
           targetY: y,

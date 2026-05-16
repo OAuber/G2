@@ -7,6 +7,11 @@ import { parseDate } from '../services/gedcomParser';
 import { dateInfoToFormString, formatDateInfoDisplay } from '../services/genealogyDate';
 import { GenealogyDateField } from './GenealogyDateField';
 import { individualMatchesSearchQuery } from '../services/individualSearch';
+import {
+  buildUnionsFromIndividual,
+  emptyUnionFormEntry,
+  type UnionFormEntry,
+} from '../services/spouseFamilySync';
 import { useI18n } from '../i18n';
 
 /** Provenance / crédit (texte ou URL affichée sous la photo principale). */
@@ -32,6 +37,8 @@ function DocumentSourceAttribution({ text, className }: { text: string; classNam
   );
 }
 
+export type { UnionFormEntry };
+
 export interface NewPersonData {
   givenName: string;
   surname: string;
@@ -43,9 +50,7 @@ export interface NewPersonData {
   notes: string;
   fatherId: string;
   motherId: string;
-  spouseId: string;
-  marriageDate: string;
-  childrenIds: string[];
+  unions: UnionFormEntry[];
 }
 
 interface DetailsPanelProps {
@@ -476,7 +481,17 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 }) => {
   const { t, language } = useI18n();
   const [formData, setFormData] = useState<NewPersonData>({
-    givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', birthPlace: '', deathPlace: '', notes: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: []
+    givenName: '',
+    surname: '',
+    gender: Gender.Unknown,
+    birthDate: '',
+    deathDate: '',
+    birthPlace: '',
+    deathPlace: '',
+    notes: '',
+    fatherId: '',
+    motherId: '',
+    unions: [emptyUnionFormEntry()],
   });
 
   const [isEditing, setIsEditing] = useState(false);
@@ -542,45 +557,42 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
   useEffect(() => {
     if (isCreating) {
-      setFormData({ givenName: '', surname: '', gender: Gender.Unknown, birthDate: '', deathDate: '', birthPlace: '', deathPlace: '', notes: '', fatherId: '', motherId: '', spouseId: '', marriageDate: '', childrenIds: [] });
+      setFormData({
+        givenName: '',
+        surname: '',
+        gender: Gender.Unknown,
+        birthDate: '',
+        deathDate: '',
+        birthPlace: '',
+        deathPlace: '',
+        notes: '',
+        fatherId: '',
+        motherId: '',
+        unions: [emptyUnionFormEntry()],
+      });
       setIsEditing(false);
     } else if (individual && data) {
-      let fatherId = '', motherId = '', spouseId = '', childrenIds: string[] = [];
-      
+      let fatherId = '';
+      let motherId = '';
+
       if (individual.familyChildId && data.families[individual.familyChildId]) {
-         const fam = data.families[individual.familyChildId];
-         fatherId = fam.husbandId || '';
-         motherId = fam.wifeId || '';
-      }
-      
-      if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
-         const fam = data.families[individual.familySpouseIds[0]];
-         if (fam) {
-            spouseId = (fam.husbandId === individual.id ? fam.wifeId : fam.husbandId) || '';
-            childrenIds = fam.childrenIds || [];
-         }
+        const fam = data.families[individual.familyChildId];
+        fatherId = fam.husbandId || '';
+        motherId = fam.wifeId || '';
       }
 
-      let marriageDate = '';
-      if (individual.familySpouseIds && individual.familySpouseIds.length > 0) {
-        const fam = data.families[individual.familySpouseIds[0]];
-        marriageDate = dateInfoToFormString(fam?.marriageDate);
-      }
-      
       setFormData({
-         givenName: individual.givenName,
-         surname: individual.surname,
-         gender: individual.gender,
-         birthDate: dateInfoToFormString(individual.birthDate),
-         deathDate: dateInfoToFormString(individual.deathDate),
-         birthPlace: individual.birthPlace || '',
-         deathPlace: individual.deathPlace || '',
-         notes: individual.notes || '',
-         fatherId,
-         motherId,
-         spouseId,
-         marriageDate,
-         childrenIds
+        givenName: individual.givenName,
+        surname: individual.surname,
+        gender: individual.gender,
+        birthDate: dateInfoToFormString(individual.birthDate),
+        deathDate: dateInfoToFormString(individual.deathDate),
+        birthPlace: individual.birthPlace || '',
+        deathPlace: individual.deathPlace || '',
+        notes: individual.notes || '',
+        fatherId,
+        motherId,
+        unions: buildUnionsFromIndividual(data, individual),
       });
       setIsEditing(false);
     } else {
@@ -687,6 +699,39 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   const parentFamily = (individual && data && individual.familyChildId) ? data.families[individual.familyChildId] : null;
   const fatherId = parentFamily?.husbandId;
   const motherId = parentFamily?.wifeId;
+
+  const displayUnions = useMemo(() => {
+    if (!individual?.familySpouseIds?.length || !data) return [];
+    return individual.familySpouseIds
+      .map((famId) => {
+        const fam = data.families[famId];
+        if (!fam) return null;
+        const spouseId = fam.husbandId === individual.id ? fam.wifeId : fam.husbandId;
+        const sortYear = fam.marriageDate?.year ?? Number.MAX_SAFE_INTEGER;
+        return { famId, fam, spouseId, sortYear };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((a, b) => a.sortYear - b.sortYear || a.famId.localeCompare(b.famId));
+  }, [individual, data]);
+
+  const updateUnionAt = (index: number, patch: Partial<UnionFormEntry>) => {
+    setFormData((prev) => {
+      const next = [...prev.unions];
+      next[index] = { ...next[index], ...patch };
+      return { ...prev, unions: next };
+    });
+  };
+
+  const addUnionRow = () => {
+    setFormData((prev) => ({ ...prev, unions: [...prev.unions, emptyUnionFormEntry()] }));
+  };
+
+  const removeUnionAt = (index: number) => {
+    setFormData((prev) => {
+      const next = prev.unions.filter((_, i) => i !== index);
+      return { ...prev, unions: next.length > 0 ? next : [emptyUnionFormEntry()] };
+    });
+  };
   const isLikelyLiving = !!individual && !individual.deathDate?.year;
   const isSelfRecord = !!(individual && selfIdentity?.individualId && individual.id === selfIdentity.individualId);
   const remoteClaimForSelected = individual ? remoteIdentityClaimsByIndividualId?.[individual.id] : undefined;
@@ -1464,41 +1509,71 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                   inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
                 />
 
-               <label className={`block text-[10px] ${subTextClass}`}>{t('details.spouse')}</label>
-                <SearchSelect
-                  value={formData.spouseId}
-                  onChange={id => setFormData({...formData, spouseId: id})}
-                  options={allIndividuals}
-                  placeholder={t('details.searchSpouse')}
-                  inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
-                />
-                
-                {formData.spouseId && (
-                  <div>
-                    <GenealogyDateField
-                      mode="gedcom"
-                      value={formData.marriageDate}
-                      onChange={(marriageDate) => setFormData({ ...formData, marriageDate })}
-                      inputBg={inputBg}
-                      textClass={textClass}
-                      subTextClass={subTextClass}
-                      language={language}
-                      labels={genealogyDateLabels.marriage}
-                    />
+               <div className="space-y-3 pt-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                      {t('details.familyUnions')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={addUnionRow}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border ${inputBg}`}
+                    >
+                      <Plus className="w-3 h-3" /> {t('details.addUnion')}
+                    </button>
                   </div>
-                )}
-                
-                {/* Children — searchable multi-select */}
-                <div>
-                  <label className={`block text-xs font-bold ${subTextClass} mb-2`}>
-                    {t('details.children')} ({formData.childrenIds.length} {t('details.selected')})
-                  </label>
-                  <SearchMultiSelect
-                    values={formData.childrenIds}
-                    onChange={ids => setFormData({...formData, childrenIds: ids})}
-                    options={allIndividuals}
-                    inputBg={inputBg} textClass={textClass} subTextClass={subTextClass}
-                  />
+                  {formData.unions.map((union, unionIndex) => (
+                    <div
+                      key={union.familyId ?? `union-${unionIndex}`}
+                      className={`rounded-lg border p-2.5 space-y-2 ${isDarkMode ? 'border-slate-700 bg-neutral-900/40' : 'border-slate-200 bg-white'}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-[10px] font-bold uppercase ${subTextClass}`}>
+                          {t('details.unionNumber').replace('{{n}}', String(unionIndex + 1))}
+                        </span>
+                        {formData.unions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeUnionAt(unionIndex)}
+                            className="text-[10px] font-semibold text-rose-500 hover:text-rose-400"
+                          >
+                            {t('details.removeUnion')}
+                          </button>
+                        )}
+                      </div>
+                      <label className={`block text-[10px] ${subTextClass}`}>{t('details.spouse')}</label>
+                      <SearchSelect
+                        value={union.spouseId}
+                        onChange={(id) => updateUnionAt(unionIndex, { spouseId: id })}
+                        options={allIndividuals.filter((p) => p.id !== individual?.id)}
+                        placeholder={t('details.searchSpouse')}
+                        inputBg={inputBg}
+                        textClass={textClass}
+                        subTextClass={subTextClass}
+                      />
+                      <GenealogyDateField
+                        mode="gedcom"
+                        value={union.marriageDate}
+                        onChange={(marriageDate) => updateUnionAt(unionIndex, { marriageDate })}
+                        inputBg={inputBg}
+                        textClass={textClass}
+                        subTextClass={subTextClass}
+                        language={language}
+                        labels={genealogyDateLabels.marriage}
+                      />
+                      <label className={`block text-xs font-bold ${subTextClass} mb-2`}>
+                        {t('details.children')} ({union.childrenIds.length} {t('details.selected')})
+                      </label>
+                      <SearchMultiSelect
+                        values={union.childrenIds}
+                        onChange={(ids) => updateUnionAt(unionIndex, { childrenIds: ids })}
+                        options={allIndividuals}
+                        inputBg={inputBg}
+                        textClass={textClass}
+                        subTextClass={subTextClass}
+                      />
+                    </div>
+                  ))}
                 </div>
              </div>
 
@@ -2445,13 +2520,12 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
 
                 <div>
                     <h4 className={`text-xs font-bold uppercase tracking-wider mb-2 ${subTextClass}`}>{t('details.familyUnions')}</h4>
-                    {individual.familySpouseIds && individual.familySpouseIds.length > 0 ? (
-                        individual.familySpouseIds.map(famId => {
-                            const fam = data?.families[famId];
-                            if(!fam) return null;
-                            const spouseId = fam.husbandId === individual.id ? fam.wifeId : fam.husbandId;
-                            return (
+                    {displayUnions.length > 0 ? (
+                        displayUnions.map(({ famId, fam, spouseId }, unionIndex) => (
                                 <div key={famId} className={`mb-3 p-2 rounded border border-dashed ${isDarkMode ? 'border-slate-800' : 'border-slate-300'}`}>
+                                    <div className={`text-[10px] font-bold uppercase mb-1.5 ${subTextClass}`}>
+                                      {t('details.unionNumber').replace('{{n}}', String(unionIndex + 1))}
+                                    </div>
                                     {spouseId ? (
                                         <>
                                           <button onClick={() => data && onSelectIndividual(data.individuals[spouseId])} className={`flex items-center gap-2 text-sm font-bold ${textClass} hover:text-blue-500`}>
@@ -2473,6 +2547,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                     ) : <div className={`text-xs italic mb-2 ${subTextClass}`}>{t('details.unknownSpouse')}</div>}
                                     
                                     <div className="pl-4 border-l-2 border-slate-700 space-y-1 mt-2">
+                                        <div className={`text-[10px] font-semibold uppercase ${subTextClass} mb-1`}>{t('details.children')}</div>
                                         {fam.childrenIds && fam.childrenIds.length > 0 ? (
                                             fam.childrenIds.map(childId => (
                                                 <button key={childId} onClick={() => data && onSelectIndividual(data.individuals[childId])} className={`block text-xs hover:underline ${subTextClass}`}>
@@ -2482,8 +2557,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
                                         ) : <span className={`text-[10px] ${subTextClass}`}>{t('details.noChildren')}</span>}
                                     </div>
                                 </div>
-                            );
-                        })
+                        ))
                     ) : <div className={`text-xs italic ${subTextClass}`}>{t('details.noUnionsRecorded')}</div>}
                 </div>
             </div>

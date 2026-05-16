@@ -16,7 +16,6 @@ import {
   GedcomData,
   Individual,
   Family,
-  Gender,
   DragMode,
   DisplayMode,
   ViewMode,
@@ -34,7 +33,7 @@ import {
 import { generateGedcom, logGedcomImportDiagnostics, parseDate, parseGedcom } from './services/gedcomParser';
 import { p2pService } from './services/p2p';
 import { normalizeGedcom } from './services/normalizationService';
-import { applySpouseAndChildrenOnUpdate, findMergeableFamilyForNewIndividual } from './services/spouseFamilySync';
+import { applyUnionsOnCreate, applyUnionsOnUpdate } from './services/spouseFamilySync';
 import { findExistingFamilyIdByParentPair } from './services/familyPartnership';
 import { ActivityLogEvent } from './services/p2pDomain';
 import { createG2Bundle, parseG2Bundle } from './services/bundleService';
@@ -6478,8 +6477,8 @@ function App() {
         indi.familyChildId = undefined;
       }
 
-      applySpouseAndChildrenOnUpdate(newData, updatedIndi.id, formData, updatedIndi.gender, (d) =>
-        getNextId('F', d)
+      applyUnionsOnUpdate(newData, updatedIndi.id, formData.unions, updatedIndi.gender, (d) =>
+        getNextId('F', d),
       );
       pruneDanglingFamiliesAndRefs(newData);
     }
@@ -8464,60 +8463,7 @@ function App() {
        newData.individuals[newId].familyChildId = familyId;
     }
 
-    // 3. Link Spouse & Children (fusion avec une FAM mono-parentale même enfants si possible)
-    if (formData.spouseId || formData.childrenIds.length > 0) {
-       const mergeFam = findMergeableFamilyForNewIndividual(newData, newIndi, formData);
-       if (mergeFam) {
-         const famRecord = newData.families[mergeFam.id];
-         if (newIndi.gender === Gender.Female) {
-           famRecord.wifeId = newId;
-         } else {
-           famRecord.husbandId = newId;
-         }
-         if (formData.spouseId) {
-           const spouse = newData.individuals[formData.spouseId];
-           if (spouse.gender === Gender.Female) famRecord.wifeId = spouse.id;
-           else famRecord.husbandId = spouse.id;
-           if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
-           if (!spouse.familySpouseIds.includes(famRecord.id)) spouse.familySpouseIds.push(famRecord.id);
-         }
-         if (formData.marriageDate) {
-           famRecord.marriageDate = parseDate(formData.marriageDate);
-         }
-         formData.childrenIds.forEach((childId) => {
-           if (!famRecord.childrenIds.includes(childId)) famRecord.childrenIds.push(childId);
-           const child = newData.individuals[childId];
-           child.familyChildId = famRecord.id;
-         });
-         newData.individuals[newId].familySpouseIds = [famRecord.id];
-       } else {
-         const famsId = getNextId('F', newData);
-         newData.families[famsId] = {
-           id: famsId,
-           childrenIds: [],
-           marriageDate: formData.marriageDate ? parseDate(formData.marriageDate) : undefined,
-         };
-
-         const famRecord = newData.families[famsId];
-         if (newIndi.gender === Gender.Female) famRecord.wifeId = newId;
-         else famRecord.husbandId = newId;
-
-         if (formData.spouseId) {
-           const spouse = newData.individuals[formData.spouseId];
-           if (spouse.gender === Gender.Female) famRecord.wifeId = spouse.id;
-           else famRecord.husbandId = spouse.id;
-           if (!spouse.familySpouseIds) spouse.familySpouseIds = [];
-           spouse.familySpouseIds.push(famsId);
-         }
-
-         formData.childrenIds.forEach((childId) => {
-           famRecord.childrenIds.push(childId);
-           const child = newData.individuals[childId];
-           child.familyChildId = famsId;
-         });
-         newData.individuals[newId].familySpouseIds = [famsId];
-       }
-    }
+    applyUnionsOnCreate(newData, newId, newIndi, formData.unions, (d) => getNextId('F', d));
 
     pruneDanglingFamiliesAndRefs(newData);
 
