@@ -201,7 +201,13 @@ function applyOneUnionOnUpdate(
   survivor.husbandId = husbandId;
   survivor.wifeId = wifeId;
   survivor.childrenIds = [...wantCh];
-  if (mDate) survivor.marriageDate = mDate;
+  if (mDate) {
+    survivor.marriageDate = mDate;
+    delete survivor.marriageDateUserOmitted;
+  } else {
+    delete survivor.marriageDate;
+    survivor.marriageDateUserOmitted = true;
+  }
 
   const duplicateFamIds = new Set(
     sameChildFams
@@ -329,6 +335,7 @@ export function applyUnionsOnCreate(
       }
       if (form.marriageDate) {
         famRecord.marriageDate = parseDate(form.marriageDate);
+        delete famRecord.marriageDateUserOmitted;
       }
       form.childrenIds.forEach((childId) => {
         if (!famRecord.childrenIds.includes(childId)) famRecord.childrenIds.push(childId);

@@ -6,7 +6,10 @@ import { findIndividualInGedcom } from '../app/gedcomIndividualLookup';
 import { parseDate } from '../services/gedcomParser';
 import { dateInfoToFormString, formatDateInfoDisplay } from '../services/genealogyDate';
 import { GenealogyDateField } from './GenealogyDateField';
-import { individualMatchesSearchQuery } from '../services/individualSearch';
+import {
+  individualMatchesSearchQuery,
+  individualPickerListLabel,
+} from '../services/individualSearch';
 import {
   buildUnionsFromIndividual,
   emptyUnionFormEntry,
@@ -293,15 +296,15 @@ interface SearchSelectProps {
 const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
   value, onChange, options, placeholder, inputBg, textClass, subTextClass,
 }) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
   const selectedName = useMemo(() => {
     if (!value) return '';
     const p = options.find(o => o.id === value);
-    return p ? `${p.givenName} ${p.surname}` : value;
-  }, [value, options]);
+    return p ? individualPickerListLabel(p, language) : value;
+  }, [value, options, language]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -341,8 +344,7 @@ const SearchSelect: React.FC<SearchSelectProps> = React.memo(({
               className={`px-2 py-1 text-xs cursor-pointer hover:bg-blue-500/20 ${textClass} ${p.id === value ? 'bg-blue-500/30 font-bold' : ''}`}
               onMouseDown={e => { e.preventDefault(); onChange(p.id); setOpen(false); setQuery(''); }}
             >
-              {p.givenName} {p.surname}
-              {p.birthDate?.year ? ` (${p.birthDate.year})` : ''}
+              {individualPickerListLabel(p, language)}
             </div>
           ))}
           {filtered.length === 0 && (
@@ -370,7 +372,7 @@ interface SearchMultiSelectProps {
 const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
   values, onChange, options, inputBg, textClass, subTextClass, searchPlaceholder,
 }) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [query, setQuery] = useState('');
   const placeholder = searchPlaceholder ?? t('details.childrenSearch');
 
@@ -381,9 +383,9 @@ const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
       const others = options.filter(p => !values.includes(p.id)).slice(0, MAX_RESULTS);
       return [...selected, ...others];
     }
-    const matches = options.filter(p =>
-      `${p.givenName} ${p.surname}`.toLowerCase().includes(q),
-    ).slice(0, MAX_RESULTS);
+    const matches = options
+      .filter((p) => individualMatchesSearchQuery(p, query))
+      .slice(0, MAX_RESULTS);
     return matches;
   }, [options, query, values]);
 
@@ -413,7 +415,7 @@ const SearchMultiSelect: React.FC<SearchMultiSelectProps> = React.memo(({
               onChange={e => toggle(p.id, e.target.checked)}
               className="w-3.5 h-3.5"
             />
-            <span className={textClass}>{p.givenName} {p.surname}</span>
+            <span className={`${textClass} leading-snug`}>{individualPickerListLabel(p, language)}</span>
           </label>
         ))}
       </div>
@@ -851,6 +853,7 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
   );
   const [photoGalleryIndex, setPhotoGalleryIndex] = useState(0);
   const galleryIndividualRef = useRef<string | null>(null);
+  const docRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   useEffect(() => {
     const id = individual?.id ?? null;
     if (id !== galleryIndividualRef.current) {
@@ -866,6 +869,21 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
     }
   }, [individual?.id, documents, photoDocuments]);
   const galleryPhoto = photoDocuments[photoGalleryIndex];
+
+  const focusGalleryOnDoc = useCallback(
+    (docId: string) => {
+      const pi = photoDocuments.findIndex((d) => d.id === docId);
+      if (pi >= 0) setPhotoGalleryIndex(pi);
+    },
+    [photoDocuments],
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'documents' || !galleryPhoto?.id) return;
+    const el = docRowRefs.current[galleryPhoto.id];
+    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [activeTab, galleryPhoto?.id, photoGalleryIndex]);
+
   const documentsPartition = useMemo(() => {
     const group: typeof documents = [];
     const std: typeof documents = [];
@@ -889,8 +907,35 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
       doc.groupPhotoParticipantIds && doc.groupPhotoParticipantIds.length > 0
         ? doc.groupPhotoParticipantIds.map((id) => getName(id)).join(', ')
         : '';
+    const isGalleryPreview = isPhotoDoc && galleryPhoto?.id === doc.id;
     return (
-      <div key={doc.id} className={`rounded border p-1.5 ${inputBg}`}>
+      <div
+        key={doc.id}
+        ref={(el) => {
+          docRowRefs.current[doc.id] = el;
+        }}
+        className={`rounded border p-1.5 transition-colors ${
+          isGalleryPreview
+            ? isDarkMode
+              ? 'border-blue-500/70 bg-blue-950/40 ring-1 ring-blue-400/50'
+              : 'border-blue-500 bg-blue-50/90 ring-1 ring-blue-400/60'
+            : inputBg
+        } ${isPhotoDoc ? 'cursor-pointer' : ''}`}
+        role={isPhotoDoc ? 'button' : undefined}
+        tabIndex={isPhotoDoc ? 0 : undefined}
+        aria-pressed={isPhotoDoc ? isGalleryPreview : undefined}
+        onClick={isPhotoDoc ? () => focusGalleryOnDoc(doc.id) : undefined}
+        onKeyDown={
+          isPhotoDoc
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  focusGalleryOnDoc(doc.id);
+                }
+              }
+            : undefined
+        }
+      >
         <div className="flex items-start justify-between gap-1.5">
           <div className="min-w-0 flex-1">
             <div className={`text-xs font-semibold leading-tight truncate ${textClass}`}>{doc.title}</div>
@@ -911,7 +956,11 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
             ) : null}
           </div>
           {allowDocMutation ? (
-          <div className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]">
+          <div
+            className="flex flex-wrap justify-end gap-0.5 shrink-0 max-w-[11rem]"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
             {!isMirror && (
               <button
                 type="button"
@@ -999,6 +1048,8 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
         </div>
         {!isMirror && editingDocId === doc.id && allowDocMutation && (
           <div
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
             className={`mt-1.5 pt-1.5 space-y-1.5 border-t ${
               isDarkMode ? 'border-slate-700' : 'border-slate-200'
             }`}
@@ -1599,7 +1650,14 @@ const DetailsPanel: React.FC<DetailsPanelProps> = ({
               {galleryPhoto && (
                 <div className={`${cardBg} rounded-lg p-3`}>
                   <div className="flex items-center justify-between gap-2 mb-2 min-h-[1.25rem]">
-                    <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>{t('details.photosGallery')}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className={`text-xs font-bold uppercase tracking-wider ${subTextClass}`}>
+                        {t('details.photosGallery')}
+                      </div>
+                      <div className={`text-xs font-semibold truncate mt-0.5 ${textClass}`} title={galleryPhoto.title}>
+                        {galleryPhoto.title}
+                      </div>
+                    </div>
                     {photoDocuments.length > 1 && (
                       <div className="flex items-center gap-0.5 shrink-0" role="group" aria-label={t('details.photosGallery')}>
                         <button

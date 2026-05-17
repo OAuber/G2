@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Gender, type GedcomData, type Individual } from '../types';
+import { normalizeGedcom } from '../services/normalizationService';
 import {
   applyUnionsOnCreate,
   applyUnionsOnUpdate,
@@ -32,6 +33,73 @@ describe('spouseFamilySync unions', () => {
     const unions = buildUnionsFromIndividual(data, data.individuals['@I1@']!);
     expect(unions).toHaveLength(2);
     expect(unions.map((u) => u.spouseId).sort()).toEqual(['@I2@', '@I3@']);
+  });
+
+  it('applyUnionsOnUpdate clears marriageDate when the form field is emptied', () => {
+    const data: GedcomData = {
+      individuals: {
+        '@I1@': indi('@I1@', { gender: Gender.Male, familySpouseIds: ['@F1@'] }),
+        '@I2@': indi('@I2@', { gender: Gender.Female, familySpouseIds: ['@F1@'] }),
+      },
+      families: {
+        '@F1@': {
+          id: '@F1@',
+          husbandId: '@I1@',
+          wifeId: '@I2@',
+          childrenIds: [],
+          marriageDate: { year: 1965, raw: '1965' },
+        },
+      },
+    };
+    applyUnionsOnUpdate(
+      data,
+      '@I1@',
+      [{ familyId: '@F1@', spouseId: '@I2@', marriageDate: '', childrenIds: [] }],
+      Gender.Male,
+      (d) => `@F${Object.keys(d.families).length + 1}@`,
+    );
+    expect(data.families['@F1@']?.marriageDate).toBeUndefined();
+    expect(data.families['@F1@']?.marriageDateUserOmitted).toBe(true);
+  });
+
+  it('applyUnionsOnUpdate cleared marriage date stays cleared after normalizeGedcom', () => {
+    const data: GedcomData = {
+      individuals: {
+        '@I1@': indi('@I1@', {
+          gender: Gender.Male,
+          birthDate: { raw: '1940', year: 1940 },
+          familySpouseIds: ['@F1@'],
+        }),
+        '@I2@': indi('@I2@', {
+          gender: Gender.Female,
+          birthDate: { raw: '1942', year: 1942 },
+          familySpouseIds: ['@F1@'],
+        }),
+        '@C1@': indi('@C1@', {
+          familyChildId: '@F1@',
+          birthDate: { raw: '1970', year: 1970 },
+        }),
+      },
+      families: {
+        '@F1@': {
+          id: '@F1@',
+          husbandId: '@I1@',
+          wifeId: '@I2@',
+          childrenIds: ['@C1@'],
+          marriageDate: { year: 1965, raw: '1965' },
+        },
+      },
+    };
+    applyUnionsOnUpdate(
+      data,
+      '@I1@',
+      [{ familyId: '@F1@', spouseId: '@I2@', marriageDate: '', childrenIds: ['@C1@'] }],
+      Gender.Male,
+      (d) => `@F${Object.keys(d.families).length + 1}@`,
+    );
+    const normalized = normalizeGedcom(data);
+    expect(normalized.families['@F1@']?.marriageDate).toBeUndefined();
+    expect(normalized.families['@F1@']?.marriageDateUserOmitted).toBe(true);
   });
 
   it('applyUnionsOnUpdate preserves spouse slots on earlier unions when adding another', () => {

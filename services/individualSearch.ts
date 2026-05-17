@@ -1,4 +1,5 @@
 import { Individual } from '../types';
+import { formatDateInfoDisplay } from './genealogyDate';
 
 /**
  * Libellé principal pour listes / recherche : prénom + nom de famille si présents,
@@ -11,6 +12,13 @@ export function individualPrimaryListLabel(indi: Individual): string {
   return (indi.name || '').trim() || indi.id;
 }
 
+/** Liste de sélection (photo de groupe, enfants, etc.) : nom + naissance si connue. */
+export function individualPickerListLabel(indi: Individual, lang: 'fr' | 'en' = 'fr'): string {
+  const name = individualPrimaryListLabel(indi);
+  const birth = formatDateInfoDisplay(indi.birthDate, lang);
+  return birth ? `${name} (${birth})` : name;
+}
+
 /**
  * Recherche dans la liste : sous-chaîne complète, ou tous les « mots » (≥2 car.) présents
  * dans prénom + nom + nom affiché + identifiant GEDCOM sans @.
@@ -20,7 +28,8 @@ export function individualMatchesSearchQuery(p: Individual, searchRaw: string): 
   const q = searchRaw.trim().toLowerCase();
   if (!q) return true;
   const idPart = (p.id || '').replace(/^@+|@+$/g, '').toLowerCase();
-  const hay = `${p.givenName || ''} ${p.surname || ''} ${p.name || ''} ${idPart}`
+  const birthHay = formatDateInfoDisplay(p.birthDate, 'fr');
+  const hay = `${p.givenName || ''} ${p.surname || ''} ${p.name || ''} ${idPart} ${p.birthDate?.year ?? ''} ${birthHay}`
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();

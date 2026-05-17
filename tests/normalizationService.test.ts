@@ -45,4 +45,11 @@ describe('normalizeGedcom', () => {
     const p = out.individuals.P;
     expect(p.birthDate?.year).not.toBeNull();
   });
+
+  it('ne réinfère pas marriageDate si marriageDateUserOmitted', () => {
+    const data = minimalData();
+    data.families.F1.marriageDateUserOmitted = true;
+    const out = normalizeGedcom(data);
+    expect(out.families.F1.marriageDate).toBeUndefined();
+  });
 });

@@ -104,6 +104,8 @@ export interface Family {
   wifeId?: string;
   childrenIds: string[];
   marriageDate?: DateInfo;
+  /** Date d’union effacée à la main : la normalisation ne doit pas la réinférer. */
+  marriageDateUserOmitted?: boolean;
 }
 
 export interface GedcomData {

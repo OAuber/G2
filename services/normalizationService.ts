@@ -112,7 +112,7 @@ export const normalizeGedcom = (originalData: GedcomData): GedcomData => {
 
     // --- PASS 2: Marriage Dates ---
     for (const fam of families) {
-        if (!hasDate(fam.marriageDate)) {
+        if (!hasDate(fam.marriageDate) && !fam.marriageDateUserOmitted) {
             // Rule 1: 9 months before first child
             let firstChildYear: number | null = null;
             if (fam.childrenIds && fam.childrenIds.length > 0) {
