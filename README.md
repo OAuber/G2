@@ -19,6 +19,34 @@ Create, edit, and visualize genealogical trees in 2D and 3D.
 
 ---
 
+> ## 🌍 Open to the public — a message in a bottle
+>
+> **G2** is a very ambitious project. It already works technically today — everything except the **monetary layer**, which is still conceptual. But truly launching it and nurturing a living community around it would take more than one person can give in a single lifetime.
+>
+> That is why the code is now **public and open source**: like a message in a bottle thrown to the sea, in the hope that genealogists, developers, and dreamers will pick it up — use it, fork it, and carry it further.
+>
+> If this resonates with you, as a user, a contributor, or a maintainer, you are warmly welcome. See [Contribution and Support](#contribution-and-support) and [Contact](#contact).
+
+---
+
+## Demo
+
+[![Watch the G2 video](https://img.youtube.com/vi/LLUBJom_JL0/hqdefault.jpg)](https://youtu.be/LLUBJom_JL0)
+
+> A short walkthrough of G2. A more detailed presentation video is planned.
+
+### Screenshots
+
+| Landing page | Overview — 3D web of lives + media |
+|---|---|
+| [![G2 landing page](screenshots/01-landing.png)](screenshots/01-landing.png) | [![G2 overview with 3D scene and photo](screenshots/02-overview-3d.png)](screenshots/02-overview-3d.png) |
+| **2D time ribbon (individual)** | **3D timeline (top view)** |
+| [![2D time ribbon of an individual lifespan](screenshots/03-2d-ribbon.png)](screenshots/03-2d-ribbon.png) | [![3D timeline top view of life ribbons](screenshots/04-3d-top.png)](screenshots/04-3d-top.png) |
+
+> Screenshots use the bundled **"Kings and queens of Europe"** demo dataset (click **Load demo** in the app).
+
+---
+
 ## Vision
 
 **G2** is a genealogy application designed for serious research and collaborative investigation. It enables genealogists to:
@@ -83,9 +111,10 @@ Long-term hypothesis: if the **G2** Web of Trust becomes robust and viral enough
 
 ## Project Status
 
-- The GitHub repository is **private for now**.
-- It will be **opened at launch**.
-- The project is in active development and strategic framing.
+- The GitHub repository is now **public and open source**: [OAuber/G2](https://github.com/OAuber/G2).
+- The app is **functional** for creating, editing, importing/exporting (GEDCOM), and visualizing trees in **2D and 3D** (tested with 40K individuals).
+- The **monetary layer** is still conceptual and **not exposed** in the UI.
+- The project is now **community-driven**: it is shared as an open invitation to use, fork, and continue it. See [Open to the public](#-open-to-the-public--a-message-in-a-bottle).
 
 ---
 
@@ -200,9 +229,15 @@ Production output is a **Progressive Web App**: you can install **G2** from a su
 
 ## Contribution and Support
 
-Feedback, testing, genealogical analysis, documentation work, and code contributions are welcome.
+This project is explicitly **looking for contributors and maintainers**. Feedback, testing, genealogical analysis, documentation work, UX, and code contributions are all welcome — whether you want to fix a bug, add a feature, or help carry the vision forward.
 
-During development, people who find the app useful and the initiative meaningful can also support the author with voluntary donations.
+Good ways to get involved:
+
+- open an [issue](https://github.com/OAuber/G2/issues) to report a bug or discuss an idea;
+- fork the repository and open a pull request;
+- try the app with the **Load demo** dataset and share your experience.
+
+People who find the app useful and the initiative meaningful can also support the author with voluntary donations.
 
 ---
 
